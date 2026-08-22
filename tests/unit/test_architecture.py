@@ -1,0 +1,115 @@
+"""Architecture tests.
+
+Two invariants are enforced here, both by scanning source rather than by
+importing anything:
+
+1. ``openforecast`` never depends on a forecasting framework.
+2. Inner layers never import outer layers.
+"""
+
+from __future__ import annotations
+
+import tomllib
+from pathlib import Path
+
+from tests._imports import (
+    PACKAGE_ROOT,
+    ImportSite,
+    iter_imports,
+    iter_source_files,
+    module_name,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+FORECASTING_FRAMEWORKS = frozenset(
+    {
+        "neuralforecast",
+        "statsforecast",
+        "mlforecast",
+        "hierarchicalforecast",
+        "utilsforecast",
+        "darts",
+        "sktime",
+        "torch",
+        "pytorch_lightning",
+        "lightning",
+        "jax",
+        "tensorflow",
+        "keras",
+        "prophet",
+        "gluonts",
+    }
+)
+
+# Lower index == inner layer. A module may import its own layer and any layer
+# above it in this list, never one below.
+LAYERS: tuple[tuple[str, ...], ...] = (
+    ("openforecast.protocol",),
+    ("openforecast.data", "openforecast.models", "openforecast.recipes", "openforecast.tasks"),
+    ("openforecast.runtime", "openforecast.registry", "openforecast.artifacts"),
+    ("openforecast.client", "openforecast.commands", "openforecast.server"),
+)
+
+
+def _layer_of(module: str) -> int | None:
+    for index, layer in enumerate(LAYERS):
+        if any(module == name or module.startswith(f"{name}.") for name in layer):
+            return index
+    return None
+
+
+def _all_imports() -> list[ImportSite]:
+    return [site for path in iter_source_files() for site in iter_imports(path)]
+
+
+def test_package_root_exists() -> None:
+    assert (PACKAGE_ROOT / "__init__.py").is_file()
+
+
+def test_no_forecasting_framework_is_imported() -> None:
+    offenders = [str(site) for site in _all_imports() if site.top_level in FORECASTING_FRAMEWORKS]
+    assert not offenders, (
+        "openforecast must not import a forecasting framework; "
+        "integrations depend on openforecast, never the reverse:\n" + "\n".join(offenders)
+    )
+
+
+def test_no_forecasting_framework_is_declared_as_a_dependency() -> None:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    project = pyproject["project"]
+    declared: list[str] = list(project["dependencies"])
+    for extra in project.get("optional-dependencies", {}).values():
+        declared.extend(extra)
+
+    offenders = [
+        requirement
+        for requirement in declared
+        if _requirement_name(requirement) in FORECASTING_FRAMEWORKS
+    ]
+    assert not offenders, f"forecasting frameworks declared in pyproject.toml: {offenders}"
+
+
+def _requirement_name(requirement: str) -> str:
+    name = requirement.strip()
+    for separator in ("[", "=", "<", ">", "!", "~", ";", " "):
+        name = name.split(separator, 1)[0]
+    return name.strip().replace("-", "_").lower()
+
+
+def test_inner_layers_do_not_import_outer_layers() -> None:
+    violations: list[str] = []
+    for path in iter_source_files():
+        importer = module_name(path)
+        importer_layer = _layer_of(importer)
+        if importer_layer is None:
+            continue
+        for site in iter_imports(path):
+            imported_layer = _layer_of(site.module)
+            if imported_layer is None or imported_layer <= importer_layer:
+                continue
+            violations.append(
+                f"{site} -- {importer} (layer {importer_layer}) "
+                f"may not import layer {imported_layer}"
+            )
+    assert not violations, "layering violations:\n" + "\n".join(violations)
