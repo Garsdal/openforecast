@@ -4,18 +4,23 @@ from types import ModuleType
 
 import openforecast as of
 
-# The event-time semantic model of Step 2. Point-in-time types join this list in
-# Step 3; the list is asserted exactly so that nothing reaches the public
-# surface by accident.
+# The semantic data layer of Steps 2 and 3. Views, models, recipes and the
+# engine join this list in later steps; it is asserted exactly so that nothing
+# reaches the public surface by accident.
 EXPECTED_PUBLIC_SURFACE = {
     "DataError",
     "FeatureAvailability",
     "FeatureKind",
     "FeatureSpec",
+    "ForecastContext",
+    "ForecastDataset",
     "Frequency",
     "FrequencyError",
     "FrequencyUnit",
+    "InconsistentTruthError",
     "OpenForecastError",
+    "PointInTimeFrame",
+    "PointInTimeSchema",
     "SchemaError",
     "TimeSeriesFrame",
     "TimeSeriesSchema",

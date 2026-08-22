@@ -9,6 +9,7 @@ optional fields bolted onto this one.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Sequence
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -18,6 +19,14 @@ from openforecast.data.frequency import Frequency
 from openforecast.errors import SchemaError
 
 __all__ = ["TimeSeriesSchema"]
+
+
+def reject_duplicate_names(names: Sequence[str], role: str) -> None:
+    """Shared by both semantic schemas: a repeated column name has no one meaning."""
+    counts = Counter(names)
+    duplicates = sorted(name for name, count in counts.items() if count > 1)
+    if duplicates:
+        raise SchemaError(f"duplicate {role} names: {duplicates}")
 
 
 class TimeSeriesSchema(BaseModel):
@@ -48,9 +57,9 @@ class TimeSeriesSchema(BaseModel):
         if not self.targets:
             raise SchemaError("a time series schema must declare at least one target")
 
-        _reject_duplicates(self.instance_keys, "instance key")
-        _reject_duplicates(self.targets, "target")
-        _reject_duplicates(self.feature_names, "feature")
+        reject_duplicate_names(self.instance_keys, "instance key")
+        reject_duplicate_names(self.targets, "target")
+        reject_duplicate_names(self.feature_names, "feature")
 
         for name in (self.time, *self.instance_keys, *self.targets, *self.feature_names):
             if not name.strip():
@@ -155,10 +164,3 @@ class TimeSeriesSchema(BaseModel):
     def static_columns(self) -> tuple[str, ...]:
         """``instance keys, static features``."""
         return (*self.instance_keys, *(feature.name for feature in self.static_features))
-
-
-def _reject_duplicates(names: tuple[str, ...], role: str) -> None:
-    counts = Counter(names)
-    duplicates = sorted(name for name, count in counts.items() if count > 1)
-    if duplicates:
-        raise SchemaError(f"duplicate {role} names: {duplicates}")
