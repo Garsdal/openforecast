@@ -227,6 +227,26 @@ def _provider_violations(source: str, path: Path, own: str | None = None) -> lis
     return violations
 
 
+def _provider_sources(root: Path) -> list[Path]:
+    """The provider code under ``root``, which is not its test suite.
+
+    An integration's own tests drive the public client — they fit and forecast
+    through ``of.OpenForecast`` and hand it a ``TimeSeriesFrame`` — so holding
+    them to the provider's import surface would forbid testing the provider from
+    outside it. The rule is about what the provider imports, and a provider is
+    what ships in the distribution: everything under ``src/``.
+
+    Dot directories are skipped because an integration is developed in its own
+    ``.venv``, and somebody else's installed package is not this repository's
+    architecture.
+    """
+    return [
+        path
+        for path in sorted(root.rglob("*.py"))
+        if "tests" not in path.parts and not any(part.startswith(".") for part in path.parts)
+    ]
+
+
 @pytest.mark.parametrize(
     ("root", "own"),
     [(INTEGRATIONS_ROOT, None), (PROVIDERS_ROOT, "openforecast.providers")],
@@ -235,7 +255,7 @@ def test_providers_do_not_import_semantic_source_datasets(root: Path, own: str |
     """Every provider, shipped or external, consumes views and nothing else."""
     violations = [
         violation
-        for path in sorted(root.rglob("*.py"))
+        for path in _provider_sources(root)
         for violation in _provider_violations(path.read_text(encoding="utf-8"), path, own)
     ]
     assert not violations, "provider boundary violations:\n" + "\n".join(violations)
@@ -246,8 +266,22 @@ def test_the_built_in_provider_is_a_real_provider() -> None:
     assert sorted(path.name for path in PROVIDERS_ROOT.rglob("*.py"))
 
 
+def test_every_integration_keeps_its_provider_code_where_the_check_looks() -> None:
+    """The scan skips an integration's tests, so nothing else may live outside ``src``.
+
+    Otherwise a provider module dropped beside the tests would be exempt from
+    the boundary check by accident.
+    """
+    stray = [
+        str(path.relative_to(INTEGRATIONS_ROOT))
+        for path in _provider_sources(INTEGRATIONS_ROOT)
+        if "src" not in path.parts
+    ]
+    assert not stray, f"integration modules outside src/ are unchecked: {stray}"
+
+
 def test_the_provider_boundary_check_actually_catches_a_violation() -> None:
-    """``integrations/`` holds no Python yet, so the check is tested on a fixture."""
+    """The scan is also run against a violating fixture, so it cannot pass vacuously."""
     offending = (
         "from openforecast import ForecastDataset\n"
         "from openforecast.data.frame import TimeSeriesFrame\n"

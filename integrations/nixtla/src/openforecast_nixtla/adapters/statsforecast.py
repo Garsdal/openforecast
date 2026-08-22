@@ -1,0 +1,360 @@
+"""StatsForecast models: a ``SeriesView`` in, a point forecast out.
+
+```text
+fit        SeriesView   -> StatsForecast(models=[AutoARIMA(...)]).fit(long frame)
+state      into/        -> statsforecast.pkl + state.json
+forecast   ForecastView -> predict(h) -> the canonical forecast columns
+```
+
+A StatsForecast model is *local*: every series is fitted on its own, and what is
+learned about one says nothing about another. That is why the training contract
+is a series view with a single origin, why the artifact cannot forecast an
+instance it never saw, and why the horizon is asked for at inference rather than
+bound at fit — all of which the descriptor states, so the engine refuses those
+requests before this module is reached.
+
+One consequence of locality is worth being strict about. A fitted ARIMA
+continues the series it was fitted on, so ``predict(h)`` means "the h steps
+after the last observation seen at fit time". A forecast asked for at a *later*
+origin is therefore not the model applied to newer data — it is the same
+extrapolation, mislabeled. So the last event time of every series is persisted
+and an origin that does not match it is refused with an explanation, rather than
+answered with numbers that quietly forecast the wrong steps.
+
+``AutoARIMA`` is the first model exposed. Adding ``AutoETS`` or ``AutoTheta`` is
+another :class:`StatsForecastAdapter` beside it, which is the point of the
+parameters being declared as data.
+
+``statsforecast`` is imported inside the two calls that need it rather than at
+module scope. A handshake — which is what installing a provider and listing
+models does — only asks what this integration advertises, and paying for a JIT
+compiler to answer that would make discovery slow for no reason.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import pyarrow as pa
+
+from openforecast.errors import DataError, ProviderError, RecipeError
+from openforecast.models import (
+    FeatureCapabilities,
+    InstanceCapabilities,
+    MissingValueSupport,
+    ModelCapabilities,
+    ModelDescriptor,
+    ModelLifecycle,
+    ModelRef,
+    OutputCapabilities,
+    TargetCapabilities,
+    TrainingContract,
+)
+from openforecast.views import FitView, ForecastView, SeriesView
+from openforecast_nixtla import conversion
+
+__all__ = ["AUTOARIMA", "Parameter", "StatsForecastAdapter"]
+
+#: The pickled ``StatsForecast`` object, written by its own ``save``.
+MODEL_FILENAME = "statsforecast.pkl"
+#: Everything the forecast side needs that the pickle does not hold.
+STATE_FILENAME = "state.json"
+
+
+@dataclass(frozen=True)
+class Parameter:
+    """One parameter of a native model, as both a schema and a check.
+
+    Declared once so that the JSON Schema a caller reads and the validation a
+    caller hits cannot disagree: an unknown parameter is refused by name and a
+    wrongly typed one is refused with the type it should have been.
+    """
+
+    name: str
+    kind: type[int] | type[bool] | type[str] | type[float]
+    description: str
+    minimum: int | None = None
+    choices: tuple[str, ...] = ()
+
+    @property
+    def json_type(self) -> str:
+        return {bool: "boolean", int: "integer", float: "number", str: "string"}[self.kind]
+
+    def schema(self) -> dict[str, Any]:
+        schema: dict[str, Any] = {"type": self.json_type, "description": self.description}
+        if self.minimum is not None:
+            schema["minimum"] = self.minimum
+        if self.choices:
+            schema["enum"] = list(self.choices)
+        return schema
+
+    def check(self, value: object, model: str) -> None:
+        """Refuse a value this parameter cannot take, naming what it can."""
+        # ``bool`` is an ``int`` in Python and is not one here: a model taking a
+        # count and given ``True`` has been handed the wrong thing.
+        wrong_type = not isinstance(value, self.kind) or (
+            self.kind is not bool and isinstance(value, bool)
+        )
+        if wrong_type:
+            raise RecipeError(
+                f"{model} takes {self.name} as {self.json_type} ({self.description}); got {value!r}"
+            )
+        if self.minimum is not None and isinstance(value, int) and value < self.minimum:
+            raise RecipeError(
+                f"{model} takes {self.name} of at least {self.minimum}; got {value!r}"
+            )
+        if self.choices and value not in self.choices:
+            raise RecipeError(f"{model} takes {self.name} in {list(self.choices)}; got {value!r}")
+
+
+class StatsForecastAdapter:
+    """One StatsForecast model, as OpenForecast advertises and executes it."""
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        display_name: str,
+        build: Callable[..., Any],
+        parameters: Sequence[Parameter],
+        exogenous: bool,
+    ) -> None:
+        self._name = name
+        self._display_name = display_name
+        self._build = build
+        self._parameters = {parameter.name: parameter for parameter in parameters}
+        self._exogenous = exogenous
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def descriptor(self, provider: str) -> ModelDescriptor:
+        """What the catalog and the engine are told about this model.
+
+        Every capability is one the library actually has. It is univariate
+        because a StatsForecast model forecasts one column; it takes a panel
+        because a panel is many independent series to it; it takes known
+        features as exogenous regressors and no others, because a value that
+        stops at the forecast origin is not something an ARIMA can condition a
+        future step on; and it cannot see a missing value, so data with gaps is
+        refused before it gets here unless the caller asked for an imputation.
+        """
+        return ModelDescriptor(
+            ref=ModelRef.parse(f"{provider}/{self._name}"),
+            provider=provider,
+            display_name=self._display_name,
+            lifecycle=ModelLifecycle.trainable(),
+            training=TrainingContract.series(),
+            capabilities=ModelCapabilities(
+                instances=InstanceCapabilities(single=True, panel=True),
+                targets=TargetCapabilities(univariate=True, multivariate=False),
+                features=FeatureCapabilities(observed=False, known=self._exogenous, static=False),
+                outputs=OutputCapabilities(point=True),
+                missing_values=MissingValueSupport.UNSUPPORTED,
+            ),
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    name: parameter.schema() for name, parameter in self._parameters.items()
+                },
+            },
+        )
+
+    # -- fit ----------------------------------------------------------------
+
+    def fit(self, view: FitView, params: Mapping[str, Any], into: Path) -> None:
+        """Fit one native model per series, and persist it with what labels it."""
+        from statsforecast import StatsForecast
+
+        if not isinstance(view, SeriesView):
+            raise ProviderError(
+                f"{self._name} trains on one complete time series, so it cannot be fitted "
+                f"from a {view.kind} view"
+            )
+        prepared = conversion.training_frame(view)
+        model = self._instantiate(params)
+        forecaster = StatsForecast(models=[model], freq=prepared.frequency, n_jobs=1)
+        try:
+            forecaster.fit(prepared.frame)
+        except Exception as error:
+            # A library refusing to fit these series is an execution failure the
+            # caller can act on, not a bug in the boundary.
+            raise ProviderError(
+                f"{self._name} could not be fitted on this data: {type(error).__name__}: {error}"
+            ) from error
+        forecaster.save(str(into / MODEL_FILENAME))
+        _write_state(
+            into / STATE_FILENAME,
+            {
+                "model": self._name,
+                "column": str(model.alias),
+                "target": prepared.target,
+                "exogenous": list(prepared.exogenous),
+                "frequency": prepared.frequency,
+                "series": [
+                    {
+                        "unique_id": series_id,
+                        "key": list(instance),
+                        "last_event_time": prepared.last_event_times[series_id].isoformat(),
+                    }
+                    for series_id, instance in prepared.instances.items()
+                ],
+            },
+        )
+
+    # -- forecast -----------------------------------------------------------
+
+    def forecast(self, view: ForecastView, output: Mapping[str, Any], state: Path) -> pa.Table:
+        """The next ``horizon`` steps of every series the view asks about."""
+        from statsforecast import StatsForecast
+
+        kind = output.get("kind", "point")
+        if kind != "point":
+            raise ProviderError(f"{self._name} produces point forecasts, not {kind}")
+        persisted = _read_state(state / STATE_FILENAME, self._name)
+        unique_ids = {tuple(entry["key"]): str(entry["unique_id"]) for entry in persisted["series"]}
+        exogenous = tuple(str(name) for name in persisted["exogenous"])
+        self._require_matching_origin(view, unique_ids, persisted)
+
+        forecaster = StatsForecast.load(str(state / MODEL_FILENAME))
+        future = conversion.future_frame(view, unique_ids, exogenous)
+        try:
+            predictions = forecaster.predict(h=view.metadata.horizon, X_df=future)
+        except Exception as error:
+            raise ProviderError(
+                f"{self._name} could not forecast this view: {type(error).__name__}: {error}"
+            ) from error
+        return conversion.answer(
+            view,
+            unique_ids,
+            predictions,
+            column=str(persisted["column"]),
+            target=str(persisted["target"]),
+        )
+
+    def _require_matching_origin(
+        self,
+        view: ForecastView,
+        unique_ids: Mapping[tuple[Any, ...], str],
+        persisted: Mapping[str, Any],
+    ) -> None:
+        """A local model continues the series it saw; it does not re-read it.
+
+        ``predict(h)`` extrapolates from the last observation of the fit, so an
+        origin that is not that observation would produce the right numbers for
+        the wrong event times. Refusing is the only honest answer available
+        without fitting again, which is a fit and belongs in ``fit``.
+        """
+        ends = {
+            str(entry["unique_id"]): datetime.fromisoformat(str(entry["last_event_time"]))
+            for entry in persisted["series"]
+        }
+        for instance in view.instances:
+            series_id = unique_ids.get(instance)
+            if series_id is None:
+                raise DataError(
+                    f"{self._name} is fitted per series, so it has no model for instance "
+                    f"{instance}; it was fitted on {sorted(str(key) for key in unique_ids)}"
+                )
+            end = ends[series_id]
+            if end != view.origin_time:
+                raise DataError(
+                    f"{self._name} forecasts the steps after the last observation it was "
+                    f"fitted on, which for instance {instance} is {end.isoformat()}; this "
+                    f"forecast is made at the origin {view.origin_time.isoformat()}. Fit at "
+                    f"that origin instead — a local model is refitted rather than reused"
+                )
+
+    # -- parameters ---------------------------------------------------------
+
+    def _instantiate(self, params: Mapping[str, Any]) -> Any:
+        """The native model the caller's parameters describe."""
+        unknown = sorted(set(params) - set(self._parameters))
+        if unknown:
+            raise RecipeError(
+                f"{self._name} takes no parameter {unknown}; it takes {sorted(self._parameters)}"
+            )
+        for name, value in params.items():
+            self._parameters[name].check(value, self._name)
+        try:
+            return self._build(**params)
+        except (TypeError, ValueError) as error:
+            raise RecipeError(f"{self._name} rejected {dict(params)}: {error}") from error
+
+    def __repr__(self) -> str:
+        return f"StatsForecastAdapter({self._name})"
+
+
+def _auto_arima(**params: Any) -> Any:
+    from statsforecast.models import AutoARIMA
+
+    return AutoARIMA(**params)
+
+
+#: The parameters of ``AutoARIMA`` a caller may set. Deliberately a subset:
+#: ``alias`` would rename the column the answer is read from, ``trace`` prints,
+#: and the interval and distribution parameters describe outputs this model does
+#: not advertise.
+AUTOARIMA_PARAMETERS = (
+    Parameter("season_length", int, "Steps of the data's frequency in one season.", minimum=1),
+    Parameter("d", int, "Order of first differencing. Selected when unset.", minimum=0),
+    Parameter("D", int, "Order of seasonal differencing. Selected when unset.", minimum=0),
+    Parameter("max_p", int, "Largest non-seasonal AR order to consider.", minimum=0),
+    Parameter("max_q", int, "Largest non-seasonal MA order to consider.", minimum=0),
+    Parameter("max_P", int, "Largest seasonal AR order to consider.", minimum=0),
+    Parameter("max_Q", int, "Largest seasonal MA order to consider.", minimum=0),
+    Parameter("max_order", int, "Largest total order of the selected model.", minimum=0),
+    Parameter("max_d", int, "Largest order of first differencing to consider.", minimum=0),
+    Parameter("max_D", int, "Largest order of seasonal differencing to consider.", minimum=0),
+    Parameter("start_p", int, "Non-seasonal AR order the search starts at.", minimum=0),
+    Parameter("start_q", int, "Non-seasonal MA order the search starts at.", minimum=0),
+    Parameter("start_P", int, "Seasonal AR order the search starts at.", minimum=0),
+    Parameter("start_Q", int, "Seasonal MA order the search starts at.", minimum=0),
+    Parameter("stationary", bool, "Restrict the search to stationary models."),
+    Parameter("seasonal", bool, "Allow seasonal terms."),
+    Parameter("ic", str, "Information criterion used to select.", choices=("aicc", "aic", "bic")),
+    Parameter("stepwise", bool, "Search stepwise rather than over the whole grid."),
+    Parameter("nmodels", int, "How many models the stepwise search may try.", minimum=1),
+    Parameter("approximation", bool, "Approximate the likelihood while searching."),
+    Parameter("allowdrift", bool, "Allow a drift term."),
+    Parameter("allowmean", bool, "Allow a non-zero mean."),
+    Parameter("biasadj", bool, "Bias-adjust the back-transformed forecast."),
+)
+
+#: ``nixtla/autoarima``: order selection over ARIMA models, per series.
+AUTOARIMA = StatsForecastAdapter(
+    name="autoarima",
+    display_name="AutoARIMA",
+    build=_auto_arima,
+    parameters=AUTOARIMA_PARAMETERS,
+    exogenous=True,
+)
+
+
+def _write_state(path: Path, payload: Mapping[str, Any]) -> None:
+    try:
+        encoded = json.dumps(payload, indent=2)
+    except TypeError as error:  # an instance key no JSON document can hold
+        raise ProviderError(f"this instance key cannot be persisted: {error}") from error
+    path.write_text(encoded + "\n", encoding="utf-8")
+
+
+def _read_state(path: Path, model: str) -> Mapping[str, Any]:
+    try:
+        persisted: Any = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as error:
+        raise ProviderError(f"{model} has no fitted state at {path}: {error}") from error
+    except json.JSONDecodeError as error:
+        raise ProviderError(
+            f"the fitted state of {model} at {path} is not valid JSON: {error}"
+        ) from error
+    if not isinstance(persisted, dict) or persisted.get("model") != model:
+        raise ProviderError(f"{path} does not hold the fitted state of {model}")
+    return persisted
