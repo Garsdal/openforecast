@@ -28,6 +28,11 @@ dev = [
     "hypothesis>=6",
     "ruff>=0.8",
     "pyright>=1.1.390",
+    # pyarrow ships no type information, so strict pyright needs the stubs.
+    "pyarrow-stubs>=20",
+    # pandas is a test dependency only: from_pandas converts at the edge.
+    "pandas>=3",
+    "pandas-stubs>=3",
 ]
 
 [tool.ruff]

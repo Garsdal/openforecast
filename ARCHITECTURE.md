@@ -42,7 +42,7 @@ Imports flow in one direction only. A module may import its own layer and any
 layer above it, never one below.
 
 ```text
-                    protocol/
+              errors.py   protocol/
                         ↓
       data/  models/  recipes/  tasks/
                         ↓
@@ -65,6 +65,9 @@ AST-scans the package and fails on:
 
 - any import of a forecasting framework, and any forecasting framework in the
   declared dependencies of `pyproject.toml` (rule 1);
+- any runtime dependency beyond `pydantic`, `pyarrow` and `platformdirs`, and
+  any import of `pandas` — a DataFrame is accepted at the edge and converted by
+  `pyarrow`, never stored or depended on (rule 1);
 - any import that points down the layer stack (rules 1, 2 and 7);
 - provider terminology appearing in semantic protocol types (rule 6).
 
