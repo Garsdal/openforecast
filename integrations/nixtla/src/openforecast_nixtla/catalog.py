@@ -2,7 +2,7 @@
 
 ```python
 descriptors("nixtla")      # every model, as the handshake reports it
-adapter_for("autoarima")   # the one that executes it
+adapter_for("nixtla/nhits", "nixtla")   # the one that executes it
 ```
 
 A catalog rather than a chain of ``if`` statements in the provider: a model is
@@ -25,7 +25,7 @@ import pyarrow as pa
 from openforecast.errors import UnknownModelError
 from openforecast.models import ModelDescriptor, ModelRef
 from openforecast.views import FitView, ForecastView
-from openforecast_nixtla.adapters import statsforecast
+from openforecast_nixtla.adapters import neuralforecast, statsforecast
 
 __all__ = ["Adapter", "adapter_for", "descriptors", "model_names"]
 
@@ -40,7 +40,9 @@ class Adapter(Protocol):
 
     def descriptor(self, provider: str) -> ModelDescriptor: ...
 
-    def fit(self, view: FitView, params: Mapping[str, Any], into: Path) -> None: ...
+    def fit(
+        self, view: FitView, params: Mapping[str, Any], into: Path, *, seed: int | None
+    ) -> None: ...
 
     def forecast(self, view: ForecastView, output: Mapping[str, Any], state: Path) -> pa.Table: ...
 
@@ -48,6 +50,7 @@ class Adapter(Protocol):
 #: Every model this integration provides, by the name in its reference.
 ADAPTERS: Mapping[str, Adapter] = {
     statsforecast.AUTOARIMA.name: statsforecast.AUTOARIMA,
+    neuralforecast.NHITS.name: neuralforecast.NHITS,
 }
 
 

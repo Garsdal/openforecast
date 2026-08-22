@@ -147,6 +147,7 @@ class Case:
     instances: int
     targets: tuple[str, ...]
     horizon: int = HORIZON
+    params: Mapping[str, Any] = field(default_factory=lambda: {})
 
     def data(self) -> SemanticDataset:
         return self.build()
@@ -162,13 +163,24 @@ class Refusal:
     error: type[OpenForecastError]
     match: str
     horizon: int = HORIZON
+    params: Mapping[str, Any] = field(default_factory=lambda: {})
 
     def data(self) -> SemanticDataset:
         return self.build()
 
 
-def cases_for(descriptor: ModelDescriptor) -> tuple[Case, ...]:
-    """Every fit ``descriptor`` claims it can serve, over both semantic sources."""
+def cases_for(
+    descriptor: ModelDescriptor, params: Mapping[str, Any] | None = None
+) -> tuple[Case, ...]:
+    """Every fit ``descriptor`` claims it can serve, over both semantic sources.
+
+    ``params`` reaches every generated fit unchanged. It exists for models whose
+    defaults are expensive rather than wrong — a neural model's thousand
+    optimization steps say nothing about whether it consumes a panel — and it
+    may only carry parameters the descriptor already advertises, so it cannot be
+    used to turn a capability on for the duration of the suite.
+    """
+    settings = _declared(descriptor, params)
     cases: list[Case] = []
     for instances in _instance_counts(descriptor):
         for targets in _target_sets(descriptor):
@@ -182,6 +194,7 @@ def cases_for(descriptor: ModelDescriptor) -> tuple[Case, ...]:
                     fidelity=OriginFidelity.SIMULATED,
                     instances=instances,
                     targets=targets,
+                    params=settings,
                 )
             )
             if not _consumes_point_in_time(descriptor):
@@ -195,13 +208,30 @@ def cases_for(descriptor: ModelDescriptor) -> tuple[Case, ...]:
                     fidelity=OriginFidelity.OBSERVED,
                     instances=instances,
                     targets=targets,
+                    params=settings,
                 )
             )
     return tuple(cases)
 
 
-def refusals_for(descriptor: ModelDescriptor) -> tuple[Refusal, ...]:
+def _declared(descriptor: ModelDescriptor, params: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    """``params``, once every one of them is a parameter the model advertises."""
+    settings = dict(params or {})
+    properties = descriptor.parameters_schema.get("properties", {})
+    unknown = sorted(set(settings) - set(properties))
+    if unknown:
+        raise AssertionError(
+            f"the conformance suite was given the parameters {unknown} for {descriptor.ref}, "
+            f"which advertises {sorted(properties)}"
+        )
+    return settings
+
+
+def refusals_for(
+    descriptor: ModelDescriptor, params: Mapping[str, Any] | None = None
+) -> tuple[Refusal, ...]:
     """Every request ``descriptor`` says it cannot serve, and how it must say so."""
+    settings = _declared(descriptor, params)
     capabilities = descriptor.capabilities
     contract = descriptor.training
     refusals: list[Refusal] = []
@@ -216,6 +246,7 @@ def refusals_for(descriptor: ModelDescriptor) -> tuple[Refusal, ...]:
                 plan=_plan(contract),
                 error=DataError,
                 match="cannot be fitted on a panel",
+                params=settings,
             )
         )
     if not capabilities.targets.multivariate:
@@ -226,6 +257,7 @@ def refusals_for(descriptor: ModelDescriptor) -> tuple[Refusal, ...]:
                 plan=_plan(contract),
                 error=DataError,
                 match="cannot be fitted on 2 targets",
+                params=settings,
             )
         )
     unsupported = _unsupported_role(descriptor)
@@ -237,6 +269,7 @@ def refusals_for(descriptor: ModelDescriptor) -> tuple[Refusal, ...]:
                 plan=_plan(contract),
                 error=DataError,
                 match="cannot be given the features",
+                params=settings,
             )
         )
     if capabilities.missing_values is MissingValueSupport.UNSUPPORTED:
@@ -247,6 +280,7 @@ def refusals_for(descriptor: ModelDescriptor) -> tuple[Refusal, ...]:
                 plan=_plan(contract),
                 error=DataError,
                 match="has missing values",
+                params=settings,
             )
         )
     if not contract.learns_across_origins and _consumes_point_in_time(descriptor):
@@ -257,6 +291,7 @@ def refusals_for(descriptor: ModelDescriptor) -> tuple[Refusal, ...]:
                 plan=_plan(contract, origins=of.AllOrigins()),
                 error=OriginScopeError,
                 match="one forecast origin",
+                params=settings,
             )
         )
     return tuple(refusals)
@@ -274,7 +309,9 @@ def run_case(
     client = client_for(descriptor, recording, store)
     data = case.data()
 
-    handle = client.fit(str(descriptor.ref), data, horizon=case.horizon, plan=case.plan)
+    handle = client.fit(
+        str(descriptor.ref), data, horizon=case.horizon, plan=case.plan, params=dict(case.params)
+    )
 
     # The provider was handed the view its contract names, and only that.
     assert [type(view) for view in recording.fit_views] == [VIEW_TYPES[contract.view]]
@@ -315,7 +352,13 @@ def run_refusal(
     client = client_for(descriptor, recording, store)
 
     with pytest.raises(refusal.error, match=refusal.match):
-        client.fit(str(descriptor.ref), refusal.data(), horizon=refusal.horizon, plan=refusal.plan)
+        client.fit(
+            str(descriptor.ref),
+            refusal.data(),
+            horizon=refusal.horizon,
+            plan=refusal.plan,
+            params=dict(refusal.params),
+        )
 
     # A refusal is a declaration meeting data, so it happens before the provider
     # is started rather than inside somebody's library.

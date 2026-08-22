@@ -29,16 +29,25 @@ suite = pytest.importorskip(
 PROVIDER = NixtlaProvider()
 DESCRIPTORS = PROVIDER.descriptors()
 
+#: What the suite must not be made to pay for. A neural model's default is a
+#: thousand optimization steps, and none of them say anything about whether it
+#: consumes a panel or refuses a second target — which is all the generated
+#: cases assert. Only parameters the descriptor already advertises are accepted
+#: here, so this cannot quietly change what is being conformance-tested.
+PARAMETERS: dict[str, dict[str, object]] = {
+    "nhits": {"max_steps": 2},
+}
+
 CASES = [
     pytest.param(descriptor, case, id=f"{descriptor.ref.name}-{case.name}")
     for descriptor in DESCRIPTORS
-    for case in suite.cases_for(descriptor)
+    for case in suite.cases_for(descriptor, PARAMETERS.get(descriptor.ref.name))
 ]
 
 REFUSALS = [
     pytest.param(descriptor, refusal, id=f"{descriptor.ref.name}-{refusal.name}")
     for descriptor in DESCRIPTORS
-    for refusal in suite.refusals_for(descriptor)
+    for refusal in suite.refusals_for(descriptor, PARAMETERS.get(descriptor.ref.name))
 ]
 
 

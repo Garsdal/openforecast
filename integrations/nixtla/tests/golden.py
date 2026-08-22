@@ -14,6 +14,7 @@ repository.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -35,11 +36,21 @@ ORIGIN_TIME = "ref_time"
 EVENT_TIME = "target_time"
 TARGET = "load"
 KNOWN = "temp_fc"
+OBSERVED = "temp"
+STATIC = "capacity"
 
 ZONES = ("DE", "FR", "NL")
 
 PROVIDER = NixtlaProvider()
 AUTOARIMA = "nixtla/autoarima"
+NHITS = "nixtla/nhits"
+
+#: Enough optimization to prove the wiring, and no more. These tests assert what
+#: the model was *given* and how the answer is *labeled*; how well a neural
+#: network fits six-step windows is not something a unit test can assert without
+#: becoming a benchmark, and paying for a thousand gradient steps to find out
+#: would make the suite slow for nothing.
+FAST = {"max_steps": 2, "scaler_type": "standard"}
 
 
 def at(step: int) -> datetime:
@@ -57,10 +68,26 @@ def known_value(instance: int, event: int, origin: int | None = None) -> float:
     return base if origin is None else base + 10_000.0 * (origin + 1)
 
 
+def observed_value(instance: int, event: int) -> float:
+    """A measurement, knowable only once its event time has passed."""
+    return float(instance * 100 + event) + 0.25
+
+
+def static_value(instance: int) -> float:
+    """A feature with no time axis, constant within an instance."""
+    return float(100 * (instance + 1))
+
+
 def event_time_frame(
-    *, instances: int = 1, periods: int = 24, future_periods: int = 0, known: bool = False
+    *,
+    instances: int = 1,
+    periods: int = 24,
+    future_periods: int = 0,
+    known: bool = False,
+    observed: bool = False,
+    static: bool = False,
 ) -> of.TimeSeriesFrame:
-    """An ordinary event-time frame, optionally with a known feature."""
+    """An ordinary event-time frame, optionally with a feature of each role."""
     history: list[dict[str, Any]] = []
     future: list[dict[str, Any]] = []
     for index, zone in enumerate(ZONES[:instances]):
@@ -70,8 +97,12 @@ def event_time_frame(
                 row[ZONE] = zone
             if known:
                 row[KNOWN] = known_value(index, event)
+            if static:
+                row[STATIC] = static_value(index)
             if event < periods:
                 row[TARGET] = target_value(index, event)
+                if observed:
+                    row[OBSERVED] = observed_value(index, event)
                 history.append(row)
             else:
                 future.append(row)
@@ -83,11 +114,19 @@ def event_time_frame(
         instance_keys=[ZONE] if instances > 1 else [],
         targets=[TARGET],
         known_features=[KNOWN] if known else [],
+        observed_features=[OBSERVED] if observed else [],
+        static_features=[STATIC] if static else [],
     )
 
 
 def point_in_time_dataset(
-    *, instances: int = 1, origins: int = 6, first_origin: int = 2, horizon: int = 3
+    *,
+    instances: int = 1,
+    origins: int = 6,
+    first_origin: int = 2,
+    horizon: int = 3,
+    observed: bool = False,
+    static: bool = False,
 ) -> of.ForecastDataset:
     """Real vintages, each describing everything up to its own origin and beyond.
 
@@ -95,6 +134,10 @@ def point_in_time_dataset(
     a selected origin is one *complete* series and is cut from a single vintage.
     The known values carry the origin that issued them, so a value from another
     vintage is identifiable rather than merely suspicious.
+
+    An observed feature stops at its own origin, because that is what "observed"
+    means; a vintage that carried one for an event time ahead of itself would be
+    rejected by the semantic model before any of this got near a provider.
     """
     rows: list[dict[str, Any]] = []
     for index, zone in enumerate(ZONES[:instances]):
@@ -106,6 +149,10 @@ def point_in_time_dataset(
                     row[ZONE] = zone
                 row[TARGET] = target_value(index, event)
                 row[KNOWN] = known_value(index, event, origin)
+                if observed:
+                    row[OBSERVED] = observed_value(index, event) if event <= origin else math.nan
+                if static:
+                    row[STATIC] = static_value(index)
                 rows.append(row)
     return of.ForecastDataset.from_pandas(
         pd.DataFrame(rows),
@@ -116,6 +163,8 @@ def point_in_time_dataset(
         instance_keys=[ZONE] if instances > 1 else [],
         targets=[TARGET],
         known_features=[KNOWN],
+        observed_features=[OBSERVED] if observed else [],
+        static_features=[STATIC] if static else [],
     )
 
 

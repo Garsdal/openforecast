@@ -56,8 +56,7 @@ class NixtlaProvider:
         into: Path,
     ) -> None:
         """Fit ``model`` on ``view``, persisting native state into ``into``."""
-        del seed  # the models exposed so far are deterministic order searches
-        catalog.adapter_for(model, self.name).fit(view, params, into)
+        catalog.adapter_for(model, self.name).fit(view, params, into, seed=seed)
 
     def forecast(
         self,
