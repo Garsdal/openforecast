@@ -152,6 +152,12 @@ EXPECTED_VIEW_SURFACE = {
     "ViewProvenance",
     "ViewRequest",
     "forecast_columns",
+    "read_answer",
+    "read_fit_view",
+    "read_forecast_view",
+    "read_view",
+    "write_answer",
+    "write_view",
 }
 
 
@@ -195,21 +201,43 @@ def test_the_model_surface_is_exactly_what_step_five_defines() -> None:
     assert builtins.list(of.models.__all__) == sorted(of.models.__all__)
 
 
+# The vocabulary both sides of a boundary have to spell the same way, and the
+# messages they exchange over one. Nothing here names a view type, a descriptor
+# or a semantic dataset: this is the innermost layer.
+EXPECTED_PROTOCOL_SURFACE = {
+    "ErrorCode",
+    "ErrorPayload",
+    "FitRequest",
+    "FitResult",
+    "ForecastColumn",
+    "ForecastRequest",
+    "ForecastResult",
+    "HandshakeRequest",
+    "HandshakeResult",
+    "Operation",
+    "PROTOCOL_VERSION",
+    "Request",
+    "Response",
+    "Status",
+    "ViewKind",
+    "ViewRef",
+    "forecast_columns",
+    "parse_request",
+    "parse_response",
+}
+
+
 def test_the_protocol_layer_exports_only_shared_vocabulary() -> None:
     """``ViewKind`` lives here so that ``models/`` and ``views/`` can both name it.
 
-    The wire messages themselves arrive in Step 9. Until then this layer holds
-    exactly the vocabulary that would otherwise have to be spelled twice.
+    The wire messages of Step 9 are here for the same reason: the engine writes
+    them and a provider in another process reads them, and neither may import
+    the other.
     """
     from openforecast import protocol
     from openforecast.views import ViewKind
 
-    assert protocol.__all__ == [
-        "ForecastColumn",
-        "PROTOCOL_VERSION",
-        "ViewKind",
-        "forecast_columns",
-    ]
+    assert set(protocol.__all__) == EXPECTED_PROTOCOL_SURFACE
     assert protocol.ViewKind is ViewKind is of.models.ViewKind
     assert isinstance(protocol.PROTOCOL_VERSION, int)
 
@@ -341,17 +369,30 @@ EXPECTED_RUNTIME_SURFACE = {
     "Forecast",
     "Leaf",
     "ProviderClient",
+    "ProviderEnvironment",
+    "ProviderEnvironments",
+    "ProviderRecord",
     "ProviderRegistry",
+    "SubprocessProvider",
     "TransformState",
     "default_providers",
     "install_default_providers",
+    "installed_providers",
     "leaves",
     "normalize_forecast_context",
     "normalize_recipe",
     "validate_view",
 }
 
-EXPECTED_PROVIDER_SURFACE = {"BUILTIN_PROVIDER", "BuiltinProvider"}
+# The provider half of the boundary: the contract, the serving harness an
+# integration runs, and the reference provider itself.
+EXPECTED_PROVIDER_SURFACE = {
+    "BUILTIN_PROVIDER",
+    "BuiltinProvider",
+    "ProviderClient",
+    "ProviderServer",
+    "serve",
+}
 
 
 @pytest.mark.parametrize(
@@ -372,7 +413,6 @@ def test_the_step_eight_surfaces_are_exactly_what_is_defined(name: str, expected
 @pytest.mark.parametrize(
     "name",
     [
-        "commands",
         "server",
     ],
 )
@@ -382,3 +422,10 @@ def test_unimplemented_subpackages_are_importable_but_empty(name: str) -> None:
 
     assert module.__doc__
     assert [attribute for attribute in dir(module) if not attribute.startswith("_")] == []
+
+
+def test_the_cli_exposes_a_parser_and_an_entry_point() -> None:
+    """The CLI is a projection, so its surface is the two functions that run it."""
+    from openforecast import commands
+
+    assert set(commands.__all__) == {"build_parser", "main"}

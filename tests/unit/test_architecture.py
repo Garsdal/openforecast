@@ -165,13 +165,17 @@ PROVIDERS_ROOT = PACKAGE_ROOT / "providers"
 # What a provider may import from OpenForecast. ``views`` re-exports the
 # vocabulary its schemas are built from, so a provider never needs ``data``;
 # ``models`` is how it declares what it provides, which is a descriptor and
-# never a dataset.
+# never a dataset; ``providers`` is the SDK — the ``ProviderClient`` contract and
+# the serving harness an integration's ``__main__`` runs — which exists on this
+# side of the boundary precisely so that a provider never has to import
+# ``runtime``.
 PROVIDER_MODULES = frozenset(
     {
         "openforecast.views",
         "openforecast.errors",
         "openforecast.protocol",
         "openforecast.models",
+        "openforecast.providers",
     }
 )
 
@@ -255,8 +259,14 @@ def test_the_provider_boundary_check_actually_catches_a_violation() -> None:
     assert "TimeSeriesFrame" in reported
     assert "openforecast.data.frame" in reported
 
-    allowed = "from openforecast.views import SequenceView, ViewKind\n"
+    allowed = (
+        "from openforecast.views import SequenceView, ViewKind\n"
+        "from openforecast.providers import serve\n"
+    )
     assert not _provider_violations(allowed, INTEGRATIONS_ROOT / "example" / "provider.py")
+
+    reaching_further = "from openforecast.runtime import Engine\n"
+    assert _provider_violations(reaching_further, INTEGRATIONS_ROOT / "example" / "provider.py")
 
 
 def test_the_view_vocabulary_is_defined_exactly_once() -> None:

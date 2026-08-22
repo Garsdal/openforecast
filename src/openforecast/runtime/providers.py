@@ -3,15 +3,24 @@
 ```python
 providers = install_default_providers()      # registers into the default catalog
 
-of.models.list()                             # (builtin/seasonal-naive,)
+of.models.list()                             # (builtin/seasonal-naive, nixtla/nhits)
 ```
 
 A provider is discovered and its models are registered; nothing imports a
-provider in order to know what it offers. Today that is one in-process provider
-whose descriptors are read directly. In Step 9 the same two lines happen over a
-handshake with a subprocess in its own environment, and the catalog cannot tell
-the difference — which is the point of registering descriptors rather than
-importing model classes.
+provider in order to know what it offers. Two kinds are discovered here and the
+catalog cannot tell them apart, which is the point of registering descriptors
+rather than importing model classes:
+
+```text
+shipped     the built-in provider, in this process
+installed   an integration in its own uv environment, over the subprocess protocol
+```
+
+Discovery of the second kind reads the handshake each environment recorded when
+it was installed. It starts no process and imports nothing from the integration
+— a provider process starts when a model is actually fitted or forecast with,
+and the handshake is repeated then to check that the environment still is what
+it said it was.
 
 Registration is idempotent so that installing twice is not an error. Registering
 a *different* descriptor under a name already taken still is: which model a
@@ -25,23 +34,42 @@ from collections.abc import Iterable
 from openforecast.errors import DuplicateModelError
 from openforecast.models.catalog import DEFAULT_CATALOG, ModelCatalog
 from openforecast.providers.builtin import BUILTIN_PROVIDER
+from openforecast.runtime.environments import ProviderEnvironments
 from openforecast.runtime.provider import ProviderClient, ProviderRegistry
 
-__all__ = ["default_providers", "install_default_providers", "register_descriptors"]
+__all__ = [
+    "default_providers",
+    "install_default_providers",
+    "installed_providers",
+    "register_descriptors",
+]
 
 
-def default_providers() -> ProviderRegistry:
-    """The providers this build ships with."""
-    return ProviderRegistry([BUILTIN_PROVIDER])
+def default_providers(environments: ProviderEnvironments | None = None) -> ProviderRegistry:
+    """The provider this build ships with, plus every environment installed."""
+    registry = ProviderRegistry([BUILTIN_PROVIDER])
+    for client in installed_providers(environments):
+        registry.register(client)
+    return registry
 
 
-def install_default_providers(catalog: ModelCatalog | None = None) -> ProviderRegistry:
-    """Register the shipped providers' models and return the registry.
+def installed_providers(
+    environments: ProviderEnvironments | None = None,
+) -> tuple[ProviderClient, ...]:
+    """A client per installed provider environment. Starts nothing."""
+    store = environments if environments is not None else ProviderEnvironments()
+    return tuple(store.clients())
+
+
+def install_default_providers(
+    catalog: ModelCatalog | None = None, environments: ProviderEnvironments | None = None
+) -> ProviderRegistry:
+    """Register the discoverable providers' models and return the registry.
 
     What makes ``of.models.list()`` answer anything at all: the catalog holds
     what providers advertise, and this is the advertising.
     """
-    providers = default_providers()
+    providers = default_providers(environments)
     register_descriptors(providers, catalog)
     return providers
 

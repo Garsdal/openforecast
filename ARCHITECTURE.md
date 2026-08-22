@@ -20,8 +20,10 @@ And its immediate corollary:
    A provider receives a `SeriesView`, `SequenceView`, `TabularView` or
    `ForecastView` — never a `TimeSeriesFrame`, `PointInTimeFrame` or
    `ForecastDataset`. Its import surface is `openforecast.views`,
-   `openforecast.errors`, `openforecast.protocol` and `openforecast.models` —
-   the last of which is how it declares what it provides.
+   `openforecast.errors`, `openforecast.protocol`, `openforecast.models` and
+   `openforecast.providers` — the last two being how it declares what it
+   provides and how it is served. Nothing in that surface names a semantic
+   source dataset, which is what makes the rule mechanically checkable.
 3. **Providers must not branch on `TimeSeriesFrame` versus `ForecastDataset`.**
    If a provider needs to know which one it came from, the view abstraction has
    failed and the fix belongs in the `ViewPlanner`, not the provider.
@@ -85,12 +87,13 @@ AST-scans the package and fails on:
   the four origin selections, for the same reason;
 - any import in `integrations/` **or in `providers/`** that reaches past the view
   boundary: a provider may import `openforecast.views`, `openforecast.errors`,
-  `openforecast.protocol` and `openforecast.models` — the last of which is how it
-  declares what it provides, which is a descriptor and never a dataset — and may
-  not name `TimeSeriesFrame`, `PointInTimeFrame`, `ForecastDataset` or
-  `ForecastContext` (rules 2 and 3). `integrations/` holds no Python yet, so that
-  check is also tested against a violating fixture; the built-in provider in
-  `providers/` is real code held to the same rule.
+  `openforecast.protocol`, `openforecast.models` and `openforecast.providers` —
+  the last two being how it declares what it provides, which is a descriptor and
+  never a dataset, and how it is served — and may not name `TimeSeriesFrame`,
+  `PointInTimeFrame`, `ForecastDataset` or `ForecastContext` (rules 2 and 3).
+  `integrations/` holds no Python yet, so that check is also tested against a
+  violating fixture, including one that reaches for `openforecast.runtime`; the
+  built-in provider in `providers/` is real code held to the same rule.
 
 CI additionally greps `uv tree --no-dev` so that a framework cannot arrive as
 somebody else's transitive dependency.
@@ -241,9 +244,9 @@ cannot describe a fit that did not happen. The recipe and the training view's
 schema live in their own files beside it and are hashed into it, so an artifact
 edited on disk fails to load instead of forecasting as something it no longer is.
 
-`PROTOCOL_VERSION` lives in `protocol/` rather than in the transport that will
-negotiate it in Step 9, because the manifest needs it first and the two have to
-be one number. An artifact written for another version is refused rather than
+`PROTOCOL_VERSION` lives in `protocol/` rather than in the transport that
+negotiates it, because the manifest needs it too and the two have to be one
+number. An artifact written for another version is refused rather than
 read optimistically: the provider directory is opaque, so guessing at a layout
 that may have changed is exactly the mistake worth making impossible.
 
@@ -275,14 +278,17 @@ equally invisible — a `ForecastDataset` and a `TimeSeriesFrame` both go to
 `ViewPlanner.fit_view`, and the only difference that survives is the
 `OriginFidelity` in the manifest.
 
-The provider interface is a structural `Protocol`, not a base class. Step 9's
-provider runs in another process and another environment; what it shares with an
+The provider interface is a structural `Protocol`, not a base class. A provider
+may run in another process and another environment; what it shares with an
 in-process one is the shape of three calls — `descriptors`, `fit`, `forecast` —
 and not an inheritance chain it would have to import across a subprocess
 boundary. Everything crossing those calls is either bulk data in an execution
 view or a plain mapping (`params` as the user wrote them, `output` as it
 serializes), which is exactly what becomes a JSON control message and an Arrow
-bundle in Step 9.
+bundle over the wire. `ProviderClient` therefore lives in `providers/` rather
+than in `runtime/`: both sides of the boundary have to name it, and `runtime/` is
+not on a provider's import surface, so a contract declared there could only be
+duplicated.
 
 `builtin/seasonal-naive` exists so the engine can be proved end to end before any
 external library is involved. It is a real model with a real contract, and it is
@@ -317,3 +323,72 @@ request (one column per target, or per target and quantile, or per sample path)
 and so cannot be read by one reader. The column vocabulary lives in `protocol/`
 for the same reason `ViewKind` does: a provider writes it and the engine reads
 it, and in Step 9 they are on opposite sides of a process.
+
+## Provider isolation and the wire
+
+An integration is never installed into the OpenForecast environment. Rule 1 says
+the core depends on no forecasting framework, and two integrations can want
+incompatible ones, so each gets its own `uv`-managed environment under
+`~/.cache/openforecast/providers/<name>/<version>/` and is reached over a
+subprocess protocol.
+
+Three properties make that isolation cost nothing at the boundary.
+
+**Discovery does not execute anything.** An environment is published only after
+the provider inside it has answered a handshake, and what it said is written into
+`environment.json`. Listing models and registering them therefore reads recorded
+JSON and starts no process — the same reason `fit()` can plan without one. A
+process starts when a model is actually executed, and the handshake is repeated
+then: an environment whose contents no longer match its record is refused rather
+than run as something it is not. For the same reason, a provider name OpenForecast
+already ships cannot be installed over — a name is the namespace of the models it
+advertises, so one name is one provider.
+
+**Control and bulk data travel differently.** Requests and responses are JSON
+Lines over stdin and stdout: small, ordered, one object per line. A view is an
+Arrow IPC bundle in a directory the request points at, because a training set
+does not belong inside a line of JSON. The bundle holds the view's *own* tables,
+so reading it reconstructs the view through its ordinary constructor and every
+invariant is enforced again on the far side of the process — a bundle truncated
+in transit fails to load rather than training on a short window. Every message
+declares its `PROTOCOL_VERSION`, and a peer speaking another one is refused at
+the handshake, because the bundles either side writes are laid out by that
+number.
+
+**stdout is protocol only.** Forecasting libraries print, so the serving harness
+replaces the provider's `sys.stdout` with the log stream for the duration of
+every call and answers on the stream it captured at startup. A provider does not
+have to be careful about it. On the engine's side, a line of stdout that is not a
+response is a protocol violation rather than noise to skip, since the alternative
+is a corrupted stream that eventually parses as something.
+
+The failures that only exist once there is a boundary are named rather than
+discovered: a process that dies is reported with its exit code and the tail of
+its log, a request has a deadline after which the process is killed, and an error
+envelope is re-raised as the error the same failure would have been in-process,
+so a caller's handling does not depend on where the model ran. A failure does not
+end the conversation, though — an exception becomes an error response and the
+loop continues, because a provider that dies also loses the environment that took
+a minute to start.
+
+What the engine knows about all of this is nothing. `SubprocessProvider` answers
+the same three calls the in-process provider does, and the test that says so is a
+comparison rather than an assertion about plumbing: `builtin/seasonal-naive`
+fitted and forecast over the wire produces the same Arrow table as the same model
+fitted and forecast here.
+
+The CLI exists for the one part of this that is not a forecasting operation:
+
+```bash
+openforecast providers install nixtla
+openforecast providers list
+openforecast providers inspect nixtla
+openforecast providers remove nixtla
+```
+
+It is a projection over the same objects the Python API uses and computes nothing
+of its own, and it keeps the protocol's stream contract — stdout is the answer,
+`--json` for anything that parses it, stderr and a non-zero exit code for a
+failure. It is built on `argparse`: a CLI framework would be a fourth runtime
+dependency for a projection, and rule 1 makes that an architectural decision
+rather than a convenience.

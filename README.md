@@ -26,10 +26,12 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > `ForecastContext` for real forecast vintages — the execution views and
 > `ViewPlanner` from Step 4, the model references, descriptors and execution
 > contracts from Step 5, the recipes, fit plans and forecast tasks from Step 6,
-> the artifact lifecycle and local model registry from Step 7, and the execution
-> engine and its built-in reference provider from Step 8. `of.fit` and
-> `of.forecast` work end to end today with `builtin/seasonal-naive`; external
-> providers arrive in Step 9 and after.
+> the artifact lifecycle and local model registry from Step 7, the execution
+> engine and its built-in reference provider from Step 8, and the provider
+> subprocess protocol and isolated uv environments from Step 9. `of.fit` and
+> `of.forecast` work end to end today with `builtin/seasonal-naive`, in this
+> process or over the subprocess protocol; the first external integration
+> arrives in Step 11.
 > See [PLAN.md](PLAN.md) for the full 17-step roadmap.
 
 ## The event-time semantic model
@@ -236,9 +238,9 @@ single-series, univariate, point-forecast model that cannot see a missing value.
 A capability is something a provider states, never something it is assumed to
 have.
 
-`of.models.list()` holds what the installed providers advertise — today the
-built-in reference provider, and from Step 9 whichever integrations are
-installed.
+`of.models.list()` holds what the installed providers advertise: the built-in
+reference provider, and whichever integrations have been installed into their
+own environments.
 
 ## Recipes, plans and tasks
 
@@ -300,8 +302,8 @@ works on both, and only the recorded `OriginFidelity` differs.
 
 Recipes and plans are a serializable AST, tagged by `kind`, and
 `of.parse_recipe` reads one back. The same JSON is what reaches an artifact
-manifest in Step 7, a provider subprocess in Step 9 and an HTTP body in
-Step 16 — no part of it is provider-specific.
+manifest, a provider subprocess request and — in Step 16 — an HTTP body; no part
+of it is provider-specific.
 
 ## Fitted models
 
@@ -464,6 +466,90 @@ A wide forecast changes shape with the request — one column per target, or per
 target and quantile, or per sample path — and cannot be read by one reader. The
 wide conveniences arrive with the V1 surface in Step 15.
 
+## Providers in their own environments
+
+Nixtla wants one version of `torch`, Darts wants another, and OpenForecast
+wants neither. So an integration is not installed into the OpenForecast
+environment at all: it gets its own, built with `uv`, and it is reached over a
+subprocess protocol.
+
+```bash
+openforecast providers install nixtla
+openforecast providers list
+openforecast providers inspect nixtla
+openforecast providers remove nixtla
+```
+
+```text
+~/.cache/openforecast/providers/
+    nixtla/
+        0.1.0/
+            environment.json     what the provider said when it was installed
+            .venv/
+```
+
+An environment is published only once the provider inside it has answered a
+handshake, and what it said is written down. That is what makes discovery cheap:
+`of.models.list()` reads recorded JSON and starts no process. A process starts
+when a model is actually fitted or forecast with — and the handshake is repeated
+then, so an environment whose contents changed underneath its record is refused
+rather than executed as something it no longer is.
+
+The transport is two channels, and the split is the point:
+
+```text
+control    JSON Lines over stdin/stdout — small, ordered, greppable
+bulk       Arrow IPC bundles in a directory the message points at
+```
+
+```json
+{"protocol_version": 1, "operation": "fit", "model": "nixtla/nhits",
+ "view": {"kind": "sequences", "path": "/tmp/openforecast-nixtla-x/view"},
+ "into": "/…/.tmp/01K5Z…/provider"}
+```
+
+A view bundle is the same tables the in-process provider is handed, so reading
+one reconstructs a real `SequenceView` — every invariant the view enforces is
+enforced again on the far side of the process. A bundle that was truncated in
+transit fails to load rather than training on a short window.
+
+```text
+sequences/                      tabular/
+    schema.json                     schema.json
+    provenance.json                 provenance.json
+    temporal.arrow                  x.arrow
+    samples.arrow                   y.arrow
+    static.arrow                    keys.arrow
+```
+
+**stdout carries protocol and nothing else.** Forecasting libraries print, so
+the serving harness redirects the provider's stdout to stderr for the duration
+of every call and writes responses to the stream it captured at startup — a
+provider does not have to be careful, it has to be correct. On the engine's
+side, a line of stdout that is not a response is a protocol violation rather
+than noise to skip.
+
+Writing an integration is therefore the harness plus a provider object:
+
+```python
+from openforecast.providers import serve
+from openforecast_nixtla.provider import NixtlaProvider
+
+raise SystemExit(serve(NixtlaProvider()))
+```
+
+Failures that only exist once there is a boundary are named rather than
+discovered: a process that dies is reported with its exit code and the tail of
+its log, a request that is never answered has a deadline and the process is
+killed, a provider speaking another protocol version is refused, and an error
+envelope is re-raised as the error the same failure would have been in-process,
+so a caller's handling does not depend on where the model ran.
+
+The engine, meanwhile, learns none of this. A `SubprocessProvider` answers the
+same three calls the in-process one does, and `builtin/seasonal-naive` fitted
+over the wire produces the same forecast as `builtin/seasonal-naive` fitted
+here — which is the test that says the abstraction holds.
+
 ## The architectural invariant
 
 > OpenForecast owns forecasting semantics. Providers only consume
@@ -482,7 +568,10 @@ and virtual environment, so providers with incompatible dependency graphs
 **No provider branches on where the data came from.** A provider is handed a
 `SeriesView`, `SequenceView`, `TabularView` or `ForecastView` — never a
 `TimeSeriesFrame` or a `ForecastDataset`. Point-in-time handling lives in the
-`ViewPlanner`, once, instead of being re-derived in every integration.
+`ViewPlanner`, once, instead of being re-derived in every integration. A
+provider's whole import surface is `openforecast.views`, `openforecast.errors`,
+`openforecast.protocol`, `openforecast.models` and `openforecast.providers` —
+the last two being how it declares what it provides and how it is served.
 
 [ARCHITECTURE.md](ARCHITECTURE.md) states all seven rules and how each is
 enforced.
@@ -535,9 +624,10 @@ src/openforecast/
     tasks/       fit plans, origin selection, forecast tasks, output specs
     artifacts/   artifact lifecycle, manifests, atomic writes
     registry/    model and provider resolution
-    runtime/     the execution engine and provider clients
-    providers/   the built-in reference provider
-    protocol/    the provider wire protocol
+    runtime/     the execution engine, the subprocess transport, uv environments
+    providers/   the provider SDK — the client contract, the serving harness —
+                 and the built-in reference provider
+    protocol/    the provider wire protocol: messages, errors, versions
     commands/    the CLI
     server/      the HTTP projection
     client.py    the user-facing client
