@@ -43,3 +43,28 @@ jobs:
           uv tree --no-dev > tree.txt
           cat tree.txt
           ! grep -Eiq '(neural|stats|ml|hierarchical)forecast|darts|sktime|torch|jax|tensorflow|lightgbm|xgboost' tree.txt
+
+  # Each integration is its own distribution in its own environment, which is
+  # the whole point of the provider boundary — so it is also its own job. The
+  # forecasting framework it depends on never reaches the job above.
+  integration:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        integration: [nixtla]
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync ${{ matrix.integration }}
+        working-directory: integrations/${{ matrix.integration }}
+        run: uv sync --python ${{ matrix.python-version }}
+
+      - name: Test ${{ matrix.integration }}
+        working-directory: integrations/${{ matrix.integration }}
+        run: uv run pytest

@@ -91,9 +91,13 @@ AST-scans the package and fails on:
   the last two being how it declares what it provides, which is a descriptor and
   never a dataset, and how it is served — and may not name `TimeSeriesFrame`,
   `PointInTimeFrame`, `ForecastDataset` or `ForecastContext` (rules 2 and 3).
-  `integrations/` holds no Python yet, so that check is also tested against a
-  violating fixture, including one that reaches for `openforecast.runtime`; the
-  built-in provider in `providers/` is real code held to the same rule.
+  The built-in provider in `providers/` and the integrations under
+  `integrations/*/src/` are real code held to this rule, and the check is also
+  run against a violating fixture — including one that reaches for
+  `openforecast.runtime` — so that it cannot pass vacuously. An integration's
+  own tests are excluded, because they drive the public client from outside the
+  provider; a separate check asserts that an integration keeps no other Python
+  outside `src/`, so nothing escapes the scan by living beside the tests.
 
 CI additionally greps `uv tree --no-dev` so that a framework cannot arrive as
 somebody else's transitive dependency.

@@ -27,11 +27,12 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > `ViewPlanner` from Step 4, the model references, descriptors and execution
 > contracts from Step 5, the recipes, fit plans and forecast tasks from Step 6,
 > the artifact lifecycle and local model registry from Step 7, the execution
-> engine and its built-in reference provider from Step 8, and the provider
-> subprocess protocol and isolated uv environments from Step 9. `of.fit` and
-> `of.forecast` work end to end today with `builtin/seasonal-naive`, in this
-> process or over the subprocess protocol; the first external integration
-> arrives in Step 11.
+> engine and its built-in reference provider from Step 8, the provider
+> subprocess protocol and isolated uv environments from Step 9, the full
+> conformance suite from Step 10, and the first external integration from
+> Step 11 — `nixtla/autoarima`, in `integrations/nixtla`. `of.fit` and
+> `of.forecast` work end to end today with `builtin/seasonal-naive` and
+> `nixtla/autoarima`, in this process or over the subprocess protocol.
 > See [PLAN.md](PLAN.md) for the full 17-step roadmap.
 
 ## The event-time semantic model
@@ -606,8 +607,11 @@ for case in suite.cases_for(descriptor):
 Declaring `view=sequences` therefore buys tests against an event-time frame and
 against real forecast vintages, with the provider asserted to have received a
 `SequenceView` in both — which is the view boundary, checked rather than assumed.
-The built-in reference provider passes every capability it declares, and the
-integrations of Steps 11 to 14 are held to the same suite.
+The built-in reference provider passes every capability it declares, and so does
+the Nixtla integration of Step 11 — `integrations/nixtla` runs this suite against
+its own descriptors, so `nixtla/autoarima` is fitted from an event-time frame and
+from real vintages at a selected origin without either being written down. The
+integrations of Steps 12 to 14 are held to the same suite.
 
 ## Layering
 
