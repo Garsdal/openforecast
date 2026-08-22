@@ -17,12 +17,14 @@ __all__ = [
     "DataError",
     "DuplicateModelError",
     "FrequencyError",
+    "IncompatibleForecastTask",
     "InconsistentTruthError",
     "ModelError",
     "ModelRefError",
     "ModelRequiresFit",
     "OpenForecastError",
     "OriginScopeError",
+    "ProviderError",
     "RecipeError",
     "SchemaError",
     "UnknownModelError",
@@ -117,6 +119,26 @@ class ModelRequiresFit(ModelError):
     given — would return a number that looks like a forecast from a model the
     caller never trained, so the string lifecycle is explicit instead: fit it,
     and forecast with the artifact reference that comes back.
+    """
+
+
+class IncompatibleForecastTask(ModelError):
+    """The artifact cannot answer the forecast that was asked of it.
+
+    A model that binds its horizon during training answers exactly that horizon;
+    one that binds none answers any. Truncating a 72-step forecast to the 48
+    steps the caller asked for would be a different question answered silently,
+    so the mismatch is raised instead.
+    """
+
+
+class ProviderError(OpenForecastError):
+    """A provider failed, or answered with something that is not a forecast.
+
+    About the execution boundary rather than about the request: a provider that
+    was asked for a horizon and returned half of it, or one that is named by a
+    descriptor but is not installed. The request was well-formed — what came
+    back was not.
     """
 
 

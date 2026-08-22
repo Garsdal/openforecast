@@ -46,6 +46,7 @@ from openforecast.artifacts.identity import (
     new_artifact_id,
 )
 from openforecast.artifacts.manifest import (
+    COMPOSITE_PROVIDER,
     LOCAL_NAMESPACE,
     MissingValueTransform,
     ModelManifest,
@@ -59,6 +60,7 @@ __all__ = [
     "ARTIFACT_ID_LENGTH",
     "ArtifactStaging",
     "ArtifactStore",
+    "COMPOSITE_PROVIDER",
     "LOCAL_NAMESPACE",
     "MissingValueTransform",
     "ModelArtifact",

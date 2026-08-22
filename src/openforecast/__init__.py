@@ -5,34 +5,32 @@ outlives the design it was guessing at. Today it is the semantic data layer —
 ``TimeSeriesFrame`` for ordinary event-time data, ``PointInTimeFrame`` and
 ``ForecastDataset`` for real forecast vintages, ``ForecastContext`` for one
 inference origin, and the vocabulary needed to describe them — ``of.models``,
-where a model reference resolves to a descriptor, and the recipes and plans that
-say what to fit and how:
+where a model reference resolves to a descriptor, the recipes and plans that say
+what to fit and how, and ``of.fit`` and ``of.forecast``, which do it:
 
 ```python
-of.fit(                                     # Step 8
+model = of.fit(
     model=of.Pipeline(steps=[
         of.StandardScaler(columns="targets"),
-        of.Model("nixtla/nhits", params={"max_steps": 500}),
+        of.Model("builtin/seasonal-naive", params={"season_length": 24}),
     ]),
     data=dataset,
-    horizon=24,
-    plan=of.FitPlan(
-        origins=of.AllOrigins(),
-        window=of.WindowPlan(context=168),
-    ),
+    plan=of.FitPlan(origins=of.LatestOrigin()),
+    name="de-price",
 )
+
+forecast = of.forecast(model=model, data=context, horizon=24)
 ```
 
-Everything in that call except ``of.fit`` itself exists today, and every part of
-it is provider-independent: a context length is stated once and compiled into
-whatever the provider calls it, and the origin selection means the same thing on
-ordinary event-time data as on real forecast vintages.
+Every part of that is provider-independent: a context length is stated once and
+compiled into whatever the provider calls it, and the origin selection means the
+same thing on ordinary event-time data as on real forecast vintages.
 
-What that call will return, since Step 7, is a reference to an immutable fitted
-artifact — ``local/de-price@01K...`` — which is the string a forecast then takes.
-The machinery behind it is not user vocabulary: manifests, staging directories
-and aliases live in :mod:`openforecast.artifacts`, and only the errors a caller
-can act on are exported here.
+What the fit returns is a reference to an immutable artifact —
+``local/de-price@01K...`` — which is the string a forecast then takes. The
+machinery behind it is not user vocabulary: manifests, staging directories and
+aliases live in :mod:`openforecast.artifacts`, and only the errors a caller can
+act on are exported here.
 
 The execution views of Step 4 are deliberately not re-exported here either: they
 are a provider-facing boundary, imported from :mod:`openforecast.views`, not
@@ -40,6 +38,7 @@ something a user of the library needs to name.
 """
 
 from openforecast import models
+from openforecast.client import OpenForecast, fit, forecast
 from openforecast.data import (
     FeatureAvailability,
     FeatureKind,
@@ -58,12 +57,14 @@ from openforecast.errors import (
     DataError,
     DuplicateModelError,
     FrequencyError,
+    IncompatibleForecastTask,
     InconsistentTruthError,
     ModelError,
     ModelRefError,
     ModelRequiresFit,
     OpenForecastError,
     OriginScopeError,
+    ProviderError,
     RecipeError,
     SchemaError,
     UnknownModelError,
@@ -87,6 +88,8 @@ from openforecast.recipes import (
     WeightedMean,
     parse_recipe,
 )
+from openforecast.runtime import Forecast
+from openforecast.runtime.providers import install_default_providers as _install_providers
 from openforecast.tasks import (
     Accelerator,
     AllOrigins,
@@ -115,6 +118,7 @@ __all__ = [
     "FeatureKind",
     "FeatureSpec",
     "FitPlan",
+    "Forecast",
     "ForecastContext",
     "ForecastDataset",
     "ForecastTask",
@@ -123,6 +127,7 @@ __all__ = [
     "FrequencyUnit",
     "Impute",
     "ImputeMethod",
+    "IncompatibleForecastTask",
     "InconsistentTruthError",
     "LatestOrigin",
     "LeadTimeFeature",
@@ -132,6 +137,7 @@ __all__ = [
     "ModelError",
     "ModelRefError",
     "ModelRequiresFit",
+    "OpenForecast",
     "OpenForecastError",
     "OriginCalendarFeatures",
     "OriginScopeError",
@@ -142,6 +148,7 @@ __all__ = [
     "Pipeline",
     "PointInTimeFrame",
     "PointInTimeSchema",
+    "ProviderError",
     "Recipe",
     "RecipeError",
     "Reduction",
@@ -156,8 +163,16 @@ __all__ = [
     "WeightedMean",
     "WindowPlan",
     "__version__",
+    "fit",
+    "forecast",
     "models",
     "parse_recipe",
 ]
 
 __version__ = "0.1.0"
+
+# The models this build ships with become discoverable when the package is
+# imported, exactly as an external provider's will when it answers a handshake.
+# Nothing here touches the filesystem: an artifact store is named only when
+# something is actually fitted.
+_install_providers()

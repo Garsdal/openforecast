@@ -22,12 +22,14 @@ moment it is published.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from openforecast.artifacts.identity import new_artifact_id
 from openforecast.artifacts.manifest import (
+    COMPOSITE_PROVIDER,
     ModelManifest,
     TrainedSchema,
     TrainingRecord,
@@ -109,6 +111,46 @@ class ModelArtifact(BaseModel):
             training_schema_hash=content_hash(training_schema),
             training=TrainingRecord.of_view(view, origins=plan.origins, seed=plan.seed),
             data_schema=TrainedSchema.of_view(view.schema),
+            missing_value_transforms=missing_value_transforms(recipe),
+        )
+        return cls(manifest=manifest, recipe=recipe, training_schema=training_schema)
+
+    @classmethod
+    def of_composite(
+        cls,
+        *,
+        name: str,
+        recipe: Recipe,
+        views: Sequence[FitView],
+        data_schema: TrainedSchema,
+        openforecast_version: str,
+        plan: FitPlan | None = None,
+        artifact_id: str | None = None,
+    ) -> ModelArtifact:
+        """Describe the artifact a fit of a pipeline or an ensemble produces.
+
+        A composite is executed by OpenForecast rather than by a provider, so it
+        names none — and its leaves may consume different views, so it records
+        one training record per leaf instead of one for itself. ``schema.json``
+        holds the data schema every leaf was materialized from, which is the only
+        schema the artifact as a whole was fitted against.
+        """
+        plan = FitPlan() if plan is None else plan
+        if not views:
+            raise ArtifactError("a composite artifact holds at least one fitted model")
+        training_schema = data_schema.model_dump(mode="json")
+        manifest = ModelManifest(
+            artifact_id=new_artifact_id() if artifact_id is None else artifact_id,
+            name=name,
+            provider=COMPOSITE_PROVIDER,
+            provider_version=openforecast_version,
+            openforecast_version=openforecast_version,
+            recipe_hash=content_hash(recipe.model_dump(mode="json")),
+            training_schema_hash=content_hash(training_schema),
+            members=tuple(
+                TrainingRecord.of_view(view, origins=plan.origins, seed=plan.seed) for view in views
+            ),
+            data_schema=data_schema,
             missing_value_transforms=missing_value_transforms(recipe),
         )
         return cls(manifest=manifest, recipe=recipe, training_schema=training_schema)

@@ -18,14 +18,15 @@ TabularView    individual supervised target rows  LightGBM, XGBoost, CatBoost
 horizon.
 
 This module is the whole import surface a provider needs. ``FeatureSpec``,
-``Frequency`` and the origin selections are re-exported here so that an
-integration never reaches into :mod:`openforecast.data`, where the semantic
-source datasets live, nor into :mod:`openforecast.tasks`, where the user-facing
-plans do.
+``Frequency``, the origin selections and the forecast columns a provider answers
+with are re-exported here so that an integration never reaches into
+:mod:`openforecast.data`, where the semantic source datasets live, nor into
+:mod:`openforecast.tasks`, where the user-facing plans do.
 """
 
 from openforecast.data.features import FeatureAvailability, FeatureKind, FeatureSpec
 from openforecast.data.frequency import Frequency, FrequencyUnit
+from openforecast.protocol.vocabulary import ForecastColumn, forecast_columns
 from openforecast.tasks.origins import (
     AllOrigins,
     AtOrigin,
@@ -34,7 +35,19 @@ from openforecast.tasks.origins import (
     OriginsBetween,
     OriginSelection,
 )
-from openforecast.views.base import ViewKind
+from openforecast.views.base import (
+    CONTEXT_END,
+    CONTEXT_START,
+    EVENT_TIME,
+    FORECAST_END,
+    FORECAST_START,
+    HORIZON_STEP,
+    ORIGIN_TIME,
+    ROW_ID,
+    SAMPLE_ID,
+    SERIES_ID,
+    ViewKind,
+)
 from openforecast.views.forecast import ForecastView, ForecastViewMetadata
 from openforecast.views.planner import FitView, ViewPlanner, ViewRequest
 from openforecast.views.provenance import (
@@ -50,20 +63,31 @@ from openforecast.views.tabular import TabularView, TabularViewSchema
 __all__ = [
     "AllOrigins",
     "AtOrigin",
+    "CONTEXT_END",
+    "CONTEXT_START",
+    "EVENT_TIME",
+    "FORECAST_END",
+    "FORECAST_START",
     "FeatureAvailability",
     "FeatureKind",
     "FeatureSpec",
     "FitView",
+    "ForecastColumn",
     "ForecastView",
     "ForecastViewMetadata",
     "Frequency",
     "FrequencyUnit",
+    "HORIZON_STEP",
     "LatestOrigin",
     "MATERIALIZER_VERSION",
+    "ORIGIN_TIME",
     "OriginFidelity",
     "OriginMode",
     "OriginSelection",
     "OriginsBetween",
+    "ROW_ID",
+    "SAMPLE_ID",
+    "SERIES_ID",
     "SequenceView",
     "SequenceViewSchema",
     "SeriesView",
@@ -75,4 +99,5 @@ __all__ = [
     "ViewPlanner",
     "ViewProvenance",
     "ViewRequest",
+    "forecast_columns",
 ]

@@ -9,10 +9,11 @@ import pytest
 import openforecast as of
 
 # The semantic data layer of Steps 2 and 3, the ``of.models`` namespace of
-# Step 5, and the recipes, plans and tasks of Step 6. The engine joins this list
-# in Step 8; it is asserted exactly so that nothing reaches the public surface by
-# accident. The execution views are not here on purpose: they are a provider
-# boundary, imported from ``openforecast.views``.
+# Step 5, the recipes, plans and tasks of Step 6, and the engine of Step 8 —
+# ``of.fit``, ``of.forecast``, the client behind them and what they hand back.
+# Asserted exactly so that nothing reaches the public surface by accident. The
+# execution views are not here on purpose: they are a provider boundary,
+# imported from ``openforecast.views``.
 EXPECTED_PUBLIC_SURFACE = {
     "Accelerator",
     "AllOrigins",
@@ -26,6 +27,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "FeatureKind",
     "FeatureSpec",
     "FitPlan",
+    "Forecast",
     "ForecastContext",
     "ForecastDataset",
     "ForecastTask",
@@ -34,6 +36,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "FrequencyUnit",
     "Impute",
     "ImputeMethod",
+    "IncompatibleForecastTask",
     "InconsistentTruthError",
     "LatestOrigin",
     "LeadTimeFeature",
@@ -43,6 +46,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "ModelError",
     "ModelRefError",
     "ModelRequiresFit",
+    "OpenForecast",
     "OpenForecastError",
     "OriginCalendarFeatures",
     "OriginScopeError",
@@ -53,6 +57,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "Pipeline",
     "PointInTimeFrame",
     "PointInTimeSchema",
+    "ProviderError",
     "Recipe",
     "RecipeError",
     "Reduction",
@@ -67,6 +72,8 @@ EXPECTED_PUBLIC_SURFACE = {
     "WeightedMean",
     "WindowPlan",
     "__version__",
+    "fit",
+    "forecast",
     "models",
     "parse_recipe",
 }
@@ -95,7 +102,7 @@ def test_public_surface_is_exactly_what_is_implemented() -> None:
 def test_the_models_namespace_is_reachable_without_importing_it() -> None:
     """``of.models.get(...)`` has to work off a bare ``import openforecast``."""
     assert isinstance(of.models, ModuleType)
-    assert of.models.list() == ()
+    assert of.models.get("builtin/seasonal-naive").provider == "builtin"
 
 
 def test_all_is_sorted() -> None:
@@ -108,20 +115,31 @@ def test_all_is_sorted() -> None:
 EXPECTED_VIEW_SURFACE = {
     "AllOrigins",
     "AtOrigin",
+    "CONTEXT_END",
+    "CONTEXT_START",
+    "EVENT_TIME",
+    "FORECAST_END",
+    "FORECAST_START",
     "FeatureAvailability",
     "FeatureKind",
     "FeatureSpec",
     "FitView",
+    "ForecastColumn",
     "ForecastView",
     "ForecastViewMetadata",
     "Frequency",
     "FrequencyUnit",
+    "HORIZON_STEP",
     "LatestOrigin",
     "MATERIALIZER_VERSION",
+    "ORIGIN_TIME",
     "OriginFidelity",
     "OriginMode",
     "OriginSelection",
     "OriginsBetween",
+    "ROW_ID",
+    "SAMPLE_ID",
+    "SERIES_ID",
     "SequenceView",
     "SequenceViewSchema",
     "SeriesView",
@@ -133,6 +151,7 @@ EXPECTED_VIEW_SURFACE = {
     "ViewPlanner",
     "ViewProvenance",
     "ViewRequest",
+    "forecast_columns",
 }
 
 
@@ -185,7 +204,12 @@ def test_the_protocol_layer_exports_only_shared_vocabulary() -> None:
     from openforecast import protocol
     from openforecast.views import ViewKind
 
-    assert protocol.__all__ == ["PROTOCOL_VERSION", "ViewKind"]
+    assert protocol.__all__ == [
+        "ForecastColumn",
+        "PROTOCOL_VERSION",
+        "ViewKind",
+        "forecast_columns",
+    ]
     assert protocol.ViewKind is ViewKind is of.models.ViewKind
     assert isinstance(protocol.PROTOCOL_VERSION, int)
 
@@ -265,6 +289,7 @@ def test_the_step_six_surfaces_are_exactly_what_is_defined(name: str, expected: 
 # top of it and on Step 5's catalog.
 EXPECTED_ARTIFACT_SURFACE = {
     "ARTIFACT_ID_LENGTH",
+    "COMPOSITE_PROVIDER",
     "LOCAL_NAMESPACE",
     "ArtifactStaging",
     "ArtifactStore",
@@ -308,11 +333,46 @@ def test_a_fitted_artifact_is_not_part_of_the_top_level_surface() -> None:
     assert not {name for name in of.__all__ if "Artifact" in name} - {"ArtifactError"}
 
 
+# The engine and the providers it executes models with. ``ProviderClient`` is
+# the shape Step 9's subprocess client will have; the rest is what ``of.fit``
+# and ``of.forecast`` are made of.
+EXPECTED_RUNTIME_SURFACE = {
+    "Engine",
+    "Forecast",
+    "Leaf",
+    "ProviderClient",
+    "ProviderRegistry",
+    "TransformState",
+    "default_providers",
+    "install_default_providers",
+    "leaves",
+    "normalize_forecast_context",
+    "normalize_recipe",
+    "validate_view",
+}
+
+EXPECTED_PROVIDER_SURFACE = {"BUILTIN_PROVIDER", "BuiltinProvider"}
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("runtime", EXPECTED_RUNTIME_SURFACE),
+        ("providers", EXPECTED_PROVIDER_SURFACE),
+        ("client", {"OpenForecast", "fit", "forecast"}),
+    ],
+)
+def test_the_step_eight_surfaces_are_exactly_what_is_defined(name: str, expected: set[str]) -> None:
+    module = import_module(f"openforecast.{name}")
+
+    assert set(module.__all__) == expected
+    assert builtins.list(module.__all__) == sorted(module.__all__)
+
+
 @pytest.mark.parametrize(
     "name",
     [
         "commands",
-        "runtime",
         "server",
     ],
 )

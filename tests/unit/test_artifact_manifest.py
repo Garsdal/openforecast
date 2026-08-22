@@ -151,9 +151,11 @@ def test_the_manifest_records_the_origin_selection_that_was_asked_for() -> None:
         origins=of.AllOrigins(stride=2), window=of.WindowPlan(context=artifacts.CONTEXT)
     )
     manifest = artifacts.artifact(plan=plan).manifest
+    training = manifest.training
+    assert training is not None
 
-    assert manifest.training.origins == of.AllOrigins(stride=2)
-    assert manifest.training.seed is None
+    assert training.origins == of.AllOrigins(stride=2)
+    assert training.seed is None
 
 
 @pytest.mark.parametrize("source", ["local/de-price", "nixtla/nhits@01K5Z6QK3M9TQK1W2E3R4T5Y6U"])
