@@ -616,9 +616,10 @@ class ViewKind(StrEnum):
 ```
 
 Step 5's `TrainingContract.view` is this same enum rather than a second one with
-the same members. It lives in `openforecast/views/base.py`; if the layering
-prevents `models/` from importing it there, lift it into a shared vocabulary
-module rather than duplicating it.
+the same members. The layering does prevent `models/` from importing `views/`,
+so it lives in `openforecast/protocol/vocabulary.py` — the innermost layer,
+which both can reach — and `openforecast.views` re-exports it, leaving a
+provider's import surface unchanged.
 
 ## Implement package
 

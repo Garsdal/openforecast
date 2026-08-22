@@ -23,8 +23,9 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > foundation from Step 1 — packaging, layering rules, tooling and tests — the
 > semantic data layer from Steps 2 and 3: `TimeSeriesFrame` for ordinary
 > event-time data, and `PointInTimeFrame`, `ForecastDataset` and
-> `ForecastContext` for real forecast vintages — and the execution views and
-> `ViewPlanner` from Step 4. Models, recipes and the engine shown above land in
+> `ForecastContext` for real forecast vintages — the execution views and
+> `ViewPlanner` from Step 4, and the model references, descriptors and
+> execution contracts from Step 5. Recipes and the engine shown above land in
 > later steps. See [PLAN.md](PLAN.md) for the full 17-step roadmap.
 
 ## The event-time semantic model
@@ -182,6 +183,57 @@ view = planner.forecast_view(
 
 Its `future` table names exactly the event times being asked about, so a
 provider never derives them from a horizon count and a frequency.
+
+## Models
+
+A model is named by a string:
+
+```text
+<namespace>/<name>[@revision]
+
+nixtla/nhits
+nixtla/autoarima
+darts/nhits
+local/de-price
+local/de-price@01K5Z6QK3M9TQK1W2E3R4T5Y6U
+```
+
+The string is a name, not a state — whether anything has been fitted is a
+question for the registry. That is what lets a provider model and your own
+fitted artifact appear in the same argument position. An unpinned
+`local/de-price` is an alias that follows the latest selected revision; pinning
+one names it forever.
+
+```python
+import openforecast as of
+
+of.models.list()
+
+descriptor = of.models.get("nixtla/nhits")
+
+descriptor.lifecycle.requires_fit          # True
+descriptor.training.view                   # ViewKind.SEQUENCES
+descriptor.training.context_required       # True
+descriptor.capabilities.missing_values     # MissingValueSupport.REQUIRES_TRANSFORM
+```
+
+A descriptor is complete enough to plan against on its own: it says which
+execution view to materialize, whether several forecast origins may be learned
+from jointly, which feature roles the model accepts, and what it does about
+missing values. No provider is started to answer any of that, which is why the
+engine has no reason to know which provider it is talking to.
+
+Contracts are checked where they are declared. A `SeriesView` is one complete
+time series, so a series model cannot claim to learn across origins, to bind a
+horizon at fit time, or to forecast an instance it never saw — it was fitted per
+series and has nothing to generalize with. Capability defaults are the
+conservative ones throughout: a descriptor that declares nothing describes a
+single-series, univariate, point-forecast model that cannot see a missing value.
+A capability is something a provider states, never something it is assumed to
+have.
+
+`of.models.list()` is empty until Step 8 registers the built-in reference
+provider and Step 9 lets external providers advertise their models.
 
 ## The architectural invariant
 

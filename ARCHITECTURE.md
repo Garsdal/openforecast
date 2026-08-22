@@ -58,6 +58,14 @@ layer above it, never one below.
 everything that executes against them, which is what makes rule 2 mechanically
 checkable rather than aspirational.
 
+That layering has one consequence worth naming. A model's `TrainingContract` in
+`models/` has to say which execution view it consumes, and `views/` is below it.
+Rather than declare a second enum with the same members — two spellings of one
+concept, free to drift, one of them eventually reaching the wire — `ViewKind` is
+defined in `protocol/vocabulary.py` and re-exported by `openforecast.views`, so
+a provider's import surface is unchanged. A test asserts it is defined exactly
+once.
+
 ## Enforcement
 
 These rules are tests, not documentation. `tests/unit/test_architecture.py`
@@ -70,6 +78,8 @@ AST-scans the package and fails on:
   `pyarrow`, never stored or depended on (rule 1);
 - any import that points down the layer stack (rules 1, 2 and 7);
 - provider terminology appearing in semantic protocol types (rule 6);
+- any second definition of `ViewKind`, so the contract that requests a view and
+  the view that satisfies it cannot drift apart;
 - any import in `integrations/` that reaches past the view boundary: a provider
   may import `openforecast.views`, `openforecast.errors` and
   `openforecast.protocol`, and may not name `TimeSeriesFrame`,
@@ -117,3 +127,35 @@ semantic sources materialize into the *same* view types, with
 keyed by opaque, deterministic identifiers (`series_id`, `sample_id`, `row_id`)
 with the instance keys and origins held in a separate key table, so a provider
 cannot condition on them even by accident.
+
+## Model references and descriptors
+
+A model is named by a string with a shape — `<namespace>/<name>[@revision]` —
+and that string is a name, not a state. Whether anything has been fitted is a
+question for the registry, which is what lets `nixtla/nhits` and
+`local/de-price` both appear in the same argument position and mean the right
+thing in each.
+
+What the string resolves to is a `ModelDescriptor`, and the descriptor is
+deliberately complete enough to plan against on its own:
+
+| Declaration           | What the engine does with it                        |
+| --------------------- | --------------------------------------------------- |
+| `lifecycle`           | whether a bare reference can forecast at all         |
+| `training.view`       | which execution view to materialize                  |
+| `training.origin_scope` | whether several forecast origins may be learned from jointly |
+| `capabilities`        | whether the materialized view is data this model accepts |
+| `capabilities.missing_values` | whether an explicit transform is required, or the request refused |
+
+No provider is started to answer any of these. That is what keeps rule 3 true in
+the engine as well as in the providers: `fit()` reads a descriptor, asks the
+`ViewPlanner` for the view it names, and hands that over — there is no place for
+`if provider == "nixtla"` because there is nothing left for it to decide.
+
+Contract invariants are enforced where the contract is declared rather than
+where a user first trips over them. A `SeriesView` is one complete time series,
+so a series model cannot claim to learn across origins, to bind a horizon at fit
+time, or to generalize to an instance it never saw — it has no shared parameters
+to generalize with. Those declarations are rejected at construction, which is
+the same rule the user meets later as `OriginScopeError` when point-in-time data
+reaches AutoARIMA with `AllOrigins()`.
