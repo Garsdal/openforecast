@@ -82,6 +82,13 @@ Two checks are named here but land with the code they constrain:
 - the forbidden-terminology scan over serialized public objects arrives in
   Step 15 (rule 6).
 
-Rules 4 and 5 are enforced by the validation layers of Steps 3 and 6 and by the
-conformance suite in Step 10, since they are properties of behavior rather than
-of imports.
+Rule 4 is enforced by the point-in-time semantic model: `at_origin` matches an
+origin exactly rather than approximately, a vintage is filtered before anything
+downstream sees it, and an observed feature carrying a value for an event time
+after its own origin is rejected. The property tests generate datasets whose
+feature values name the origin that produced them, so a leaked vintage is
+detectable rather than plausible.
+
+Rule 5 is enforced by the validation layers of Steps 3 and 6 and by the
+conformance suite in Step 10, since it is a property of behavior rather than of
+imports.

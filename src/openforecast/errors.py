@@ -15,6 +15,7 @@ from __future__ import annotations
 __all__ = [
     "DataError",
     "FrequencyError",
+    "InconsistentTruthError",
     "OpenForecastError",
     "SchemaError",
 ]
@@ -41,4 +42,13 @@ class DataError(OpenForecastError):
 
     Raised instead of repairing the data. Duplicate rows are not deduplicated,
     off-grid timestamps are not snapped, missing values are not imputed.
+    """
+
+
+class InconsistentTruthError(DataError):
+    """Vintages of the same event time disagree about what happened.
+
+    A point-in-time source table repeats its labels on every origin. If two of
+    those copies hold different realizations, only one can be the outcome, and
+    OpenForecast will not pick for you.
     """

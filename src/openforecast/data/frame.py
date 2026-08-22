@@ -17,15 +17,33 @@ the data means.
 from __future__ import annotations
 
 import json
-import math
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
 
+from openforecast.data._arrow import (
+    InstanceKey,
+    canonical_value,
+    canonicalize,
+    column_type,
+    column_values,
+    group_times,
+    key_rows,
+    read_table,
+    require_no_nulls,
+    require_table,
+    require_timestamps,
+    require_unique,
+    summarize,
+    table_from_pandas,
+    tables_equal,
+    validate_grid,
+    write_table,
+)
 from openforecast.data.features import FeatureSpec
 from openforecast.data.frequency import Frequency
 from openforecast.data.schema import TimeSeriesSchema
@@ -37,11 +55,6 @@ SCHEMA_FILENAME = "schema.json"
 HISTORY_FILENAME = "history.arrow"
 FUTURE_FILENAME = "future.arrow"
 STATIC_FILENAME = "static.arrow"
-
-# How many offending values an error message quotes before it truncates.
-_MAX_REPORTED = 5
-
-InstanceKey = tuple[Any, ...]
 
 
 class TimeSeriesFrame:
@@ -60,23 +73,23 @@ class TimeSeriesFrame:
         static: pa.Table | None = None,
     ) -> None:
         self._schema = schema
-        history = _require_table(history, "history")
-        future = None if future is None else _require_table(future, "future")
-        static = None if static is None else _require_table(static, "static")
+        history = require_table(history, "history")
+        future = None if future is None else require_table(future, "future")
+        static = None if static is None else require_table(static, "static")
 
-        self._history = _canonicalize(history, schema.history_columns, "history")
+        self._history = canonicalize(history, schema.history_columns, "history")
         _reject_target_and_observed_columns(future, schema)
         self._future = (
-            None if future is None else _canonicalize(future, schema.future_columns, "future")
+            None if future is None else canonicalize(future, schema.future_columns, "future")
         )
         self._static = _resolve_static(static, schema)
 
         history_times = _instance_times(self._history, schema, "history")
-        _validate_grid(history_times, schema.frequency, "history")
+        validate_grid(history_times, schema.frequency, "history")
         if self._future is not None:
             future_times = _instance_times(self._future, schema, "future")
             _reject_unknown_instances(future_times, history_times, schema)
-            _validate_grid(future_times, schema.frequency, "future", anchors=history_times)
+            validate_grid(future_times, schema.frequency, "future", anchors=history_times)
         if self._static is not None:
             _validate_static_rows(self._static, schema, set(history_times))
 
@@ -101,7 +114,7 @@ class TimeSeriesFrame:
     @property
     def instances(self) -> tuple[InstanceKey, ...]:
         """The distinct instance keys present in ``history``, in first-seen order."""
-        return tuple(dict.fromkeys(_key_rows(self._history, self._schema.instance_keys)))
+        return tuple(dict.fromkeys(key_rows(self._history, self._schema.instance_keys)))
 
     # -- construction ------------------------------------------------------
 
@@ -138,7 +151,7 @@ class TimeSeriesFrame:
             ),
         )
         if static is None and schema.has_static_features:
-            static = _extract_static(history, schema)
+            static = extract_static(history, schema)
         return cls(history=history, schema=schema, future=future, static=static)
 
     @classmethod
@@ -162,7 +175,7 @@ class TimeSeriesFrame:
         by ``pyarrow`` and never stored in pandas form.
         """
         return cls.from_arrow(
-            _table_from_pandas(history, "history"),
+            table_from_pandas(history, "history"),
             time=time,
             frequency=frequency,
             targets=targets,
@@ -170,8 +183,8 @@ class TimeSeriesFrame:
             observed_features=observed_features,
             known_features=known_features,
             static_features=static_features,
-            future=None if future is None else _table_from_pandas(future, "future"),
-            static=None if static is None else _table_from_pandas(static, "static"),
+            future=None if future is None else table_from_pandas(future, "future"),
+            static=None if static is None else table_from_pandas(static, "static"),
         )
 
     # -- serialization -----------------------------------------------------
@@ -183,7 +196,7 @@ class TimeSeriesFrame:
         (directory / SCHEMA_FILENAME).write_text(
             self._schema.model_dump_json(indent=2) + "\n", encoding="utf-8"
         )
-        _write_table(directory / HISTORY_FILENAME, self._history)
+        write_table(directory / HISTORY_FILENAME, self._history)
         for filename, table in (
             (FUTURE_FILENAME, self._future),
             (STATIC_FILENAME, self._static),
@@ -193,7 +206,7 @@ class TimeSeriesFrame:
                 # An absent table must not be read back from a previous write.
                 target.unlink(missing_ok=True)
             else:
-                _write_table(target, table)
+                write_table(target, table)
         return directory
 
     @classmethod
@@ -211,10 +224,10 @@ class TimeSeriesFrame:
         future_path = directory / FUTURE_FILENAME
         static_path = directory / STATIC_FILENAME
         return cls(
-            history=_read_table(history_path),
+            history=read_table(history_path),
             schema=schema,
-            future=_read_table(future_path) if future_path.is_file() else None,
-            static=_read_table(static_path) if static_path.is_file() else None,
+            future=read_table(future_path) if future_path.is_file() else None,
+            static=read_table(static_path) if static_path.is_file() else None,
         )
 
     # -- dunder ------------------------------------------------------------
@@ -225,8 +238,8 @@ class TimeSeriesFrame:
         return (
             self._schema == other._schema
             and bool(self._history.equals(other._history))
-            and _tables_equal(self._future, other._future)
-            and _tables_equal(self._static, other._static)
+            and tables_equal(self._future, other._future)
+            and tables_equal(self._static, other._static)
         )
 
     def __repr__(self) -> str:
@@ -241,30 +254,7 @@ class TimeSeriesFrame:
         )
 
 
-# -- table plumbing --------------------------------------------------------
-
-
-def _table_from_pandas(frame: Any, label: str) -> pa.Table:
-    try:
-        return pa.Table.from_pandas(frame, preserve_index=False)
-    except (TypeError, AttributeError) as error:  # not a DataFrame at all
-        raise DataError(f"{label} is not a pandas DataFrame: {error}") from error
-
-
-def _require_table(table: pa.Table, label: str) -> pa.Table:
-    """Guard the boundary: everything downstream may assume a real Arrow table."""
-    if not isinstance(table, pa.Table):  # pyright: ignore[reportUnnecessaryIsInstance]
-        raise DataError(f"{label} must be a pyarrow.Table, got {type(table).__name__}")
-    return table
-
-
-def _canonicalize(table: pa.Table, columns: tuple[str, ...], label: str) -> pa.Table:
-    missing = [name for name in columns if name not in table.column_names]
-    if missing:
-        raise DataError(
-            f"{label} is missing declared columns {missing}; present: {table.column_names}"
-        )
-    return table.select(list(columns))
+# -- validation ------------------------------------------------------------
 
 
 def _reject_target_and_observed_columns(future: pa.Table | None, schema: TimeSeriesSchema) -> None:
@@ -302,95 +292,23 @@ def _resolve_static(static: pa.Table | None, schema: TimeSeriesSchema) -> pa.Tab
         return None
     if not schema.has_static_features:
         raise DataError("a static table was provided but the schema declares no static features")
-    return _canonicalize(static, schema.static_columns, "static")
-
-
-def _write_table(path: Path, table: pa.Table) -> None:
-    with pa.OSFile(str(path), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
-        writer.write_table(table)
-
-
-def _read_table(path: Path) -> pa.Table:
-    with pa.OSFile(str(path), "rb") as source:
-        return pa.ipc.open_file(source).read_all()
-
-
-def _tables_equal(left: pa.Table | None, right: pa.Table | None) -> bool:
-    if left is None or right is None:
-        return left is None and right is None
-    return bool(left.equals(right))
-
-
-# -- validation ------------------------------------------------------------
-
-
-def _column_values(table: pa.Table, name: str) -> list[Any]:
-    return table.column(name).to_pylist()
-
-
-def _key_rows(table: pa.Table, instance_keys: tuple[str, ...]) -> list[InstanceKey]:
-    """One tuple per row identifying its instance; ``()`` when there are no keys."""
-    if not instance_keys:
-        return [()] * table.num_rows
-    columns = [_column_values(table, name) for name in instance_keys]
-    return list(zip(*columns, strict=True))
+    return canonicalize(static, schema.static_columns, "static")
 
 
 def _instance_times(
     table: pa.Table, schema: TimeSeriesSchema, label: str
 ) -> dict[InstanceKey, list[datetime]]:
     """Group event times by instance, rejecting nulls and duplicate rows."""
-    for name in schema.instance_keys:
-        if table.column(name).null_count:
-            raise DataError(f"{label} has null values in instance key {name!r}")
-    time_column = table.column(schema.time)
-    if not pa.types.is_timestamp(time_column.type):
-        raise DataError(
-            f"{label} column {schema.time!r} must be a timestamp, got {time_column.type}"
-        )
-    if time_column.null_count:
-        raise DataError(f"{label} has null values in time column {schema.time!r}")
-
-    keys = _key_rows(table, schema.instance_keys)
-    times: list[datetime] = _column_values(table, schema.time)
-    duplicates = [row for row, count in Counter(zip(keys, times, strict=True)).items() if count > 1]
-    if duplicates:
-        raise DataError(
-            f"{label} has {len(duplicates)} duplicate instance/time rows: "
-            f"{_summarize(duplicates)}; each event time may appear once per instance"
-        )
-
-    grouped: dict[InstanceKey, list[datetime]] = defaultdict(list)
-    for key, moment in zip(keys, times, strict=True):
-        grouped[key].append(moment)
-    return dict(grouped)
-
-
-def _validate_grid(
-    grouped: dict[InstanceKey, list[datetime]],
-    frequency: Frequency,
-    label: str,
-    anchors: dict[InstanceKey, list[datetime]] | None = None,
-) -> None:
-    """Every timestamp must sit on the frequency grid of its instance.
-
-    Gaps are allowed — a missing observation is information, and filling it in
-    would be exactly the silent repair the architecture forbids. Timestamps
-    *between* grid points are not, because they mean the declared frequency is
-    wrong. ``anchors`` lets the future table be checked against the history
-    grid rather than its own, so the two cannot be a half-step apart.
-    """
-    for key, times in grouped.items():
-        reference = min(anchors[key]) if anchors is not None else min(times)
-        offenders = [
-            moment for moment in times if frequency.steps_between(reference, moment) is None
-        ]
-        if offenders:
-            instance = f" for instance {key}" if key else ""
-            raise DataError(
-                f"{label} has {len(offenders)} timestamps{instance} that do not sit on the "
-                f"{frequency} grid anchored at {reference.isoformat()}: {_summarize(offenders)}"
-            )
+    require_no_nulls(table, schema.instance_keys, label, "instance key")
+    require_timestamps(table, schema.time, label)
+    require_unique(
+        table,
+        (*schema.instance_keys, schema.time),
+        label,
+        what="instance/time",
+        hint="each event time may appear once per instance",
+    )
+    return group_times(key_rows(table, schema.instance_keys), column_values(table, schema.time))
 
 
 def _reject_unknown_instances(
@@ -401,7 +319,7 @@ def _reject_unknown_instances(
     unknown = sorted(set(future_times) - set(history_times), key=repr)
     if unknown:
         raise DataError(
-            f"future contains instances absent from history: {_summarize(unknown)}; "
+            f"future contains instances absent from history: {summarize(unknown)}; "
             f"instance keys are {list(schema.instance_keys)}"
         )
 
@@ -409,29 +327,29 @@ def _reject_unknown_instances(
 def _validate_static_rows(
     static: pa.Table, schema: TimeSeriesSchema, instances: set[InstanceKey]
 ) -> None:
-    for name in schema.instance_keys:
-        if static.column(name).null_count:
-            raise DataError(f"static has null values in instance key {name!r}")
+    require_no_nulls(static, schema.instance_keys, "static", "instance key")
 
-    keys = _key_rows(static, schema.instance_keys)
+    keys = key_rows(static, schema.instance_keys)
     duplicates = [key for key, count in Counter(keys).items() if count > 1]
     if duplicates:
         raise DataError(
-            f"static must hold exactly one row per instance but repeats {_summarize(duplicates)}"
+            f"static must hold exactly one row per instance but repeats {summarize(duplicates)}"
         )
     missing = sorted(instances - set(keys), key=repr)
     if missing:
-        raise DataError(f"static is missing rows for instances {_summarize(missing)}")
+        raise DataError(f"static is missing rows for instances {summarize(missing)}")
     extra = sorted(set(keys) - instances, key=repr)
     if extra:
-        raise DataError(f"static holds rows for instances absent from history: {_summarize(extra)}")
+        raise DataError(f"static holds rows for instances absent from history: {summarize(extra)}")
 
 
-def _extract_static(history: pa.Table, schema: TimeSeriesSchema) -> pa.Table:
-    """Lift declared static features out of a wide history table.
+def extract_static(history: pa.Table, schema: TimeSeriesSchema) -> pa.Table:
+    """Lift declared static features out of a wide table.
 
     A static feature that varies within an instance is not static, so this
-    raises instead of picking a value.
+    raises instead of picking a value. Repeated rows per instance are fine,
+    which is what lets a point-in-time table — many origins per instance — be a
+    source of static features too.
     """
     names = [feature.name for feature in schema.static_features]
     missing = [name for name in names if name not in history.column_names]
@@ -441,14 +359,14 @@ def _extract_static(history: pa.Table, schema: TimeSeriesSchema) -> pa.Table:
             f"pass static= explicitly if they live in their own frame"
         )
 
-    keys = _key_rows(history, schema.instance_keys)
+    keys = key_rows(history, schema.instance_keys)
     ordered = list(dict.fromkeys(keys))
     values: dict[str, list[Any]] = {}
     for name in names:
         # canonical value -> first original value, per instance.
         by_instance: dict[InstanceKey, dict[Any, Any]] = defaultdict(dict)
-        for key, value in zip(keys, _column_values(history, name), strict=True):
-            by_instance[key].setdefault(_canonical(value), value)
+        for key, value in zip(keys, column_values(history, name), strict=True):
+            by_instance[key].setdefault(canonical_value(value), value)
         conflicts = [
             f"{key}: {sorted(seen.values(), key=repr)}"
             for key, seen in by_instance.items()
@@ -457,37 +375,15 @@ def _extract_static(history: pa.Table, schema: TimeSeriesSchema) -> pa.Table:
         if conflicts:
             raise DataError(
                 f"static feature {name!r} varies within an instance, so it is not static: "
-                f"{_summarize(conflicts)}"
+                f"{summarize(conflicts)}"
             )
         values[name] = [next(iter(by_instance[key].values())) for key in ordered]
 
     columns: dict[str, pa.Array[Any]] = {}
     for index, key_name in enumerate(schema.instance_keys):
         columns[key_name] = pa.array(
-            [key[index] for key in ordered], type=history.column(key_name).type
+            [key[index] for key in ordered], type=column_type(history, key_name)
         )
     for name in names:
-        columns[name] = pa.array(values[name], type=history.column(name).type)
+        columns[name] = pa.array(values[name], type=column_type(history, name))
     return pa.table(columns)
-
-
-_NOT_A_NUMBER = object()
-
-
-def _canonical(value: Any) -> Any:
-    """A grouping key that treats every NaN as the same missing value.
-
-    ``float('nan') != float('nan')``, so grouping on the raw values would report
-    a column of NaNs as varying within its instance.
-    """
-    if isinstance(value, float) and math.isnan(value):
-        return _NOT_A_NUMBER
-    return value
-
-
-def _summarize(items: Iterable[Any]) -> str:
-    listed = list(items)
-    shown = ", ".join(repr(item) for item in listed[:_MAX_REPORTED])
-    if len(listed) > _MAX_REPORTED:
-        shown += f", ... (+{len(listed) - _MAX_REPORTED} more)"
-    return shown
