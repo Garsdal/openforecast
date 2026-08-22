@@ -20,12 +20,12 @@ train on them directly, and the model records that its origins were *observed*
 rather than *simulated* by cutting windows out of a single freshest series.
 
 > **Status: early development.** This repository currently contains the
-> foundation from Step 1 — packaging, layering rules, tooling and tests — and
-> the semantic data layer from Steps 2 and 3: `TimeSeriesFrame` for ordinary
+> foundation from Step 1 — packaging, layering rules, tooling and tests — the
+> semantic data layer from Steps 2 and 3: `TimeSeriesFrame` for ordinary
 > event-time data, and `PointInTimeFrame`, `ForecastDataset` and
-> `ForecastContext` for real forecast vintages. Models, views, recipes and the
-> engine shown above land in later steps. See [PLAN.md](PLAN.md) for the full
-> 17-step roadmap.
+> `ForecastContext` for real forecast vintages — and the execution views and
+> `ViewPlanner` from Step 4. Models, recipes and the engine shown above land in
+> later steps. See [PLAN.md](PLAN.md) for the full 17-step roadmap.
 
 ## The event-time semantic model
 
@@ -126,6 +126,63 @@ it holds a value for an event time after the origin that supposedly produced it.
 Contexts can also be built directly from live data with
 `of.ForecastContext.from_pandas(...)`.
 
+## Execution views
+
+A provider never sees a semantic dataset. It is handed an **execution view**,
+named after the training unit it holds rather than after a model family:
+
+| View           | Training unit                     | Typical models              |
+| -------------- | --------------------------------- | --------------------------- |
+| `SeriesView`   | one complete time series          | ARIMA, ETS, Theta           |
+| `SequenceView` | many context → horizon sequences  | NHiTS, TFT, PatchTST        |
+| `TabularView`  | individual supervised target rows | LightGBM, XGBoost, CatBoost |
+
+`ForecastView` is the inference counterpart of all three: one origin, one
+horizon.
+
+The `ViewPlanner` is the only place in OpenForecast that knows which semantic
+source it is materializing from:
+
+```python
+from openforecast.views import ViewKind, ViewPlanner, ViewRequest
+
+planner = ViewPlanner()
+request = ViewRequest(kind=ViewKind.SEQUENCES, context=168, horizon=72)
+
+from_event_time = planner.fit_view(timeseries, request)
+from_vintages = planner.fit_view(forecast_dataset, request)
+```
+
+Both calls return a `SequenceView` with the same schema and the same sample
+layout. What differs is provenance: windows cut out of one freshest series
+record `OriginFidelity.SIMULATED`, and windows built from real vintages record
+`OriginFidelity.OBSERVED`. A model trained on the first was told the past was
+cleaner than it was, and the artifact has to be able to say so.
+
+Each sample is exactly one forecast origin — a context window ending at the
+origin and a forecast window after it — and the view validates that rather than
+trusting it, so no integration can accidentally learn across two origins.
+Samples are keyed by an opaque, deterministic `sample_id`, with the instance
+keys and origins in a separate `samples` table; a provider cannot condition on
+what it cannot see. A window the data does not fully cover is dropped rather
+than padded, and a value the source did not have stays missing rather than
+being imputed.
+
+`ForecastView` materializes one inference origin, trimmed to the context the
+model was trained on:
+
+```python
+context = dataset.at_origin("2026-08-22T11:00:00Z")
+
+view = planner.forecast_view(
+    context,
+    ViewRequest(kind=ViewKind.FORECAST, horizon=72, context=168),
+)
+```
+
+Its `future` table names exactly the event times being asked about, so a
+provider never derives them from a horizon count and a frequency.
+
 ## The architectural invariant
 
 > OpenForecast owns forecasting semantics. Providers only consume
@@ -142,7 +199,7 @@ and virtual environment, so providers with incompatible dependency graphs
 (Torch vs. JAX, say) can coexist without ever meeting.
 
 **No provider branches on where the data came from.** A provider is handed a
-`SeriesView`, `WindowView`, `TabularView` or `ForecastView` — never a
+`SeriesView`, `SequenceView`, `TabularView` or `ForecastView` — never a
 `TimeSeriesFrame` or a `ForecastDataset`. Point-in-time handling lives in the
 `ViewPlanner`, once, instead of being re-derived in every integration.
 

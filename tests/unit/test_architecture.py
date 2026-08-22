@@ -1,24 +1,27 @@
 """Architecture tests for the rules in ARCHITECTURE.md.
 
-Both invariants are checked by scanning source rather than by importing
+Every invariant is checked by scanning source rather than by importing
 anything, so a violation fails the suite even if the offending module is never
 executed:
 
 1. ``openforecast`` never depends on a forecasting framework (rule 1).
 2. Imports only ever flow one way down the layer stack (rules 1, 2 and 7).
+3. Integrations import execution views, never semantic source datasets
+   (rules 2 and 3).
 
-The provider boundary test (rules 2 and 3) lands with the views package in
-Step 4; the forbidden-terminology scan (rule 6) lands in Step 15.
+The forbidden-terminology scan (rule 6) lands in Step 15.
 """
 
 from __future__ import annotations
 
+import ast
 import tomllib
 from pathlib import Path
 
 from tests._imports import (
     PACKAGE_ROOT,
     ImportSite,
+    imports_in_source,
     iter_imports,
     iter_source_files,
     module_name,
@@ -143,6 +146,81 @@ def _requirement_name(requirement: str) -> str:
     for separator in ("[", "=", "<", ">", "!", "~", ";", " "):
         name = name.split(separator, 1)[0]
     return name.strip().replace("-", "_").lower()
+
+
+# -- the provider boundary (rules 2 and 3) ---------------------------------
+
+INTEGRATIONS_ROOT = REPO_ROOT / "integrations"
+
+# What an integration may import from OpenForecast. ``views`` re-exports the
+# vocabulary its schemas are built from, so a provider never needs ``data``.
+PROVIDER_MODULES = frozenset({"openforecast.views", "openforecast.errors", "openforecast.protocol"})
+
+# Semantic source datasets. A provider that names one of these has been handed
+# something the view abstraction was supposed to absorb.
+SOURCE_TYPES = frozenset(
+    {
+        "ForecastContext",
+        "ForecastDataset",
+        "PointInTimeFrame",
+        "PointInTimeSchema",
+        "TimeSeriesFrame",
+        "TimeSeriesSchema",
+    }
+)
+
+
+def _provider_violations(source: str, path: Path) -> list[str]:
+    """Every way ``source`` could reach past the view boundary."""
+    violations: list[str] = []
+    for site in imports_in_source(source, path):
+        if site.top_level != "openforecast":
+            continue
+        if not any(
+            site.module == allowed or site.module.startswith(f"{allowed}.")
+            for allowed in PROVIDER_MODULES
+        ):
+            violations.append(f"{site} -- providers may only import {sorted(PROVIDER_MODULES)}")
+
+    tree = ast.parse(source, filename=str(path))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or not (node.module or "").startswith(
+            "openforecast"
+        ):
+            continue
+        named = sorted({alias.name for alias in node.names} & SOURCE_TYPES)
+        if named:
+            violations.append(
+                f"{path}:{node.lineno}: {named} -- a provider consumes execution views, "
+                f"never a semantic source dataset"
+            )
+    return violations
+
+
+def test_integrations_do_not_import_semantic_source_datasets() -> None:
+    violations = [
+        violation
+        for path in sorted(INTEGRATIONS_ROOT.rglob("*.py"))
+        for violation in _provider_violations(path.read_text(encoding="utf-8"), path)
+    ]
+    assert not violations, "provider boundary violations:\n" + "\n".join(violations)
+
+
+def test_the_provider_boundary_check_actually_catches_a_violation() -> None:
+    """``integrations/`` holds no Python yet, so the check is tested on a fixture."""
+    offending = (
+        "from openforecast import ForecastDataset\n"
+        "from openforecast.data.frame import TimeSeriesFrame\n"
+    )
+    reported = "\n".join(
+        _provider_violations(offending, INTEGRATIONS_ROOT / "example" / "provider.py")
+    )
+    assert "ForecastDataset" in reported
+    assert "TimeSeriesFrame" in reported
+    assert "openforecast.data.frame" in reported
+
+    allowed = "from openforecast.views import SequenceView, ViewKind\n"
+    assert not _provider_violations(allowed, INTEGRATIONS_ROOT / "example" / "provider.py")
 
 
 def test_inner_layers_do_not_import_outer_layers() -> None:
