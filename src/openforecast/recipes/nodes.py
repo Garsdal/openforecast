@@ -60,6 +60,7 @@ __all__ = [
     "Reduction",
     "ReductionStrategy",
     "WeightedMean",
+    "declared_transforms",
     "estimator_refs",
     "parse_recipe",
 ]
@@ -388,6 +389,23 @@ def estimator_refs(recipe: Recipe) -> tuple[ModelRef, ...]:
     it was handed.
     """
     return recipe.estimator_refs()
+
+
+def declared_transforms(recipe: Recipe) -> tuple[Transform, ...]:
+    """Every transform anywhere in the recipe, in the order it would be applied.
+
+    What the artifact manifest records so that reading it answers "was anything
+    done to this data before the model saw it" without walking the tree again —
+    an imputation in particular, since a manifest that cannot say a missing value
+    was filled describes a model that is not the one that was fitted.
+    """
+    if isinstance(recipe, Pipeline):
+        return (*recipe.transforms, *declared_transforms(recipe.estimator))
+    if isinstance(recipe, Ensemble):
+        return tuple(
+            transform for member in recipe.models for transform in declared_transforms(member)
+        )
+    return ()
 
 
 def _check_indicator_order(steps: Sequence[PipelineStep]) -> None:

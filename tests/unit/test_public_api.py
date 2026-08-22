@@ -16,6 +16,7 @@ import openforecast as of
 EXPECTED_PUBLIC_SURFACE = {
     "Accelerator",
     "AllOrigins",
+    "ArtifactError",
     "AtOrigin",
     "ColumnSet",
     "DataError",
@@ -41,6 +42,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "Model",
     "ModelError",
     "ModelRefError",
+    "ModelRequiresFit",
     "OpenForecastError",
     "OriginCalendarFeatures",
     "OriginScopeError",
@@ -183,8 +185,9 @@ def test_the_protocol_layer_exports_only_shared_vocabulary() -> None:
     from openforecast import protocol
     from openforecast.views import ViewKind
 
-    assert protocol.__all__ == ["ViewKind"]
+    assert protocol.__all__ == ["PROTOCOL_VERSION", "ViewKind"]
     assert protocol.ViewKind is ViewKind is of.models.ViewKind
+    assert isinstance(protocol.PROTOCOL_VERSION, int)
 
 
 # What ``of.fit(model=...)`` accepts, and everything a recipe can be built from.
@@ -211,6 +214,7 @@ EXPECTED_RECIPE_SURFACE = {
     "StandardScaler",
     "Transform",
     "WeightedMean",
+    "declared_transforms",
     "estimator_refs",
     "parse_recipe",
 }
@@ -256,12 +260,58 @@ def test_the_step_six_surfaces_are_exactly_what_is_defined(name: str, expected: 
     assert exported == expected
 
 
+# The artifact lifecycle of Step 7: immutable revisions, their manifests and the
+# aliases that point at them. ``ModelRegistry`` is the reference lookup built on
+# top of it and on Step 5's catalog.
+EXPECTED_ARTIFACT_SURFACE = {
+    "ARTIFACT_ID_LENGTH",
+    "LOCAL_NAMESPACE",
+    "ArtifactStaging",
+    "ArtifactStore",
+    "MissingValueTransform",
+    "ModelArtifact",
+    "ModelHandle",
+    "ModelManifest",
+    "TrainedSchema",
+    "TrainingRecord",
+    "artifact_time",
+    "content_hash",
+    "default_root",
+    "is_artifact_id",
+    "new_artifact_id",
+}
+
+EXPECTED_REGISTRY_SURFACE = {"ModelRegistry", "Resolution"}
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("artifacts", EXPECTED_ARTIFACT_SURFACE),
+        ("registry", EXPECTED_REGISTRY_SURFACE),
+    ],
+)
+def test_the_step_seven_surfaces_are_exactly_what_is_defined(name: str, expected: set[str]) -> None:
+    module = import_module(f"openforecast.{name}")
+
+    assert set(module.__all__) == expected
+    assert builtins.list(module.__all__) == sorted(module.__all__)
+
+
+def test_a_fitted_artifact_is_not_part_of_the_top_level_surface() -> None:
+    """Fitting returns a reference; the store behind it is not user vocabulary.
+
+    ``of.fit`` in Step 8 hands back ``local/de-price@01K...``, and a forecast
+    takes that string. Nothing about manifests, staging directories or aliases
+    has to be named to use the library, so none of it is exported here.
+    """
+    assert not {name for name in of.__all__ if "Artifact" in name} - {"ArtifactError"}
+
+
 @pytest.mark.parametrize(
     "name",
     [
-        "artifacts",
         "commands",
-        "registry",
         "runtime",
         "server",
     ],

@@ -53,6 +53,7 @@ from openforecast.recipes.nodes import (
     Reduction,
     ReductionStrategy,
     WeightedMean,
+    declared_transforms,
     estimator_refs,
     parse_recipe,
 )
@@ -89,6 +90,7 @@ __all__ = [
     "StandardScaler",
     "Transform",
     "WeightedMean",
+    "declared_transforms",
     "estimator_refs",
     "parse_recipe",
 ]

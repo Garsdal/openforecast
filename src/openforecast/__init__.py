@@ -28,9 +28,15 @@ it is provider-independent: a context length is stated once and compiled into
 whatever the provider calls it, and the origin selection means the same thing on
 ordinary event-time data as on real forecast vintages.
 
-The execution views of Step 4 are deliberately not re-exported here: they are a
-provider-facing boundary, imported from :mod:`openforecast.views`, not something
-a user of the library needs to name.
+What that call will return, since Step 7, is a reference to an immutable fitted
+artifact — ``local/de-price@01K...`` — which is the string a forecast then takes.
+The machinery behind it is not user vocabulary: manifests, staging directories
+and aliases live in :mod:`openforecast.artifacts`, and only the errors a caller
+can act on are exported here.
+
+The execution views of Step 4 are deliberately not re-exported here either: they
+are a provider-facing boundary, imported from :mod:`openforecast.views`, not
+something a user of the library needs to name.
 """
 
 from openforecast import models
@@ -48,12 +54,14 @@ from openforecast.data import (
     TimeSeriesSchema,
 )
 from openforecast.errors import (
+    ArtifactError,
     DataError,
     DuplicateModelError,
     FrequencyError,
     InconsistentTruthError,
     ModelError,
     ModelRefError,
+    ModelRequiresFit,
     OpenForecastError,
     OriginScopeError,
     RecipeError,
@@ -97,6 +105,7 @@ from openforecast.tasks import (
 __all__ = [
     "Accelerator",
     "AllOrigins",
+    "ArtifactError",
     "AtOrigin",
     "ColumnSet",
     "DataError",
@@ -122,6 +131,7 @@ __all__ = [
     "Model",
     "ModelError",
     "ModelRefError",
+    "ModelRequiresFit",
     "OpenForecastError",
     "OriginCalendarFeatures",
     "OriginScopeError",

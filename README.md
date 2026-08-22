@@ -25,8 +25,9 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > event-time data, and `PointInTimeFrame`, `ForecastDataset` and
 > `ForecastContext` for real forecast vintages — the execution views and
 > `ViewPlanner` from Step 4, the model references, descriptors and execution
-> contracts from Step 5, and the recipes, fit plans and forecast tasks from
-> Step 6. `of.fit` and `of.forecast` themselves land with the engine in Step 8.
+> contracts from Step 5, the recipes, fit plans and forecast tasks from Step 6,
+> and the artifact lifecycle and local model registry from Step 7. `of.fit` and
+> `of.forecast` themselves land with the engine in Step 8.
 > See [PLAN.md](PLAN.md) for the full 17-step roadmap.
 
 ## The event-time semantic model
@@ -298,6 +299,77 @@ Recipes and plans are a serializable AST, tagged by `kind`, and
 `of.parse_recipe` reads one back. The same JSON is what reaches an artifact
 manifest in Step 7, a provider subprocess in Step 9 and an HTTP body in
 Step 16 — no part of it is provider-specific.
+
+## Fitted models
+
+A fit produces a resource, not a variable. It is written once, addressed by a
+reference, and described by a manifest:
+
+```text
+~/.local/share/openforecast/
+    models/
+        01K5Z6QK3M9TQK1W2E3R4T5Y6U/
+            manifest.json     what this is
+            recipe.json       what was fitted
+            schema.json       the training view's schema
+            provider/         opaque
+    aliases/
+        de-price.json
+```
+
+`local/de-price@01K5Z6QK3M9TQK1W2E3R4T5Y6U` is one immutable revision, so
+forecasting from it today gives the model it gave a month ago.
+`local/de-price` is an alias that follows the latest selected revision, which is
+what lets a scheduled forecast job name a model once and pick up retrainings —
+and lets a rollback be a pointer move rather than a retrain.
+
+Nothing is published until the fit succeeds. A provider trains into
+`.tmp/<artifact-id>` and the directory is renamed into place afterwards, because
+a half-written artifact that is nevertheless resolvable would not fail — it
+would forecast.
+
+The manifest is what everything except the provider reads:
+
+```json
+{
+  "training": {
+    "view": "sequences",
+    "origin_fidelity": "observed",
+    "context": 168,
+    "horizon": 72,
+    "samples": 8832
+  }
+}
+```
+
+It records the artifact id, the source model, the recipe, the provider and its
+version, the OpenForecast and protocol versions, the training view and its
+origin fidelity, the origin selection, context, horizon and sample count, the
+schema the model expects to see again, and any transform that touched the
+missing values on the way in. Every one of those is read off the materialized
+view rather than reported by the provider, so a manifest cannot describe a fit
+that did not happen. `ModelHandle` is a reference plus that manifest and
+deliberately nothing else — listing ten artifacts should not deserialize ten
+neural networks.
+
+The registry is where a string becomes a state:
+
+```python
+from openforecast.registry import ModelRegistry
+
+registry = ModelRegistry()
+
+registry.for_fit("nixtla/nhits")     # a descriptor: plan a fit against this
+registry.resolve("local/de-price")   # a handle: forecast with this
+registry.resolve("nixtla/nhits")     # ModelRequiresFit
+```
+
+That last one is the string lifecycle. Forecasting with a reference that names
+an unfitted model is refused rather than quietly fitted on whatever data the
+call was handed, which would return a number that looks like a forecast from a
+model nobody trained. A model that declares `requires_fit=False` resolves to its
+descriptor instead: zero-shot use is something a model states, not something
+OpenForecast assumes.
 
 ## The architectural invariant
 

@@ -6,9 +6,10 @@ descriptor = of.models.get("nixtla/nhits")
 ```
 
 The catalog holds descriptors only. Resolving a reference to a *fitted* model —
-following the ``local/de-price`` alias to the revision it points at — is the
-artifact registry's job in Step 7, and it reads descriptors from here rather
-than duplicating them.
+following the ``local/de-price`` alias to the revision it points at — belongs to
+the artifact store, and :class:`~openforecast.registry.ModelRegistry` is where
+the two halves of "what does this string mean" meet. It reads descriptors from
+here rather than duplicating them.
 
 Descriptors are pushed in rather than discovered here: the built-in reference
 provider registers itself in Step 8 and external providers advertise their
