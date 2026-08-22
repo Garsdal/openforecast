@@ -8,35 +8,65 @@ import pytest
 
 import openforecast as of
 
-# The semantic data layer of Steps 2 and 3, the errors of Steps 4 and 5, and the
-# ``of.models`` namespace. Recipes and the engine join this list in later steps;
-# it is asserted exactly so that nothing reaches the public surface by accident.
-# The execution views are not here on purpose: they are a provider boundary,
-# imported from ``openforecast.views``.
+# The semantic data layer of Steps 2 and 3, the ``of.models`` namespace of
+# Step 5, and the recipes, plans and tasks of Step 6. The engine joins this list
+# in Step 8; it is asserted exactly so that nothing reaches the public surface by
+# accident. The execution views are not here on purpose: they are a provider
+# boundary, imported from ``openforecast.views``.
 EXPECTED_PUBLIC_SURFACE = {
+    "Accelerator",
+    "AllOrigins",
+    "AtOrigin",
+    "ColumnSet",
     "DataError",
     "DuplicateModelError",
+    "Ensemble",
     "FeatureAvailability",
     "FeatureKind",
     "FeatureSpec",
+    "FitPlan",
     "ForecastContext",
     "ForecastDataset",
+    "ForecastTask",
     "Frequency",
     "FrequencyError",
     "FrequencyUnit",
+    "Impute",
+    "ImputeMethod",
     "InconsistentTruthError",
+    "LatestOrigin",
+    "LeadTimeFeature",
+    "Mean",
+    "MissingIndicator",
+    "Model",
     "ModelError",
     "ModelRefError",
     "OpenForecastError",
+    "OriginCalendarFeatures",
     "OriginScopeError",
+    "OriginSelection",
+    "OriginsBetween",
+    "OutputKind",
+    "OutputSpec",
+    "Pipeline",
     "PointInTimeFrame",
     "PointInTimeSchema",
+    "Recipe",
+    "RecipeError",
+    "Reduction",
+    "ReductionStrategy",
+    "Resources",
     "SchemaError",
+    "StandardScaler",
     "TimeSeriesFrame",
     "TimeSeriesSchema",
     "UnknownModelError",
+    "UnsupportedPlanError",
+    "WeightedMean",
+    "WindowPlan",
     "__version__",
     "models",
+    "parse_recipe",
 }
 
 # Exported but excluded from the attribute comparison below: they are modules,
@@ -74,6 +104,8 @@ def test_all_is_sorted() -> None:
 # dataset: a provider consumes views, never a TimeSeriesFrame, PointInTimeFrame
 # or ForecastDataset.
 EXPECTED_VIEW_SURFACE = {
+    "AllOrigins",
+    "AtOrigin",
     "FeatureAvailability",
     "FeatureKind",
     "FeatureSpec",
@@ -82,10 +114,12 @@ EXPECTED_VIEW_SURFACE = {
     "ForecastViewMetadata",
     "Frequency",
     "FrequencyUnit",
+    "LatestOrigin",
     "MATERIALIZER_VERSION",
     "OriginFidelity",
     "OriginMode",
     "OriginSelection",
+    "OriginsBetween",
     "SequenceView",
     "SequenceViewSchema",
     "SeriesView",
@@ -153,16 +187,83 @@ def test_the_protocol_layer_exports_only_shared_vocabulary() -> None:
     assert protocol.ViewKind is ViewKind is of.models.ViewKind
 
 
+# What ``of.fit(model=...)`` accepts, and everything a recipe can be built from.
+EXPECTED_RECIPE_SURFACE = {
+    "ColumnSelector",
+    "ColumnSet",
+    "ColumnTransform",
+    "Combiner",
+    "CombinerKind",
+    "Ensemble",
+    "Impute",
+    "ImputeMethod",
+    "LeadTimeFeature",
+    "Mean",
+    "MissingIndicator",
+    "Model",
+    "OriginCalendarFeatures",
+    "Pipeline",
+    "PipelineStep",
+    "Recipe",
+    "RecipeKind",
+    "Reduction",
+    "ReductionStrategy",
+    "StandardScaler",
+    "Transform",
+    "WeightedMean",
+    "estimator_refs",
+    "parse_recipe",
+}
+
+# How to fit, and what to predict. ``SearchPlan`` is reachable here but not from
+# the top level: it is reserved, and attaching one to a plan is refused.
+EXPECTED_TASK_SURFACE = {
+    "Accelerator",
+    "AllOrigins",
+    "AtOrigin",
+    "FitPlan",
+    "ForecastTask",
+    "LatestOrigin",
+    "OriginMode",
+    "OriginSelection",
+    "OriginsBetween",
+    "OutputKind",
+    "OutputSpec",
+    "Resources",
+    "SearchPlan",
+    "SearchStrategy",
+    "WindowPlan",
+}
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("recipes", EXPECTED_RECIPE_SURFACE),
+        ("tasks", EXPECTED_TASK_SURFACE),
+    ],
+)
+def test_the_step_six_surfaces_are_exactly_what_is_defined(name: str, expected: set[str]) -> None:
+    module = import_module(f"openforecast.{name}")
+
+    assert set(module.__all__) == expected
+    assert builtins.list(module.__all__) == sorted(module.__all__)
+    exported = {
+        attribute
+        for attribute in dir(module)
+        if not attribute.startswith("_") and not isinstance(getattr(module, attribute), ModuleType)
+    }
+    assert exported == expected
+
+
 @pytest.mark.parametrize(
     "name",
     [
         "artifacts",
         "commands",
-        "recipes",
         "registry",
         "runtime",
         "server",
-        "tasks",
     ],
 )
 def test_unimplemented_subpackages_are_importable_but_empty(name: str) -> None:

@@ -24,9 +24,10 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > semantic data layer from Steps 2 and 3: `TimeSeriesFrame` for ordinary
 > event-time data, and `PointInTimeFrame`, `ForecastDataset` and
 > `ForecastContext` for real forecast vintages — the execution views and
-> `ViewPlanner` from Step 4, and the model references, descriptors and
-> execution contracts from Step 5. Recipes and the engine shown above land in
-> later steps. See [PLAN.md](PLAN.md) for the full 17-step roadmap.
+> `ViewPlanner` from Step 4, the model references, descriptors and execution
+> contracts from Step 5, and the recipes, fit plans and forecast tasks from
+> Step 6. `of.fit` and `of.forecast` themselves land with the engine in Step 8.
+> See [PLAN.md](PLAN.md) for the full 17-step roadmap.
 
 ## The event-time semantic model
 
@@ -234,6 +235,69 @@ have.
 
 `of.models.list()` is empty until Step 8 registers the built-in reference
 provider and Step 9 lets external providers advertise their models.
+
+## Recipes, plans and tasks
+
+Three things stay separate: what to fit, how to fit it, and what to predict.
+
+```python
+recipe = of.Pipeline(
+    steps=[
+        of.MissingIndicator(columns="features"),
+        of.Impute(columns="features", method="median"),
+        of.StandardScaler(columns="targets"),
+        of.Model("nixtla/nhits", params={"max_steps": 500}),
+    ]
+)
+
+plan = of.FitPlan(
+    origins=of.AllOrigins(),
+    window=of.WindowPlan(context=168),
+    seed=42,
+)
+
+task = of.ForecastTask(horizon=72)
+output = of.OutputSpec.quantiles([0.1, 0.5, 0.9])
+```
+
+That separation is what lets one recipe be fitted at a single origin and across
+every origin, or asked for a different horizon, without being rewritten.
+Recipes compose: `of.Ensemble` and `of.Pipeline` hold recipes rather than
+models, so an ensemble of pipelines needs no new vocabulary, and
+`of.Reduction(estimator="lightgbm/regressor", strategy="direct", lags=[1, 24, 168])`
+expresses the tabular reduction that point-in-time LightGBM setups use.
+
+**OpenForecast owns what it can own.** A context length is stated once, as
+`WindowPlan(context=168)`, and compiled into `input_size` for Nixtla or
+`input_chunk_length` for Darts. Passing one of those as a provider parameter is
+an error that names the field to use instead — the same for a horizon, a seed,
+a frequency or a covariate list. Two copies of one number, free to disagree,
+with the provider's spelling winning silently, is not a convenience.
+
+**Nothing is imputed silently.** A missing value in point-in-time data is
+information: the feature had not been published at that origin. A model that
+cannot consume one declares `MissingValueSupport.REQUIRES_TRANSFORM`, and the
+caller writes `MissingIndicator` and `Impute` down as steps — recorded in the
+artifact, visible to whoever reads the forecast later. Putting the indicator
+*after* the imputation is refused, because it would come out constant.
+
+**The origin selections mean the same thing for both sources.**
+
+```python
+of.AllOrigins(stride=1)
+of.LatestOrigin()
+of.AtOrigin(timestamp)
+of.OriginsBetween(start, end, stride=12)
+```
+
+On a `TimeSeriesFrame` they pick among the origins that can be simulated; on a
+`ForecastDataset`, among the vintages that exist. The same `FitPlan` therefore
+works on both, and only the recorded `OriginFidelity` differs.
+
+Recipes and plans are a serializable AST, tagged by `kind`, and
+`of.parse_recipe` reads one back. The same JSON is what reaches an artifact
+manifest in Step 7, a provider subprocess in Step 9 and an HTTP body in
+Step 16 — no part of it is provider-specific.
 
 ## The architectural invariant
 

@@ -21,8 +21,10 @@ __all__ = [
     "ModelRefError",
     "OpenForecastError",
     "OriginScopeError",
+    "RecipeError",
     "SchemaError",
     "UnknownModelError",
+    "UnsupportedPlanError",
 ]
 
 
@@ -40,6 +42,26 @@ class SchemaError(OpenForecastError):
 
 class FrequencyError(SchemaError):
     """A frequency cannot be parsed, or has no fixed duration."""
+
+
+class RecipeError(SchemaError):
+    """A recipe or a plan does not describe something executable.
+
+    A :class:`SchemaError` because a recipe is a declaration: a pipeline whose
+    last step forecasts nothing, an ensemble whose weights do not match its
+    members, a model parameter naming something OpenForecast owns. All of it is
+    wrong before any data is looked at.
+    """
+
+
+class UnsupportedPlanError(RecipeError):
+    """The configuration is expressible in the protocol but not yet executable.
+
+    Reserved fields exist so that the wire format does not have to change when
+    the capability lands. Until it does, a plan that uses one is refused loudly
+    rather than accepted and quietly ignored, which would look to the caller
+    like the search they asked for had run.
+    """
 
 
 class DataError(OpenForecastError):
