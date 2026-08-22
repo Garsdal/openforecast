@@ -33,9 +33,7 @@ compiler to answer that would make discovery slow for no reason.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -57,59 +55,13 @@ from openforecast.models import (
 )
 from openforecast.views import FitView, ForecastView, SeriesView
 from openforecast_nixtla import conversion
+from openforecast_nixtla.parameters import Parameter, checked, named, schema_of
+from openforecast_nixtla.state import STATE_FILENAME, read_state, write_state
 
-__all__ = ["AUTOARIMA", "Parameter", "StatsForecastAdapter"]
+__all__ = ["AUTOARIMA", "StatsForecastAdapter"]
 
 #: The pickled ``StatsForecast`` object, written by its own ``save``.
 MODEL_FILENAME = "statsforecast.pkl"
-#: Everything the forecast side needs that the pickle does not hold.
-STATE_FILENAME = "state.json"
-
-
-@dataclass(frozen=True)
-class Parameter:
-    """One parameter of a native model, as both a schema and a check.
-
-    Declared once so that the JSON Schema a caller reads and the validation a
-    caller hits cannot disagree: an unknown parameter is refused by name and a
-    wrongly typed one is refused with the type it should have been.
-    """
-
-    name: str
-    kind: type[int] | type[bool] | type[str] | type[float]
-    description: str
-    minimum: int | None = None
-    choices: tuple[str, ...] = ()
-
-    @property
-    def json_type(self) -> str:
-        return {bool: "boolean", int: "integer", float: "number", str: "string"}[self.kind]
-
-    def schema(self) -> dict[str, Any]:
-        schema: dict[str, Any] = {"type": self.json_type, "description": self.description}
-        if self.minimum is not None:
-            schema["minimum"] = self.minimum
-        if self.choices:
-            schema["enum"] = list(self.choices)
-        return schema
-
-    def check(self, value: object, model: str) -> None:
-        """Refuse a value this parameter cannot take, naming what it can."""
-        # ``bool`` is an ``int`` in Python and is not one here: a model taking a
-        # count and given ``True`` has been handed the wrong thing.
-        wrong_type = not isinstance(value, self.kind) or (
-            self.kind is not bool and isinstance(value, bool)
-        )
-        if wrong_type:
-            raise RecipeError(
-                f"{model} takes {self.name} as {self.json_type} ({self.description}); got {value!r}"
-            )
-        if self.minimum is not None and isinstance(value, int) and value < self.minimum:
-            raise RecipeError(
-                f"{model} takes {self.name} of at least {self.minimum}; got {value!r}"
-            )
-        if self.choices and value not in self.choices:
-            raise RecipeError(f"{model} takes {self.name} in {list(self.choices)}; got {value!r}")
 
 
 class StatsForecastAdapter:
@@ -127,7 +79,7 @@ class StatsForecastAdapter:
         self._name = name
         self._display_name = display_name
         self._build = build
-        self._parameters = {parameter.name: parameter for parameter in parameters}
+        self._parameters = named(parameters)
         self._exogenous = exogenous
 
     @property
@@ -158,21 +110,18 @@ class StatsForecastAdapter:
                 outputs=OutputCapabilities(point=True),
                 missing_values=MissingValueSupport.UNSUPPORTED,
             ),
-            parameters_schema={
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    name: parameter.schema() for name, parameter in self._parameters.items()
-                },
-            },
+            parameters_schema=schema_of(self._parameters),
         )
 
     # -- fit ----------------------------------------------------------------
 
-    def fit(self, view: FitView, params: Mapping[str, Any], into: Path) -> None:
+    def fit(
+        self, view: FitView, params: Mapping[str, Any], into: Path, *, seed: int | None
+    ) -> None:
         """Fit one native model per series, and persist it with what labels it."""
         from statsforecast import StatsForecast
 
+        del seed  # the models exposed here are deterministic order searches
         if not isinstance(view, SeriesView):
             raise ProviderError(
                 f"{self._name} trains on one complete time series, so it cannot be fitted "
@@ -190,7 +139,7 @@ class StatsForecastAdapter:
                 f"{self._name} could not be fitted on this data: {type(error).__name__}: {error}"
             ) from error
         forecaster.save(str(into / MODEL_FILENAME))
-        _write_state(
+        write_state(
             into / STATE_FILENAME,
             {
                 "model": self._name,
@@ -218,7 +167,7 @@ class StatsForecastAdapter:
         kind = output.get("kind", "point")
         if kind != "point":
             raise ProviderError(f"{self._name} produces point forecasts, not {kind}")
-        persisted = _read_state(state / STATE_FILENAME, self._name)
+        persisted = read_state(state / STATE_FILENAME, self._name)
         unique_ids = {tuple(entry["key"]): str(entry["unique_id"]) for entry in persisted["series"]}
         exogenous = tuple(str(name) for name in persisted["exogenous"])
         self._require_matching_origin(view, unique_ids, persisted)
@@ -276,15 +225,9 @@ class StatsForecastAdapter:
 
     def _instantiate(self, params: Mapping[str, Any]) -> Any:
         """The native model the caller's parameters describe."""
-        unknown = sorted(set(params) - set(self._parameters))
-        if unknown:
-            raise RecipeError(
-                f"{self._name} takes no parameter {unknown}; it takes {sorted(self._parameters)}"
-            )
-        for name, value in params.items():
-            self._parameters[name].check(value, self._name)
+        settings = checked(params, self._parameters, self._name)
         try:
-            return self._build(**params)
+            return self._build(**settings)
         except (TypeError, ValueError) as error:
             raise RecipeError(f"{self._name} rejected {dict(params)}: {error}") from error
 
@@ -336,25 +279,3 @@ AUTOARIMA = StatsForecastAdapter(
     parameters=AUTOARIMA_PARAMETERS,
     exogenous=True,
 )
-
-
-def _write_state(path: Path, payload: Mapping[str, Any]) -> None:
-    try:
-        encoded = json.dumps(payload, indent=2)
-    except TypeError as error:  # an instance key no JSON document can hold
-        raise ProviderError(f"this instance key cannot be persisted: {error}") from error
-    path.write_text(encoded + "\n", encoding="utf-8")
-
-
-def _read_state(path: Path, model: str) -> Mapping[str, Any]:
-    try:
-        persisted: Any = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as error:
-        raise ProviderError(f"{model} has no fitted state at {path}: {error}") from error
-    except json.JSONDecodeError as error:
-        raise ProviderError(
-            f"the fitted state of {model} at {path} is not valid JSON: {error}"
-        ) from error
-    if not isinstance(persisted, dict) or persisted.get("model") != model:
-        raise ProviderError(f"{path} does not hold the fitted state of {model}")
-    return persisted

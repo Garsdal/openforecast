@@ -19,8 +19,9 @@ from pathlib import Path
 
 import golden
 import pytest
-from golden import AUTOARIMA, at
+from golden import AUTOARIMA, FAST, NHITS, at
 
+import openforecast as of
 from openforecast.errors import RecipeError
 from openforecast.runtime import SubprocessProvider
 
@@ -58,6 +59,35 @@ def test_the_same_model_forecasts_the_same_numbers_over_a_process_boundary(
 
     assert there.origin_time == at(23)
     assert there.table.equals(here.table)
+
+
+def test_a_sequence_view_survives_the_wire_with_its_sample_boundaries(
+    tmp_path: Path, remote: SubprocessProvider
+) -> None:
+    """The bundle a global model needs is three tables, not one.
+
+    A ``SequenceView`` carries its temporal rows, the window bounds of every
+    sample and the static features beside them, and all three have to arrive —
+    a sample whose bounds were lost is a training sequence nobody described.
+    """
+    dataset = golden.point_in_time_dataset(instances=2, origins=6, horizon=HORIZON, static=True)
+    origin = at(7)
+    client = golden.client(tmp_path / "remote", remote)
+
+    handle = client.fit(
+        NHITS,
+        dataset,
+        horizon=HORIZON,
+        params=FAST,
+        plan=of.FitPlan(origins=of.AllOrigins(), window=of.WindowPlan(context=3), seed=11),
+        name="de-price",
+    )
+    forecast = client.forecast(handle, dataset.at_origin(origin), horizon=HORIZON)
+
+    assert handle.training.samples == 2 * 6
+    assert handle.training.context == 3
+    assert forecast.origin_time == origin
+    assert forecast.table.num_rows == 2 * HORIZON
 
 
 def test_a_failure_inside_the_provider_arrives_as_the_error_it_is(

@@ -145,6 +145,13 @@ cases the provider is asserted to have received a `SequenceView` and nothing
 else. A capability withheld is never one fewer check — it becomes a refusal that
 has to happen before the provider is started.
 
+`cases_for` and `refusals_for` take optional model parameters, which reach every
+generated fit unchanged and are validated against the descriptor's own parameter
+schema. They exist for models whose defaults are expensive rather than wrong —
+`nixtla/nhits` runs the suite at two optimization steps — and because they can
+only name parameters the model already advertises, they cannot be used to turn a
+capability on for the duration of the suite.
+
 Rule 6 has one deliberate exception in the source: `recipes/nodes.py` contains
 the provider spellings `input_size`, `input_chunk_length`, `hist_exog_list` and
 friends in a *rejection* list. They appear there so that they cannot appear

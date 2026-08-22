@@ -8,6 +8,9 @@ dependencies = [
     # The integration depends on OpenForecast; OpenForecast never depends on it.
     "openforecast",
     "statsforecast>=2,<3",
+    # PyTorch and Lightning arrive with this one. They are exactly what the
+    # provider boundary exists to keep out of an OpenForecast install.
+    "neuralforecast>=3,<4",
     # Nixtla's libraries speak pandas, so the integration does too. Nothing
     # about that spelling escapes this distribution.
     "pandas>=2",
@@ -28,10 +31,21 @@ path = "src/openforecast_nixtla/_version.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/openforecast_nixtla"]
 
+# A development environment on Linux takes PyTorch without CUDA. The default
+# Linux wheel carries several gigabytes of GPU runtime that a test suite fitting
+# six-step windows on a CI runner will never execute. This is `uv` configuration
+# rather than distribution metadata, so it shapes this checkout and CI and says
+# nothing about what `pip install openforecast-nixtla` resolves on a GPU box.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.uv.sources]
 # A checkout builds against the OpenForecast beside it. A published install
 # resolves the published distribution instead.
 openforecast = { path = "../..", editable = true }
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [dependency-groups]
 dev = [
@@ -40,6 +54,9 @@ dev = [
     # The conformance suite of the OpenForecast checkout is what an integration
     # inherits, and it builds its golden datasets with pandas.
     "pandas>=2",
+    # Named only so the CPU index above reaches it: `[tool.uv.sources]` binds
+    # direct dependencies, and PyTorch arrives through `neuralforecast`.
+    "torch",
 ]
 
 # Lint and format are the repository's, not this distribution's: the root

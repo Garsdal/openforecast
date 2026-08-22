@@ -13,10 +13,12 @@ import sys
 
 import pytest
 from openforecast_nixtla import PROVIDER_NAME, PROVIDER_VERSION, NixtlaProvider, catalog
+from openforecast_nixtla.adapters.neuralforecast import NHITS
 from openforecast_nixtla.adapters.statsforecast import AUTOARIMA
 from openforecast_nixtla.conversion import pandas_frequency
 
 from openforecast.errors import UnknownModelError
+from openforecast.models import ModelDescriptor
 from openforecast.models.capabilities import MissingValueSupport
 from openforecast.models.contract import OriginScope
 from openforecast.protocol.vocabulary import ViewKind
@@ -25,17 +27,23 @@ from openforecast.views import Frequency
 PROVIDER = NixtlaProvider()
 
 
+def descriptor_for(name: str) -> ModelDescriptor:
+    (found,) = [candidate for candidate in PROVIDER.descriptors() if candidate.ref.name == name]
+    return found
+
+
 def test_the_provider_is_the_namespace_of_the_models_it_advertises() -> None:
     assert PROVIDER.name == PROVIDER_NAME == "nixtla"
     assert PROVIDER.version == PROVIDER_VERSION
-    assert {str(descriptor.ref) for descriptor in PROVIDER.descriptors()} == {"nixtla/autoarima"}
+    assert {str(descriptor.ref) for descriptor in PROVIDER.descriptors()} == {
+        "nixtla/autoarima",
+        "nixtla/nhits",
+    }
     assert all(descriptor.provider == "nixtla" for descriptor in PROVIDER.descriptors())
 
 
 def test_autoarima_declares_what_a_local_statistical_model_can_do() -> None:
-    (descriptor,) = [
-        candidate for candidate in PROVIDER.descriptors() if candidate.ref.name == "autoarima"
-    ]
+    descriptor = descriptor_for("autoarima")
     contract = descriptor.training
     capabilities = descriptor.capabilities
 
@@ -53,9 +61,48 @@ def test_autoarima_declares_what_a_local_statistical_model_can_do() -> None:
     assert descriptor.lifecycle.requires_fit
 
 
+def test_nhits_declares_what_a_global_neural_model_can_do() -> None:
+    """The declaration Step 12 exists to make good on.
+
+    Every line of it is exercised: the sequences contract by the conformance
+    suite, the covariate roles and the unseen instance by ``test_nhits.py``, and
+    the bound horizon by the engine refusing a request for another one.
+    """
+    descriptor = descriptor_for("nhits")
+    contract = descriptor.training
+    capabilities = descriptor.capabilities
+
+    assert contract.view is ViewKind.SEQUENCES
+    assert contract.origin_scope is OriginScope.MULTIPLE
+    assert contract.learns_across_origins
+    assert contract.context_required
+    assert contract.horizon_bound_at_fit
+    assert contract.supports_unseen_instances
+
+    assert (capabilities.instances.single, capabilities.instances.panel) == (True, True)
+    assert (capabilities.targets.univariate, capabilities.targets.multivariate) == (True, False)
+    assert capabilities.features.observed
+    assert capabilities.features.known
+    assert capabilities.features.static
+    assert capabilities.missing_values is MissingValueSupport.REQUIRES_TRANSFORM
+    assert descriptor.lifecycle.requires_fit
+
+
+def test_the_window_of_a_sequence_model_is_never_a_parameter() -> None:
+    """The user must not state the context length or the horizon twice.
+
+    Refused at the recipe boundary for every provider, and absent from what this
+    one advertises — so there is nowhere for a second copy to be written down.
+    """
+    schema = descriptor_for("nhits").parameters_schema
+
+    for owned in ("h", "input_size", "random_seed", "futr_exog_list", "hist_exog_list"):
+        assert owned not in schema["properties"], f"{owned} is OpenForecast's, not a parameter"
+
+
 def test_the_declared_parameters_are_the_ones_that_are_accepted() -> None:
     """The schema a caller reads and the check a caller hits are one table."""
-    (descriptor,) = PROVIDER.descriptors()
+    descriptor = descriptor_for("autoarima")
     schema = descriptor.parameters_schema
 
     assert schema["type"] == "object"
@@ -73,7 +120,7 @@ def test_the_declared_parameters_are_the_ones_that_are_accepted() -> None:
 
 
 def test_a_model_this_provider_does_not_have_is_named_as_such() -> None:
-    with pytest.raises(UnknownModelError, match=r"nixtla/autoarima"):
+    with pytest.raises(UnknownModelError, match=r"nixtla/nhits"):
         catalog.adapter_for("nixtla/autoets", "nixtla")
 
     with pytest.raises(UnknownModelError, match=r"not a model of the 'nixtla' provider"):
@@ -84,19 +131,23 @@ def test_the_handshake_imports_no_forecasting_library() -> None:
     """Discovery is a question about descriptors, and it should stay cheap.
 
     In a fresh interpreter, because by the time the rest of this suite has run
-    the library is loaded and the question would answer itself.
+    the libraries are loaded and the question would answer itself. It matters
+    more now than it did with one model: ``neuralforecast`` pulls in PyTorch,
+    and paying seconds of import to list two model names would make every
+    ``openforecast providers list`` feel broken.
     """
     probe = (
         "import sys\n"
         "from openforecast_nixtla import NixtlaProvider\n"
         "NixtlaProvider().descriptors()\n"
-        "print('statsforecast' in sys.modules)\n"
+        "print([name for name in ('statsforecast', 'neuralforecast', 'torch') "
+        "if name in sys.modules])\n"
     )
     completed = subprocess.run(
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     )
 
-    assert completed.stdout.strip() == "False", "answering a handshake imported the library"
+    assert completed.stdout.strip() == "[]", "answering a handshake imported a library"
 
 
 @pytest.mark.parametrize(
@@ -121,4 +172,6 @@ def test_a_frequency_is_translated_into_the_alias_a_library_accepts(
 def test_the_adapter_says_which_model_it_is() -> None:
     assert AUTOARIMA.name == "autoarima"
     assert "autoarima" in repr(AUTOARIMA)
-    assert repr(PROVIDER) == f"NixtlaProvider(version={PROVIDER_VERSION}, models=1)"
+    assert NHITS.name == "nhits"
+    assert "nhits" in repr(NHITS)
+    assert repr(PROVIDER) == f"NixtlaProvider(version={PROVIDER_VERSION}, models=2)"
