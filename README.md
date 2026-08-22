@@ -576,6 +576,39 @@ the last two being how it declares what it provides and how it is served.
 [ARCHITECTURE.md](ARCHITECTURE.md) states all seven rules and how each is
 enforced.
 
+## Conformance
+
+The invariant above is a claim about behavior, so `tests/conformance/` checks it
+as behavior. Named golden datasets — `panel_multivariate`, `pit_varying_vintages`,
+`pit_missingness` and the rest — are materialized into all three fit views from
+both semantic sources, and every point-in-time property a provider depends on is
+asserted on the result:
+
+```text
+leakage        origin 09 sees the value 09 published, and never the one 10 did
+sample count   100 origins x 3 instances is 300 sequences, and nothing else
+missingness    NaN, NaN, 42 is what the feed did, so it is what the view holds
+equivalence    identical vintages materialize exactly like event-time data,
+               and differ only in OriginFidelity
+```
+
+Provider conformance is generated rather than written. A model's descriptor says
+which view it trains on, which shapes and feature roles it takes, whether it
+learns across origins and what it does about missing values — and the suite
+turns each statement into fits that must succeed and requests that must be
+refused:
+
+```python
+for case in suite.cases_for(descriptor):
+    suite.run_case(case, descriptor=descriptor, provider=provider, store=tmp_path)
+```
+
+Declaring `view=sequences` therefore buys tests against an event-time frame and
+against real forecast vintages, with the provider asserted to have received a
+`SequenceView` in both — which is the view boundary, checked rather than assumed.
+The built-in reference provider passes every capability it declares, and the
+integrations of Steps 11 to 14 are held to the same suite.
+
 ## Layering
 
 Imports flow in one direction only:

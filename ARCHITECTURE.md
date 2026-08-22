@@ -110,12 +110,36 @@ feature values name the origin that produced them, so a leaked vintage is
 detectable rather than plausible.
 
 Rule 5 is enforced by the validation layers of Steps 3 and 6 and by the
-conformance suite in Step 10, since it is a property of behavior rather than of
-imports. In Step 6 that means imputation is only ever something a recipe asks
-for: `of.Impute` is a step the caller writes and the manifest records, and a
+conformance suite, since it is a property of behavior rather than of imports. In
+Step 6 that means imputation is only ever something a recipe asks for:
+`of.Impute` is a step the caller writes and the manifest records, and a
 `MissingIndicator` placed after an imputation of the same columns is refused,
 because it would come out constant and discard the missingness it was added to
 preserve.
+
+## The conformance suite
+
+`tests/conformance/` is where rules 2 to 5 are checked as behavior. It is built
+on named golden datasets whose every value is a function of the coordinates it
+sits at — instance, event time, and for point-in-time data the origin that
+issued it — so a leaked vintage can be identified rather than merely suspected.
+
+```text
+datasets.py   the golden semantic datasets, and the builders behind them
+test_views.py both sources into all three fit views — the six materializations
+test_point_in_time.py   leakage, sample counts, missingness, equivalence
+suite.py      the provider contract, generated from what a descriptor declares
+```
+
+`suite.py` is the part integrations inherit. A descriptor states which view its
+model trains on, which shapes and feature roles it accepts, whether it learns
+across origins and what it does about missing values; the suite turns each of
+those statements into fits that must succeed and requests that must be refused.
+A model declaring `view=sequences` is therefore fitted from an event-time frame
+and from real forecast vintages without either being written down, and in both
+cases the provider is asserted to have received a `SequenceView` and nothing
+else. A capability withheld is never one fewer check — it becomes a refusal that
+has to happen before the provider is started.
 
 Rule 6 has one deliberate exception in the source: `recipes/nodes.py` contains
 the provider spellings `input_size`, `input_chunk_length`, `hist_exog_list` and
