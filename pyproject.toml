@@ -10,6 +10,9 @@ dependencies = [
     "platformdirs",
 ]
 
+[project.scripts]
+openforecast = "openforecast.commands:main"
+
 [project.urls]
 Homepage = "https://github.com/Garsdal/openforecast"
 Repository = "https://github.com/Garsdal/openforecast"

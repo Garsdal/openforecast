@@ -171,8 +171,9 @@ __all__ = [
 
 __version__ = "0.1.0"
 
-# The models this build ships with become discoverable when the package is
-# imported, exactly as an external provider's will when it answers a handshake.
-# Nothing here touches the filesystem: an artifact store is named only when
-# something is actually fitted.
+# Every model this build can execute becomes discoverable when the package is
+# imported: the ones it ships with, and the ones each installed provider
+# environment recorded when it answered its handshake. That reads the provider
+# cache directory and nothing else — no provider process is started, and an
+# artifact store is named only when something is actually fitted.
 _install_providers()
