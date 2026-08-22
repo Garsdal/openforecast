@@ -10,7 +10,7 @@ neural, or tree-based — behind one stable surface:
 ```python
 import openforecast as of
 
-model = of.fit(model="nixtla/nhits", data=train, horizon=24)
+model = of.fit(model="builtin/seasonal-naive", data=train, params={"season_length": 24})
 forecast = of.forecast(model=model, data=context, horizon=24)
 ```
 
@@ -26,8 +26,10 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > `ForecastContext` for real forecast vintages — the execution views and
 > `ViewPlanner` from Step 4, the model references, descriptors and execution
 > contracts from Step 5, the recipes, fit plans and forecast tasks from Step 6,
-> and the artifact lifecycle and local model registry from Step 7. `of.fit` and
-> `of.forecast` themselves land with the engine in Step 8.
+> the artifact lifecycle and local model registry from Step 7, and the execution
+> engine and its built-in reference provider from Step 8. `of.fit` and
+> `of.forecast` work end to end today with `builtin/seasonal-naive`; external
+> providers arrive in Step 9 and after.
 > See [PLAN.md](PLAN.md) for the full 17-step roadmap.
 
 ## The event-time semantic model
@@ -234,8 +236,9 @@ single-series, univariate, point-forecast model that cannot see a missing value.
 A capability is something a provider states, never something it is assumed to
 have.
 
-`of.models.list()` is empty until Step 8 registers the built-in reference
-provider and Step 9 lets external providers advertise their models.
+`of.models.list()` holds what the installed providers advertise — today the
+built-in reference provider, and from Step 9 whichever integrations are
+installed.
 
 ## Recipes, plans and tasks
 
@@ -371,6 +374,96 @@ model nobody trained. A model that declares `requires_fit=False` resolves to its
 descriptor instead: zero-shot use is something a model states, not something
 OpenForecast assumes.
 
+## Fitting and forecasting
+
+```python
+import openforecast as of
+
+model = of.fit(
+    model="builtin/seasonal-naive",
+    data=train,
+    params={"season_length": 24},
+    name="de-load",
+)                                      # local/de-load@01K5Z6QK3M9TQK1W2E3R4T5Y6U
+
+forecast = of.forecast(model="local/de-load", data=context, horizon=48)
+
+forecast.point().to_pandas()
+```
+
+A fit is five steps, and none of them branch on who provides the model: the
+recipe is normalized, every reference is resolved to a descriptor, the
+`ViewPlanner` materializes the view that descriptor's contract names, the view
+is checked against what the model declared it can consume, and only then is a
+provider started — into a staging directory that is published if, and only if,
+the fit succeeded. There is no place in that sequence for `if provider ==
+"nixtla"`, because there is nothing left for it to decide.
+
+`builtin/seasonal-naive` is the reference provider: a real local model with a
+real contract, so the engine can be proved end to end without a forecasting
+library installed. It is held to the same import boundary an external
+integration is — its whole surface is `openforecast.views`,
+`openforecast.errors`, `openforecast.protocol` and `openforecast.models`, and
+the architecture tests check that.
+
+Point-in-time data goes through the same two calls:
+
+```python
+model = of.fit(
+    model="builtin/seasonal-naive",
+    data=forecast_dataset,
+    plan=of.FitPlan(origins=of.AtOrigin(ref_time)),
+)
+
+forecast = of.forecast(model=model, data=forecast_dataset.at_origin(ref_time), horizon=24)
+```
+
+The artifact records `origin_fidelity: observed`, and the provider sees a
+`SeriesView` it cannot distinguish from one cut out of event-time data. Asking a
+series model to learn from *every* vintage raises `OriginScopeError` — from the
+planner, which is the only thing that knows the source type.
+
+Pipelines and ensembles are executed by OpenForecast rather than by any
+provider:
+
+```python
+model = of.fit(
+    model=of.Ensemble(
+        models=[
+            of.Pipeline(steps=[
+                of.StandardScaler(columns="targets"),
+                of.Model("builtin/seasonal-naive", params={"season_length": 24}),
+            ]),
+            of.Model("builtin/seasonal-naive", params={"season_length": 168}),
+        ],
+        combine=of.WeightedMean(weights=[0.7, 0.3]),
+    ),
+    data=train,
+    name="de-load",
+)
+```
+
+Each leaf is materialized, transformed and fitted into its own directory inside
+the one artifact, and the manifest records one training record per leaf, because
+two members may consume different views and there is no single materialization
+such an artifact could honestly claim. The scaler's statistics are fitted once
+and persisted: inference is scaled by those, never by whatever the forecast
+context happens to contain, and the forecast comes back on the scale the
+caller's data was on.
+
+A forecast is one long Arrow table, whatever was asked for:
+
+```text
+zone event_time target kind     quantile sample value
+
+DE   12:00      price  point    null     null   80
+DE   12:00      price  quantile 0.1      null   65
+```
+
+A wide forecast changes shape with the request — one column per target, or per
+target and quantile, or per sample path — and cannot be read by one reader. The
+wide conveniences arrive with the V1 surface in Step 15.
+
 ## The architectural invariant
 
 > OpenForecast owns forecasting semantics. Providers only consume
@@ -405,7 +498,7 @@ Imports flow in one direction only:
                         ↓
                      views/
                         ↓
-      runtime/  registry/  artifacts/
+      runtime/  registry/  artifacts/  providers/
                         ↓
         client.py  commands/  server/
 ```
@@ -443,6 +536,7 @@ src/openforecast/
     artifacts/   artifact lifecycle, manifests, atomic writes
     registry/    model and provider resolution
     runtime/     the execution engine and provider clients
+    providers/   the built-in reference provider
     protocol/    the provider wire protocol
     commands/    the CLI
     server/      the HTTP projection

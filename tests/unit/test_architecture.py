@@ -6,8 +6,8 @@ executed:
 
 1. ``openforecast`` never depends on a forecasting framework (rule 1).
 2. Imports only ever flow one way down the layer stack (rules 1, 2 and 7).
-3. Integrations import execution views, never semantic source datasets
-   (rules 2 and 3).
+3. Providers — the built-in one as much as an external integration — import
+   execution views, never semantic source datasets (rules 2 and 3).
 
 The forbidden-terminology scan (rule 6) lands in Step 15.
 """
@@ -17,6 +17,8 @@ from __future__ import annotations
 import ast
 import tomllib
 from pathlib import Path
+
+import pytest
 
 from tests._imports import (
     PACKAGE_ROOT,
@@ -60,7 +62,12 @@ LAYERS: tuple[tuple[str, ...], ...] = (
     # views/ materializes from semantic datasets, so it sits below them and
     # above everything that executes against them.
     ("openforecast.views",),
-    ("openforecast.runtime", "openforecast.registry", "openforecast.artifacts"),
+    (
+        "openforecast.runtime",
+        "openforecast.registry",
+        "openforecast.artifacts",
+        "openforecast.providers",
+    ),
     ("openforecast.client", "openforecast.commands", "openforecast.server"),
 )
 
@@ -151,10 +158,22 @@ def _requirement_name(requirement: str) -> str:
 # -- the provider boundary (rules 2 and 3) ---------------------------------
 
 INTEGRATIONS_ROOT = REPO_ROOT / "integrations"
+#: The built-in reference provider is held to the boundary it is the reference
+#: for, so this check is no longer only tested against a fixture.
+PROVIDERS_ROOT = PACKAGE_ROOT / "providers"
 
-# What an integration may import from OpenForecast. ``views`` re-exports the
-# vocabulary its schemas are built from, so a provider never needs ``data``.
-PROVIDER_MODULES = frozenset({"openforecast.views", "openforecast.errors", "openforecast.protocol"})
+# What a provider may import from OpenForecast. ``views`` re-exports the
+# vocabulary its schemas are built from, so a provider never needs ``data``;
+# ``models`` is how it declares what it provides, which is a descriptor and
+# never a dataset.
+PROVIDER_MODULES = frozenset(
+    {
+        "openforecast.views",
+        "openforecast.errors",
+        "openforecast.protocol",
+        "openforecast.models",
+    }
+)
 
 # Semantic source datasets. A provider that names one of these has been handed
 # something the view abstraction was supposed to absorb.
@@ -170,17 +189,24 @@ SOURCE_TYPES = frozenset(
 )
 
 
-def _provider_violations(source: str, path: Path) -> list[str]:
-    """Every way ``source`` could reach past the view boundary."""
+def _provider_violations(source: str, path: Path, own: str | None = None) -> list[str]:
+    """Every way ``source`` could reach past the view boundary.
+
+    ``own`` is the provider's own package, which it may of course import from;
+    for an external integration that is a package OpenForecast never sees.
+    """
+    allowed_modules: set[str] = set(PROVIDER_MODULES)
+    if own is not None:
+        allowed_modules.add(own)
     violations: list[str] = []
     for site in imports_in_source(source, path):
         if site.top_level != "openforecast":
             continue
         if not any(
             site.module == allowed or site.module.startswith(f"{allowed}.")
-            for allowed in PROVIDER_MODULES
+            for allowed in allowed_modules
         ):
-            violations.append(f"{site} -- providers may only import {sorted(PROVIDER_MODULES)}")
+            violations.append(f"{site} -- providers may only import {sorted(allowed_modules)}")
 
     tree = ast.parse(source, filename=str(path))
     for node in ast.walk(tree):
@@ -197,13 +223,23 @@ def _provider_violations(source: str, path: Path) -> list[str]:
     return violations
 
 
-def test_integrations_do_not_import_semantic_source_datasets() -> None:
+@pytest.mark.parametrize(
+    ("root", "own"),
+    [(INTEGRATIONS_ROOT, None), (PROVIDERS_ROOT, "openforecast.providers")],
+)
+def test_providers_do_not_import_semantic_source_datasets(root: Path, own: str | None) -> None:
+    """Every provider, shipped or external, consumes views and nothing else."""
     violations = [
         violation
-        for path in sorted(INTEGRATIONS_ROOT.rglob("*.py"))
-        for violation in _provider_violations(path.read_text(encoding="utf-8"), path)
+        for path in sorted(root.rglob("*.py"))
+        for violation in _provider_violations(path.read_text(encoding="utf-8"), path, own)
     ]
     assert not violations, "provider boundary violations:\n" + "\n".join(violations)
+
+
+def test_the_built_in_provider_is_a_real_provider() -> None:
+    """The check above is worth something only if it has something to check."""
+    assert sorted(path.name for path in PROVIDERS_ROOT.rglob("*.py"))
 
 
 def test_the_provider_boundary_check_actually_catches_a_violation() -> None:

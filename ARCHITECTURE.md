@@ -19,7 +19,9 @@ And its immediate corollary:
 2. **Providers consume execution views, not source semantic datasets.**
    A provider receives a `SeriesView`, `SequenceView`, `TabularView` or
    `ForecastView` — never a `TimeSeriesFrame`, `PointInTimeFrame` or
-   `ForecastDataset`. Its whole import surface is `openforecast.views`.
+   `ForecastDataset`. Its import surface is `openforecast.views`,
+   `openforecast.errors`, `openforecast.protocol` and `openforecast.models` —
+   the last of which is how it declares what it provides.
 3. **Providers must not branch on `TimeSeriesFrame` versus `ForecastDataset`.**
    If a provider needs to know which one it came from, the view abstraction has
    failed and the fix belongs in the `ViewPlanner`, not the provider.
@@ -48,7 +50,7 @@ layer above it, never one below.
                         ↓
                      views/
                         ↓
-      runtime/  registry/  artifacts/
+      runtime/  registry/  artifacts/  providers/
                         ↓
         client.py  commands/  server/
 ```
@@ -81,12 +83,14 @@ AST-scans the package and fails on:
 - any second definition of `ViewKind`, so the contract that requests a view and
   the view that satisfies it cannot drift apart, and any second definition of
   the four origin selections, for the same reason;
-- any import in `integrations/` that reaches past the view boundary: a provider
-  may import `openforecast.views`, `openforecast.errors` and
-  `openforecast.protocol`, and may not name `TimeSeriesFrame`,
-  `PointInTimeFrame`, `ForecastDataset` or `ForecastContext` (rules 2 and 3).
-  `integrations/` holds no Python yet, so that check is itself tested against a
-  violating fixture rather than passing vacuously.
+- any import in `integrations/` **or in `providers/`** that reaches past the view
+  boundary: a provider may import `openforecast.views`, `openforecast.errors`,
+  `openforecast.protocol` and `openforecast.models` — the last of which is how it
+  declares what it provides, which is a descriptor and never a dataset — and may
+  not name `TimeSeriesFrame`, `PointInTimeFrame`, `ForecastDataset` or
+  `ForecastContext` (rules 2 and 3). `integrations/` holds no Python yet, so that
+  check is also tested against a violating fixture; the built-in provider in
+  `providers/` is real code held to the same rule.
 
 CI additionally greps `uv tree --no-dev` so that a framework cannot arrive as
 somebody else's transitive dependency.
@@ -250,3 +254,66 @@ fitting one on whatever data the forecast call happened to be given — a number
 that looks like a forecast from a model the caller never trained is worse than an
 error. A model declaring `requires_fit=False` resolves to its descriptor instead,
 because zero-shot use is a declaration, not an assumption.
+
+## The engine and the providers
+
+`fit()` is a sequence, and its defining property is that no step of it branches
+on who provides the model:
+
+```text
+normalize the recipe        a string, a Model, a Pipeline, an Ensemble
+resolve every model         the registry answers what each reference means
+materialize each view       the ViewPlanner, from the model's own contract
+check it against the model  capabilities meeting data, before anything starts
+hand it to the provider     into a staging directory, published on success
+```
+
+There is no place for `if provider == "nixtla"` because there is nothing left
+for it to decide: the descriptor says which view to build and what the model can
+be given, and the provider registry says who executes it. Point-in-time is
+equally invisible — a `ForecastDataset` and a `TimeSeriesFrame` both go to
+`ViewPlanner.fit_view`, and the only difference that survives is the
+`OriginFidelity` in the manifest.
+
+The provider interface is a structural `Protocol`, not a base class. Step 9's
+provider runs in another process and another environment; what it shares with an
+in-process one is the shape of three calls — `descriptors`, `fit`, `forecast` —
+and not an inheritance chain it would have to import across a subprocess
+boundary. Everything crossing those calls is either bulk data in an execution
+view or a plain mapping (`params` as the user wrote them, `output` as it
+serializes), which is exactly what becomes a JSON control message and an Arrow
+bundle in Step 9.
+
+`builtin/seasonal-naive` exists so the engine can be proved end to end before any
+external library is involved. It is a real model with a real contract, and it is
+held to the provider boundary as strictly as an integration will be.
+
+**Checks happen before a provider starts.** A materialized view is validated
+against the model's declared capabilities — instances, targets, feature roles,
+missing values — so an unsupported request fails as a declaration mismatch
+naming the model and the data, rather than as a stack trace from inside somebody
+else's library. **Checks also happen after one answers.** A provider that
+returns a shorter horizon, or a target it invented, has produced something that
+looks exactly like a correct forecast, so the answer is matched against the
+question.
+
+**Composite recipes are OpenForecast's own execution.** A pipeline or an
+ensemble is fitted leaf by leaf into one artifact — each leaf materialized,
+transformed and handed to its own provider directory — and the forecasts are
+combined on the way back out. Such an artifact records one `TrainingRecord` per
+leaf rather than one for itself, because an ensemble's members may consume
+different views and there is no single materialization it could honestly
+describe. Its `provider` is `openforecast`: no library produced a weighted mean.
+
+Transform statistics are fitted once and persisted. A scaler that recomputed its
+mean from the forecast context would leak whatever that context happens to
+contain into the answer, and nothing in the output would show it; the same
+statistics are applied at inference and inverted out of the forecast, so what
+comes back is on the scale the caller's data was on.
+
+A forecast is one long Arrow table — instance keys, `event_time`, `target`,
+`kind`, `quantile`, `sample`, `value`. A wide forecast changes shape with the
+request (one column per target, or per target and quantile, or per sample path)
+and so cannot be read by one reader. The column vocabulary lives in `protocol/`
+for the same reason `ViewKind` does: a provider writes it and the engine reads
+it, and in Step 9 they are on opposite sides of a process.

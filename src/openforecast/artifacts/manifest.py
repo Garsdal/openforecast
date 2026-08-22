@@ -24,6 +24,12 @@ told the past was cleaner than it was — a difference no metric recovers later.
 ``horizon`` says what the model was bound to, so a request at a horizon it
 cannot serve is refused instead of silently truncated.
 
+A recipe that is not one model — a pipeline, an ensemble — is executed by
+OpenForecast rather than by a provider, and its members may consume different
+views. Such an artifact records one training record per fitted leaf in
+``members`` and no single ``training``, because there is no one materialization
+it could honestly describe.
+
 The recipe and the full training-view schema are their own files beside the
 manifest, and the manifest carries their hashes. An artifact is immutable, so a
 hash that no longer matches means the directory was edited underneath us, and
@@ -34,11 +40,13 @@ describes.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from hashlib import blake2b
 from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from openforecast.data.features import FeatureSpec
 from openforecast.data.frequency import Frequency
 from openforecast.errors import ArtifactError, SchemaError
 from openforecast.models.ref import ModelRef
@@ -54,6 +62,7 @@ from openforecast.views.sequences import SequenceView
 from openforecast.views.series import SeriesView
 
 __all__ = [
+    "COMPOSITE_PROVIDER",
     "LOCAL_NAMESPACE",
     "MissingValueTransform",
     "ModelManifest",
@@ -67,6 +76,11 @@ __all__ = [
 #: The namespace every fitted artifact lives in. ``nixtla/nhits`` is a model;
 #: ``local/de-price@01K...`` is something that was fitted here.
 LOCAL_NAMESPACE = "local"
+
+#: The provider recorded for an artifact OpenForecast executes itself. A
+#: pipeline's scaling and an ensemble's combination are OpenForecast's own
+#: semantics, so no library is named as having produced them.
+COMPOSITE_PROVIDER = "openforecast"
 
 #: The transforms that change what missing data means, and therefore have to be
 #: legible in the manifest rather than only inside the recipe tree.
@@ -106,6 +120,41 @@ class TrainedSchema(FeatureGroups):
             targets=schema.targets,
             instance_keys=schema.instance_keys,
             features=schema.features,
+        )
+
+    @classmethod
+    def merge(cls, schemas: Sequence[TrainedSchema]) -> TrainedSchema:
+        """What a composite artifact needs to be given: the union of its members'.
+
+        Every member was materialized from the same data, so the frequency, the
+        targets and the instance keys agree by construction and disagreement is
+        a bug rather than a case to reconcile. The features do not have to: a
+        tabular member consumes no observed feature, so the artifact requires one
+        exactly when some member of it does.
+        """
+        if not schemas:
+            raise SchemaError("a composite artifact is fitted from at least one view")
+        first = schemas[0]
+        for other in schemas[1:]:
+            if (first.frequency, first.targets, first.instance_keys) != (
+                other.frequency,
+                other.targets,
+                other.instance_keys,
+            ):
+                raise SchemaError(
+                    f"the members of this artifact were fitted on different data: "
+                    f"{first.frequency}/{list(first.targets)}/{list(first.instance_keys)} "
+                    f"and {other.frequency}/{list(other.targets)}/{list(other.instance_keys)}"
+                )
+        features: dict[str, FeatureSpec] = {}
+        for schema in schemas:
+            for feature in schema.features:
+                features.setdefault(feature.name, feature)
+        return cls(
+            frequency=first.frequency,
+            targets=first.targets,
+            instance_keys=first.instance_keys,
+            features=tuple(features.values()),
         )
 
     @property
@@ -213,8 +262,9 @@ class ModelManifest(BaseModel):
     artifact_id: str
     #: The alias name this revision was fitted under: ``local/de-price``.
     name: str
-    #: The model that was fitted — never local, never pinned.
-    source_model: ModelRef
+    #: The model that was fitted — never local, never pinned. ``None`` for a
+    #: composite recipe, which names several: the recipe is the answer there.
+    source_model: ModelRef | None = None
     provider: str
     provider_version: str
     openforecast_version: str
@@ -225,7 +275,13 @@ class ModelManifest(BaseModel):
     recipe_hash: str
     training_schema_hash: str
 
-    training: TrainingRecord
+    #: How the one model this artifact holds was trained. ``None`` for a
+    #: composite recipe, whose leaves are recorded in :attr:`members` instead.
+    training: TrainingRecord | None = None
+    #: One record per fitted leaf of a composite recipe, in recipe order. An
+    #: ensemble's members may consume different views, so there is no single
+    #: training record a composite artifact could honestly carry.
+    members: tuple[TrainingRecord, ...] = ()
     data_schema: TrainedSchema
     #: Lifted out of the recipe: whether, and how, missingness was altered.
     missing_value_transforms: tuple[MissingValueTransform, ...] = ()
@@ -237,19 +293,51 @@ class ModelManifest(BaseModel):
 
         if not is_artifact_id(self.artifact_id):
             raise ArtifactError(f"{self.artifact_id!r} is not an artifact id")
-        if self.source_model.is_pinned:
+        if self.source_model is not None:
+            self._check_source_model(self.source_model)
+        if (self.training is None) == (not self.members):
             raise ArtifactError(
-                f"{self.source_model} pins a revision; the source model is the model that "
-                f"was fitted, and the revision it produced is {self.artifact_id}"
+                f"{self.artifact_id} must record either how its one model was trained or "
+                f"one record per leaf of a composite recipe, and not both"
             )
-        if self.source_model.namespace == LOCAL_NAMESPACE:
+        if (self.source_model is None) != (self.training is None):
             raise ArtifactError(
-                f"{self.source_model} is itself an artifact reference; the source model "
-                f"names what a provider executes, as in 'nixtla/nhits'"
+                f"{self.artifact_id} names a source model if and only if it holds one "
+                f"model; a composite recipe names several, and the recipe records them"
             )
         # Rejects a name that is not one path segment, among other things.
         ModelRef(namespace=LOCAL_NAMESPACE, name=self.name)
         return self
+
+    def _check_source_model(self, source_model: ModelRef) -> None:
+        if source_model.is_pinned:
+            raise ArtifactError(
+                f"{source_model} pins a revision; the source model is the model that "
+                f"was fitted, and the revision it produced is {self.artifact_id}"
+            )
+        if source_model.namespace == LOCAL_NAMESPACE:
+            raise ArtifactError(
+                f"{source_model} is itself an artifact reference; the source model "
+                f"names what a provider executes, as in 'nixtla/nhits'"
+            )
+
+    @property
+    def training_records(self) -> tuple[TrainingRecord, ...]:
+        """Every fitted leaf, however many this artifact holds.
+
+        One for a leaf model, one per member for a composite. What the engine
+        walks when it has to ask something of everything that was fitted.
+        """
+        return self.members if self.training is None else (self.training,)
+
+    @property
+    def is_composite(self) -> bool:
+        """Whether OpenForecast, rather than one provider, executes this artifact."""
+        return self.training is None
+
+    def serves_horizon(self, horizon: int) -> bool:
+        """Whether every model in this artifact can produce ``horizon`` steps."""
+        return all(record.serves_horizon(horizon) for record in self.training_records)
 
     @property
     def ref(self) -> ModelRef:

@@ -221,6 +221,13 @@ def test_the_module_functions_read_the_default_catalog(
     assert models.list(provider="nixtla") == (NHITS,)
 
 
-def test_the_default_catalog_is_empty_until_a_provider_fills_it() -> None:
-    """Step 8 registers the built-in reference provider; nothing does yet."""
-    assert DEFAULT_CATALOG.list() == ()
+def test_the_default_catalog_holds_what_the_shipped_providers_advertise() -> None:
+    """Importing OpenForecast installs the built-in provider, and nothing else.
+
+    An external provider will fill the same catalog the same way in Step 9, over
+    a handshake instead of an import — which is why the catalog is something
+    providers push into rather than something that discovers them.
+    """
+    assert [str(descriptor.ref) for descriptor in DEFAULT_CATALOG.list()] == [
+        "builtin/seasonal-naive"
+    ]

@@ -93,9 +93,10 @@ class ModelRegistry:
         parsed = ModelRef.parse(ref)
         if parsed.namespace == LOCAL_NAMESPACE:
             handle = self.store.get(parsed)
+            source = handle.manifest.source_model or "the recipe recorded in it"
             raise ModelError(
                 f"{parsed} is a fitted artifact, not a model to fit; it was fitted from "
-                f"{handle.manifest.source_model}, so fit that instead"
+                f"{source}, so fit that instead"
             )
         descriptor = self._catalog.get(parsed)
         if not descriptor.lifecycle.supports_fit:

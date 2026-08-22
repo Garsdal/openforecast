@@ -27,6 +27,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from openforecast.artifacts.manifest import ModelManifest, TrainedSchema, TrainingRecord
+from openforecast.errors import ArtifactError
 from openforecast.models.ref import ModelRef
 
 __all__ = ["ModelHandle"]
@@ -61,7 +62,29 @@ class ModelHandle(BaseModel):
 
     @property
     def training(self) -> TrainingRecord:
+        """How the one model in this artifact was trained.
+
+        A composite artifact holds several, which is what
+        :attr:`training_records` is for; asking a pipeline or an ensemble for
+        *the* training record is a question with no answer rather than one worth
+        guessing at.
+        """
+        if self.manifest.training is None:
+            raise ArtifactError(
+                f"{self.ref} was fitted from a composite recipe holding "
+                f"{len(self.manifest.members)} models, so read training_records instead"
+            )
         return self.manifest.training
+
+    @property
+    def training_records(self) -> tuple[TrainingRecord, ...]:
+        """Every fitted model in this artifact, in recipe order."""
+        return self.manifest.training_records
+
+    @property
+    def is_composite(self) -> bool:
+        """Whether OpenForecast, rather than one provider, executes this artifact."""
+        return self.manifest.is_composite
 
     @property
     def data_schema(self) -> TrainedSchema:
@@ -74,15 +97,18 @@ class ModelHandle(BaseModel):
         return self.path / "provider"
 
     def serves_horizon(self, horizon: int) -> bool:
-        return self.manifest.training.serves_horizon(horizon)
+        """Whether every model in this artifact can produce ``horizon`` steps."""
+        return self.manifest.serves_horizon(horizon)
 
     def __str__(self) -> str:
         return str(self.ref)
 
     def __repr__(self) -> str:
-        training = self.manifest.training
+        records = self.manifest.training_records
+        source = self.manifest.source_model or f"{len(records)} models"
         return (
-            f"ModelHandle({self.ref}, source={self.manifest.source_model}, "
-            f"view={training.view}, origin_fidelity={training.origin_fidelity}, "
-            f"samples={training.samples})"
+            f"ModelHandle({self.ref}, source={source}, "
+            f"view={[record.view.value for record in records]}, "
+            f"origin_fidelity={[record.origin_fidelity.value for record in records]}, "
+            f"samples={[record.samples for record in records]})"
         )
