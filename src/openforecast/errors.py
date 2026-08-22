@@ -14,11 +14,15 @@ from __future__ import annotations
 
 __all__ = [
     "DataError",
+    "DuplicateModelError",
     "FrequencyError",
     "InconsistentTruthError",
+    "ModelError",
+    "ModelRefError",
     "OpenForecastError",
     "OriginScopeError",
     "SchemaError",
+    "UnknownModelError",
 ]
 
 
@@ -53,6 +57,39 @@ class OriginScopeError(OpenForecastError):
     origin. Asking for every historical vintage of a point-in-time dataset in
     that shape has no meaning, and picking one of them silently would train a
     model on data the caller never asked for.
+    """
+
+
+class ModelError(OpenForecastError):
+    """A model could not be named or resolved.
+
+    About the identifier and the catalog, not about the data: a model whose
+    contract the data cannot satisfy raises a data or scope error instead.
+    """
+
+
+class ModelRefError(ModelError, SchemaError):
+    """A model reference is not ``<namespace>/<name>[@revision]``.
+
+    Inherits from :class:`SchemaError` as well, because a malformed reference is
+    a declaration that is wrong before any data is looked at, and a caller
+    catching declaration errors should see this one too.
+    """
+
+
+class UnknownModelError(ModelError):
+    """Nothing is registered under that reference.
+
+    Distinct from a malformed reference: the name is well-formed, and no
+    provider advertises it.
+    """
+
+
+class DuplicateModelError(ModelError):
+    """Two descriptors claim the same reference.
+
+    A reference has to identify one model. Letting the second registration win
+    would make which model you get depend on provider load order.
     """
 
 

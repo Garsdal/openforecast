@@ -8,13 +8,17 @@ every source schema.
 
 Target and feature columns keep the names the caller gave them: a provider has
 to hand results back labeled with the target the user asked about.
+
+``ViewKind`` is defined in :mod:`openforecast.protocol.vocabulary` and
+re-exported here. A model's training contract has to name the view it consumes,
+and ``models/`` sits above ``views/`` in the layering, so the enum lives where
+both can reach it rather than being spelled twice.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from datetime import datetime
-from enum import StrEnum
 from hashlib import blake2b
 from typing import Any, ClassVar, Self
 
@@ -26,6 +30,7 @@ from openforecast.data.features import FeatureSpec
 from openforecast.data.frequency import Frequency
 from openforecast.data.schema import reject_duplicate_names
 from openforecast.errors import DataError, SchemaError
+from openforecast.protocol.vocabulary import ViewKind
 
 __all__ = [
     "CONTEXT_END",
@@ -62,26 +67,6 @@ HORIZON_STEP = "horizon_step"
 # Wide enough that a collision is not a practical concern, short enough to read
 # in an error message.
 _ID_BYTES = 8
-
-
-class ViewKind(StrEnum):
-    """Which execution view a model consumes.
-
-    Each names a training unit rather than a model family:
-
-    ```text
-    series      one complete time series          ARIMA, ETS, Theta
-    sequences   many context -> horizon sequences  NHiTS, TFT, PatchTST
-    tabular     individual supervised target rows  LightGBM, XGBoost, CatBoost
-    ```
-
-    ``forecast`` is the inference counterpart of all three.
-    """
-
-    SERIES = "series"
-    SEQUENCES = "sequences"
-    TABULAR = "tabular"
-    FORECAST = "forecast"
 
 
 def opaque_id(*parts: object) -> str:

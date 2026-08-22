@@ -223,6 +223,25 @@ def test_the_provider_boundary_check_actually_catches_a_violation() -> None:
     assert not _provider_violations(allowed, INTEGRATIONS_ROOT / "example" / "provider.py")
 
 
+def test_the_view_vocabulary_is_defined_exactly_once() -> None:
+    """A model's training contract names the same ``ViewKind`` the views are keyed by.
+
+    ``models/`` sits above ``views/`` and so cannot import it. The tempting fix
+    is a second enum with the same members, which would drift apart silently and
+    eventually put two spellings of one concept on the wire. The enum lives in
+    the innermost layer instead, where both can reach it.
+    """
+    definitions = [
+        path
+        for path in iter_source_files()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+        if isinstance(node, ast.ClassDef) and node.name == "ViewKind"
+    ]
+    assert definitions == [PACKAGE_ROOT / "protocol" / "vocabulary.py"], (
+        f"ViewKind must be defined once, in the shared vocabulary: {definitions}"
+    )
+
+
 def test_inner_layers_do_not_import_outer_layers() -> None:
     violations: list[str] = []
     for path in iter_source_files():
