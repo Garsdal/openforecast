@@ -1,14 +1,26 @@
-Yes. I would freeze the architecture now and implement it in **vertical stages**, where every stage ends with green tests and a usable public surface. The most important rule is that no stage is allowed to leak Nixtla semantics into OpenForecast.
+Absolutely. Below is the **full revised 1–17 implementation sequence**, with point-in-time forecasting built in as a first-class concept from the start rather than bolted on later.
 
-A few implementation decisions are worth locking first. Arrow should be the canonical in-memory/data-plane representation; Arrow supports typed schemas, metadata, and IPC serialization, which makes it a good cross-language boundary. ([Apache Arrow][1]) External providers should remain isolated Python projects with their own uv environments rather than workspace members sharing one resolution. uv explicitly supports isolated execution environments, while workspaces share dependency resolution. ([Astral Docs][2])
+The architectural invariant for the entire implementation is:
 
-For Nixtla specifically, the adapter boundary is important: NeuralForecast still fundamentally operates on `unique_id`, `ds`, `y` plus its historic/future/static exogenous conventions, while StatsForecast exposes fit/predict and persisted fitted models. OpenForecast should translate into those representations only inside the Nixtla provider. ([Nixtla][3])
+> **OpenForecast owns forecasting semantics. Providers only consume provider-neutral execution views. Point-in-time and ordinary event-time data are materialized into those views before crossing the provider boundary.**
+
+And:
+
+> **Providers must never branch on whether source data came from a `TimeSeriesFrame` or a `ForecastDataset`.**
 
 ---
 
-# Target repository after these plans
+# Step 1 — Repository foundation and architecture boundaries
 
-This is the structure I would build toward:
+## Goal
+
+Create the OpenForecast repository, package structure, dependency boundaries, CI, typing, linting, testing, and architectural rules.
+
+At the end of this stage, no forecasting functionality exists yet, but the repository structure makes it difficult to violate the intended architecture later.
+
+## Repository structure
+
+Create:
 
 ```text
 openforecast/
@@ -16,6 +28,7 @@ openforecast/
 ├── pyproject.toml
 ├── uv.lock
 ├── README.md
+├── ARCHITECTURE.md
 │
 ├── src/
 │   └── openforecast/
@@ -23,73 +36,21 @@ openforecast/
 │       ├── client.py
 │       │
 │       ├── data/
-│       │   ├── frame.py
-│       │   ├── schema.py
-│       │   ├── features.py
-│       │   ├── frequency.py
-│       │   └── validation.py
-│       │
+│       ├── views/
 │       ├── models/
-│       │   ├── refs.py
-│       │   ├── descriptors.py
-│       │   ├── capabilities.py
-│       │   └── handles.py
-│       │
 │       ├── recipes/
-│       │   ├── base.py
-│       │   ├── model.py
-│       │   ├── pipeline.py
-│       │   ├── ensemble.py
-│       │   ├── reduction.py
-│       │   └── transforms.py
-│       │
 │       ├── tasks/
-│       │   ├── fit.py
-│       │   ├── forecast.py
-│       │   ├── output.py
-│       │   └── resources.py
-│       │
 │       ├── artifacts/
-│       │   ├── manifest.py
-│       │   ├── store.py
-│       │   └── aliases.py
-│       │
 │       ├── registry/
-│       │   ├── models.py
-│       │   └── providers.py
-│       │
 │       ├── runtime/
-│       │   ├── engine.py
-│       │   ├── providers.py
-│       │   ├── environments.py
-│       │   ├── process.py
-│       │   └── ipc.py
-│       │
 │       ├── protocol/
-│       │   ├── version.py
-│       │   ├── messages.py
-│       │   └── errors.py
-│       │
 │       ├── commands/
-│       │   └── ...
-│       │
 │       └── server/
-│           └── ...
 │
 ├── integrations/
-│   └── nixtla/
-│       ├── pyproject.toml
-│       ├── uv.lock
-│       ├── src/
-│       │   └── openforecast_nixtla/
-│       │       ├── __main__.py
-│       │       ├── provider.py
-│       │       ├── catalog.py
-│       │       ├── conversion.py
-│       │       └── adapters/
-│       │           ├── statsforecast.py
-│       │           └── neuralforecast.py
-│       └── tests/
+│   ├── nixtla/
+│   ├── darts/
+│   └── sktime/
 │
 ├── tests/
 │   ├── unit/
@@ -103,30 +64,37 @@ openforecast/
     └── openapi/
 ```
 
-`openforecast_nixtla` is acceptable here because it is an independently distributed integration package. I would avoid `openforecast_core`, `openforecast_cli`, `openforecast_api`, etc. inside the main project.
+The main Python distribution is simply:
 
----
+```text
+openforecast
+```
 
-# Plan 1 — Repository foundation and architectural boundaries
+Do not create separate internal packages named:
 
-## Goal
+```text
+openforecast_core
+openforecast_api
+openforecast_cli
+```
 
-Create the repository, packaging, dependency rules, CI, formatting, typing and test structure without implementing forecasting functionality yet.
+The CLI lives under:
 
-This stage should establish an architectural rule:
+```text
+openforecast.commands
+```
 
-> `openforecast` has no dependency on Nixtla, Darts, sktime, PyTorch or any forecasting framework.
+The HTTP server lives under:
 
-External integrations depend on OpenForecast, never the reverse.
+```text
+openforecast.server
+```
 
-## Implement
+## Dependencies
 
-Create one main Python distribution:
+Root package should stay lightweight:
 
 ```toml
-[project]
-name = "openforecast"
-requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2",
     "pyarrow",
@@ -134,59 +102,47 @@ dependencies = [
 ]
 ```
 
-Development dependencies should include at least:
+Development tooling:
 
 ```text
 pytest
 pytest-cov
 hypothesis
 ruff
-mypy or pyright
+pyright
 ```
 
-CLI dependencies can be introduced when the CLI is implemented rather than forcing them into the first commit.
-
-Do **not** make `integrations/nixtla` part of the root uv workspace. It needs its own:
+Do not install:
 
 ```text
-pyproject.toml
-uv.lock
-.venv
+statsforecast
+neuralforecast
+darts
+sktime
+torch
+jax
+lightgbm
 ```
 
-because future providers may need incompatible Torch/JAX/etc. dependency graphs.
+into the root OpenForecast environment.
 
-Define import boundaries:
+Each integration gets its own `pyproject.toml`, `uv.lock`, and isolated runtime.
 
-```text
-data/
-models/
-recipes/
-tasks/
+## Architectural rules
 
-         ↓
+Write these explicitly into `ARCHITECTURE.md`.
 
-runtime/
-registry/
-artifacts/
+1. OpenForecast semantic types must never import provider libraries.
+2. Providers consume execution views, not source semantic datasets.
+3. Providers must not branch on `TimeSeriesFrame` versus `ForecastDataset`.
+4. Point-in-time vintages must never be silently replaced by newer information.
+5. Missing values must never be silently imputed.
+6. Provider-specific terminology must not leak into the public OpenForecast protocol.
+7. OpenAPI is a projection of OpenForecast semantics, not their source.
 
-         ↓
+## Architecture tests
 
-client.py
-```
-
-`protocol/` is allowed underneath provider/runtime boundaries but should not know anything about Nixtla.
-
-Set up CI commands:
-
-```bash
-uv sync
-uv run ruff check .
-uv run pytest
-uv run pyright
-```
-
-Add an architecture test that ensures the main package cannot accidentally import:
+Add tests that fail if root imports:
 
 ```text
 neuralforecast
@@ -197,89 +153,40 @@ torch
 jax
 ```
 
-A simple AST/import scan is enough.
+Later add equivalent tests ensuring provider packages cannot import source PIT semantic classes directly.
 
-## Public API target
+## CI
 
-`src/openforecast/__init__.py` should initially export nothing except:
+CI must run:
 
-```python
-__version__
+```bash
+uv sync
+uv run ruff check .
+uv run pyright
+uv run pytest
 ```
-
-Do not prematurely create stub APIs.
 
 ## Done when
 
-```bash
-uv run pytest
-uv run ruff check .
-```
-
-passes and:
-
-```bash
-uv tree
-```
-
-contains no forecasting framework.
+The repository installs cleanly and all architecture/quality checks pass.
 
 ---
 
-# Plan 2 — Define OpenForecast's time-series semantic model
-
-This is the most important implementation stage.
+# Step 2 — Event-time semantic model
 
 ## Goal
 
-Create an OpenForecast-native representation for:
+Implement OpenForecast's basic event-time time-series primitive:
 
 ```text
-single-instance univariate
-single-instance multivariate
-panel univariate
-panel multivariate
+instance × event_time × variable
 ```
 
-without creating four different container classes.
+This represents ordinary time-series data.
 
-The shape must derive from orthogonal axes.
+It deliberately does **not** represent forecast vintages.
 
-## Core primitives
-
-Implement:
-
-```python
-class FeatureAvailability(StrEnum):
-    OBSERVED = "observed"
-    KNOWN = "known"
-
-
-class FeatureKind(StrEnum):
-    TEMPORAL = "temporal"
-    STATIC = "static"
-```
-
-Then:
-
-```python
-class FeatureSpec(BaseModel):
-    name: str
-    kind: FeatureKind = FeatureKind.TEMPORAL
-    availability: FeatureAvailability | None = None
-```
-
-Validation:
-
-```text
-temporal feature
-    -> availability required
-
-static feature
-    -> availability must be None
-```
-
-Define OpenForecast's own frequency representation rather than exposing Pandas aliases as protocol semantics:
+## Implement frequency
 
 ```python
 class FrequencyUnit(StrEnum):
@@ -296,18 +203,42 @@ class Frequency(BaseModel):
     step: int = 1
 ```
 
-For example:
+Support parsing convenience strings such as:
 
 ```python
-Frequency(unit="minute", step=15)
-Frequency(unit="hour", step=1)
+Frequency.parse("15m")
+Frequency.parse("1h")
 ```
 
-Adapters later compile this into `"15min"`, `"H"`, etc.
+but store OpenForecast-native semantics internally.
+
+## Feature semantics
+
+```python
+class FeatureAvailability(StrEnum):
+    OBSERVED = "observed"
+    KNOWN = "known"
+
+
+class FeatureKind(StrEnum):
+    TEMPORAL = "temporal"
+    STATIC = "static"
+
+
+class FeatureSpec(BaseModel):
+    name: str
+    kind: FeatureKind = FeatureKind.TEMPORAL
+    availability: FeatureAvailability | None = None
+```
+
+Rules:
+
+```text
+temporal -> availability required
+static   -> availability must be None
+```
 
 ## `TimeSeriesSchema`
-
-Implement:
 
 ```python
 class TimeSeriesSchema(BaseModel):
@@ -316,84 +247,31 @@ class TimeSeriesSchema(BaseModel):
 
     instance_keys: tuple[str, ...] = ()
     targets: tuple[str, ...]
-
     features: tuple[FeatureSpec, ...] = ()
 ```
 
-Then expose derived properties:
+Derived properties:
 
 ```python
 schema.is_panel
 schema.is_univariate
 schema.is_multivariate
 schema.target_count
-schema.has_known_features
+
 schema.has_observed_features
+schema.has_known_features
 schema.has_static_features
 ```
 
-Examples:
-
-```python
-TimeSeriesSchema(
-    time="timestamp",
-    frequency=Frequency(unit="hour"),
-    targets=("load",),
-)
-```
-
-is:
+Do not create separate semantic enums like:
 
 ```text
-single-instance
-univariate
+PANEL_MULTIVARIATE
 ```
 
-This:
-
-```python
-TimeSeriesSchema(
-    time="timestamp",
-    frequency=Frequency(unit="hour"),
-    instance_keys=("country",),
-    targets=("load",),
-)
-```
-
-is:
-
-```text
-panel
-univariate
-```
-
-And:
-
-```python
-TimeSeriesSchema(
-    time="timestamp",
-    frequency=Frequency(unit="hour"),
-    instance_keys=("station",),
-    targets=("wind_u", "wind_v"),
-)
-```
-
-is:
-
-```text
-panel
-multivariate
-```
-
-Do not create enum values called `PANEL_MULTIVARIATE`.
-
-The axes derive from schema.
-
----
+These properties are derived from orthogonal axes.
 
 ## `TimeSeriesFrame`
-
-Implement the physical container:
 
 ```python
 class TimeSeriesFrame:
@@ -403,269 +281,621 @@ class TimeSeriesFrame:
     schema: TimeSeriesSchema
 ```
 
-This is important.
-
-### History table
-
-One row:
+Canonical history layout:
 
 ```text
-instance × timestamp
+instance_keys...
+event_time
+target columns...
+observed features...
+known features...
 ```
 
-Columns include:
+Future table:
 
 ```text
-instance keys
-timestamp
-targets
-observed features
-known features where historically available
+instance_keys...
+event_time
+known temporal features...
 ```
 
-Example:
+Static table:
 
 ```text
-country timestamp             load  temperature  wind_fc
-DE      2026-01-01 00:00      51.1     4.2       12.1
-DE      2026-01-01 01:00      49.8     4.0       12.8
-FR      2026-01-01 00:00      42.4     7.1        8.4
+instance_keys...
+static features...
 ```
 
-### Future table
-
-Contains:
-
-```text
-instance keys
-timestamp
-known temporal features
-```
-
-It must **not** contain:
-
-```text
-targets
-observed-only features
-```
-
-Example:
-
-```text
-country timestamp             wind_fc holiday
-DE      2026-01-03 00:00       15.2    false
-DE      2026-01-03 01:00       15.8    false
-```
-
-### Static table
-
-One row per logical instance.
-
-```text
-country capacity region
-DE      81.2     central
-FR      63.1     west
-```
-
-For a single-instance dataset, permit a single-row static table without instance keys.
-
----
-
-## Convenience constructors
-
-The core should accept Pandas, Polars and Arrow eventually, but canonicalize immediately to Arrow.
-
-Start with:
+## Public API
 
 ```python
 frame = of.TimeSeriesFrame.from_pandas(
     history=df,
     time="timestamp",
     frequency="1h",
-    targets="load",
-)
-```
-
-Also:
-
-```python
-frame = of.TimeSeriesFrame.from_pandas(
-    history=train,
-    future=future,
-    static=static,
-    time="timestamp",
-    frequency="1h",
     instance_keys=["country"],
     targets=["load"],
-    observed_features=["temperature"],
-    known_features=["wind_fc", "holiday"],
+    observed_features=["temperature_actual"],
+    known_features=["temperature_forecast"],
     static_features=["capacity"],
 )
 ```
 
-The convenience layer may parse `"1h"`.
-
-The underlying `Frequency` object remains canonical.
-
-## Validation rules
-
-Implement all of these now:
-
-```text
-time column exists
-all instance keys exist
-all targets exist in history
-target names are unique
-feature names are unique
-target cannot also be feature
-history contains no duplicate instance/time keys
-future contains no duplicate instance/time keys
-static contains exactly one row per instance
-future contains only known temporal features
-observed features cannot extend into future
-timestamps are compatible with declared frequency
-future begins after history for each instance
-all required future timestamps exist for declared horizon when validated against a ForecastTask
-```
-
-Do not silently sort duplicates or silently drop invalid fields.
-
-## Arrow serialization
+## Validation
 
 Implement:
 
+```text
+required columns exist
+targets unique
+features unique
+target cannot also be feature
+no duplicate instance/time rows
+timestamps satisfy declared frequency
+future contains no target columns
+future contains no observed-only features
+static contains one row per instance
+```
+
+Do not silently repair malformed data.
+
+## Serialization
+
 ```python
 frame.write(path)
-TimeSeriesFrame.read(path)
+frame = TimeSeriesFrame.read(path)
 ```
 
-using an OpenForecast bundle:
+using:
 
 ```text
-frame/
-    schema.json
-    history.arrow
-    future.arrow
-    static.arrow
+schema.json
+history.arrow
+future.arrow
+static.arrow
 ```
-
-Only files that exist are written.
-
-Use Arrow IPC rather than JSON for data. Arrow's IPC formats are explicitly intended for record-batch serialization/interprocess exchange. ([Apache Arrow][4])
 
 ## Tests
 
-Use Hypothesis/property tests to generate combinations of:
+Test:
 
 ```text
-single/panel
-uni/multivariate
-0/1/multiple features
-observed/known/static
+single univariate
+single multivariate
+panel univariate
+panel multivariate
+static/known/observed features
+Arrow round-trip
 ```
 
-Test Arrow round-trip equality.
+Use Hypothesis for shape/property tests.
 
 ## Done when
 
-These all work:
-
-```python
-frame.schema.is_panel
-frame.schema.is_multivariate
-frame.write(...)
-TimeSeriesFrame.read(...)
-```
-
-with zero dependency on forecasting libraries.
+`TimeSeriesFrame` completely represents ordinary event-time time series without any provider dependency.
 
 ---
 
-# Plan 3 — Model references, descriptors and capabilities
+# Step 3 — Point-in-time semantic model
 
 ## Goal
 
-Solve the `"nixtla/nhits"` problem before fitting anything.
+Make point-in-time forecasting a first-class OpenForecast concept.
 
-A string identifies a **model resource**, not necessarily a fitted model.
+Represent:
+
+```text
+instance × origin_time × event_time × variable
+```
+
+where:
+
+```text
+origin_time = when information was available
+event_time  = what time the information refers to
+```
+
+## Implement `PointInTimeSchema`
+
+```python
+class PointInTimeSchema(BaseModel):
+    origin_time: str
+    event_time: str
+
+    event_frequency: Frequency
+    origin_frequency: Frequency | None = None
+
+    instance_keys: tuple[str, ...] = ()
+    features: tuple[FeatureSpec, ...]
+```
+
+## Implement `PointInTimeFrame`
+
+```python
+class PointInTimeFrame:
+    table: pa.Table
+    schema: PointInTimeSchema
+```
+
+Canonical Arrow key:
+
+```text
+(instance_keys..., origin_time, event_time)
+```
+
+Example:
+
+```text
+zone origin_time event_time wind_fc load_fc
+DE   08:00       12:00      10.1    54.2
+DE   09:00       12:00      11.7    54.8
+DE   10:00       12:00      12.4    55.1
+```
+
+Preserve NaNs exactly.
+
+## Lead time
+
+Do not store `lead_time` as a required structural column.
+
+Derive:
+
+```python
+lead = event_time - origin_time
+```
+
+Expose:
+
+```python
+pit.with_lead_time(unit="hour")
+```
+
+## Implement `ForecastDataset`
+
+```python
+class ForecastDataset:
+    information: PointInTimeFrame
+    truth: TimeSeriesFrame
+```
+
+This deliberately separates:
+
+```text
+what was knowable
+```
+
+from:
+
+```text
+what actually happened
+```
+
+## Existing `(ref_time, target_time)` convenience constructor
+
+Support:
+
+```python
+dataset = of.ForecastDataset.from_pandas(
+    df,
+    origin_time="ref_time",
+    event_time="target_time",
+    instance_keys=["zone"],
+    targets=["price"],
+    known_features=[
+        "wind_fc",
+        "solar_fc",
+        "load_fc",
+    ],
+    observed_features=[],
+    event_frequency="1h",
+    origin_frequency="1h",
+)
+```
+
+If:
+
+```text
+08:00 -> 12:00 -> price 80
+09:00 -> 12:00 -> price 80
+```
+
+extract one truth row:
+
+```text
+12:00 -> price 80
+```
+
+If labels disagree:
+
+```text
+08:00 -> 12:00 -> 80
+09:00 -> 12:00 -> 81
+```
+
+raise:
+
+```text
+InconsistentTruthError
+```
+
+Do not arbitrarily choose one.
+
+## Implement `ForecastContext`
+
+Represent exactly one inference origin.
+
+```python
+context = dataset.at_origin(
+    "2026-08-22T11:00:00Z"
+)
+```
+
+returns:
+
+```python
+ForecastContext
+```
+
+Also support live construction:
+
+```python
+context = of.ForecastContext.from_pandas(
+    history=history_df,
+    future=future_df,
+    origin_time=ref_time,
+    event_time="target_time",
+    instance_keys=["zone"],
+    targets=["price"],
+    observed_features=[...],
+    known_features=[...],
+    frequency="1h",
+)
+```
+
+## Validation
+
+Test:
+
+```text
+duplicate origin/event rejected
+NaNs preserved
+different vintages preserved
+truth unique by instance/event
+at_origin(t) selects only vintage t
+future vintage never leaks backward
+```
+
+Use poisoned future values such as `999999` to detect leakage.
+
+## Done when
+
+OpenForecast can faithfully represent production PIT training data without any provider-specific representation.
+
+---
+
+# Step 4 — Execution View intermediate representation and ViewPlanner
+
+## Goal
+
+Create the abstraction that prevents PIT branching from appearing in every provider.
+
+Semantic source data:
+
+```text
+TimeSeriesFrame
+ForecastDataset
+ForecastContext
+```
+
+must be converted into provider-neutral **execution views**.
+
+Providers consume only execution views.
+
+## Implement package
+
+```text
+openforecast/views/
+    base.py
+    series.py
+    windows.py
+    tabular.py
+    forecast.py
+    planner.py
+    provenance.py
+```
+
+## `SeriesView`
+
+For classical single-time-axis forecasters.
+
+```python
+class SeriesView:
+    temporal: pa.Table
+    static: pa.Table | None
+    schema: SeriesViewSchema
+```
+
+Shape:
+
+```text
+series_id
+event_time
+target columns
+feature columns
+```
+
+Used by:
+
+```text
+AutoARIMA
+ETS
+Theta
+local forecasters
+```
+
+## `WindowView`
+
+For global/window-learning models.
+
+```python
+class WindowView:
+    temporal: pa.Table
+    static: pa.Table | None
+    samples: pa.Table
+    schema: WindowViewSchema
+```
+
+`temporal`:
+
+```text
+sample_id
+event_time
+targets...
+features...
+```
+
+`samples`:
+
+```text
+sample_id
+instance keys...
+origin_time
+context_start
+context_end
+forecast_start
+forecast_end
+```
+
+One:
+
+```text
+instance × origin
+```
+
+equals one training sample.
+
+`sample_id` should be opaque and deterministic.
+
+## `TabularView`
+
+For reduction/regression models.
+
+```python
+class TabularView:
+    X: pa.Table
+    y: pa.Table
+    keys: pa.Table
+    schema: TabularViewSchema
+```
+
+Keys include:
+
+```text
+row_id
+instance keys
+origin_time
+event_time
+horizon_step
+```
+
+This view preserves exactly the type of training data currently used for PIT LightGBM.
+
+## `ForecastView`
+
+Standardized inference representation:
+
+```python
+class ForecastView:
+    origin_time: datetime
+    history: pa.Table
+    future: pa.Table
+    static: pa.Table | None
+    metadata: ForecastViewMetadata
+```
+
+## `ViewPlanner`
+
+```python
+class ViewPlanner:
+
+    def fit_view(
+        self,
+        data,
+        contract,
+        fit_plan,
+        task,
+    ) -> FitView:
+        ...
+
+    def forecast_view(
+        self,
+        context,
+        contract,
+        task,
+    ) -> ForecastView:
+        ...
+```
+
+## Required mapping
+
+```text
+                     Series      Windows      Tabular
+
+TimeSeriesFrame       yes         yes          yes
+ForecastDataset       selected    yes          yes
+ForecastContext       forecast    forecast     forecast
+```
+
+For ordinary `TimeSeriesFrame` → windows:
+
+```text
+historical forecast origins are simulated
+```
+
+For `ForecastDataset` → windows:
+
+```text
+actual historical forecast vintages are used
+```
+
+## Provenance
+
+Define:
+
+```python
+class OriginFidelity(StrEnum):
+    SIMULATED = "simulated"
+    OBSERVED = "observed"
+```
+
+A model trained using real PIT data must record:
+
+```text
+OBSERVED
+```
+
+A model trained by cutting windows from one freshest historical time series records:
+
+```text
+SIMULATED
+```
+
+## Provider boundary enforcement
+
+Add an architecture test prohibiting integrations from importing:
+
+```text
+ForecastDataset
+PointInTimeFrame
+```
+
+Providers can import only:
+
+```text
+SeriesView
+WindowView
+TabularView
+ForecastView
+```
+
+## Done when
+
+The same `WindowView` type can be generated from both ordinary event-time and PIT data.
+
+---
+
+# Step 5 — Model references, descriptors, capabilities and execution contracts
+
+## Goal
+
+Define what a model identifier means and what execution view a model consumes.
+
+Keep the clean OpenRouter-style string UX.
 
 ## `ModelRef`
 
-Implement parsing for:
+Syntax:
+
+```text
+<namespace>/<name>[@revision]
+```
+
+Examples:
 
 ```text
 nixtla/nhits
 nixtla/autoarima
-
-local/electricity-price
-local/electricity-price@01K3ABC...
+darts/nhits
+local/de-price
+local/de-price@01K...
 ```
 
-Model reference grammar:
+A string does not itself imply whether it is fitted.
 
-```text
-<namespace>/<name>[@<revision>]
-```
+The registry resolves it.
 
-Do not encode resource type into the string.
-
-Resolve it through the registry.
-
-Implement:
-
-```python
-ModelRef.parse("nixtla/nhits")
-```
-
-but all public APIs accept plain strings.
-
----
-
-## `ModelDescriptor`
-
-Implement:
+## Lifecycle
 
 ```python
 class ModelLifecycle(BaseModel):
     requires_fit: bool
     supports_fit: bool
     supports_update: bool = False
-
-
-class ModelDescriptor(BaseModel):
-    ref: ModelRef
-    provider: str
-    display_name: str
-    lifecycle: ModelLifecycle
-    capabilities: ModelCapabilities
-    parameters_schema: dict
 ```
 
-A future foundation model might say:
+## Execution contract
+
+```python
+class FitViewKind(StrEnum):
+    SERIES = "series"
+    WINDOWS = "windows"
+    TABULAR = "tabular"
+
+
+class OriginScope(StrEnum):
+    SINGLE = "single"
+    MULTIPLE = "multiple"
+
+
+class TrainingContract(BaseModel):
+    view: FitViewKind
+    origin_scope: OriginScope
+
+    context_required: bool = False
+    horizon_bound_at_fit: bool = False
+    supports_unseen_instances: bool = False
+```
+
+Examples:
+
+### AutoARIMA
 
 ```yaml
-ref: amazon/chronos-2
-
-lifecycle:
-  requires_fit: false
-  supports_fit: true
+view: series
+origin_scope: single
+horizon_bound_at_fit: false
 ```
 
-NHiTS says:
+### NHiTS
 
 ```yaml
-ref: nixtla/nhits
-
-lifecycle:
-  requires_fit: true
-  supports_fit: true
+view: windows
+origin_scope: multiple
+context_required: true
+horizon_bound_at_fit: true
+supports_unseen_instances: true
 ```
 
----
+### LightGBM reduction
 
-# Model capability axes
+```yaml
+view: tabular
+origin_scope: multiple
+```
 
-Make this structured.
+## Data capabilities
+
+Implement structured:
 
 ```python
 class InstanceCapabilities(BaseModel):
@@ -688,192 +918,107 @@ class OutputCapabilities(BaseModel):
     point: bool
     quantiles: bool
     samples: bool
-
-
-class ModelCapabilities(BaseModel):
-    instances: InstanceCapabilities
-    targets: TargetCapabilities
-    features: FeatureCapabilities
-    outputs: OutputCapabilities
-
-    regular_time: bool = True
-    irregular_time: bool = False
 ```
 
-Add:
+## Missing values
 
 ```python
-capabilities.validate_frame(frame)
-capabilities.validate_output(output)
+class MissingValueSupport(StrEnum):
+    NATIVE = "native"
+    REQUIRES_TRANSFORM = "requires_transform"
+    UNSUPPORTED = "unsupported"
 ```
 
-This must produce OpenForecast-native exceptions:
+Never silently impute PIT NaNs.
 
-```text
-UnsupportedDataShape
-UnsupportedFeature
-UnsupportedOutput
-ModelRequiresFit
+## `ModelDescriptor`
+
+```python
+class ModelDescriptor(BaseModel):
+    ref: ModelRef
+    provider: str
+    display_name: str
+
+    lifecycle: ModelLifecycle
+    training: TrainingContract
+    capabilities: ModelCapabilities
+
+    parameters_schema: dict
 ```
 
-Never allow native Nixtla errors to be the first validation layer.
-
----
-
-# Model registry
-
-Implement:
+## Registry API
 
 ```python
 of.models.list()
-of.models.get("builtin/seasonal-naive")
+
+descriptor = of.models.get("nixtla/nhits")
 ```
-
-The registry initially only knows built-in models.
-
-Later installed providers contribute descriptors.
 
 ## Done when
 
-You can run:
-
-```python
-model = of.models.get("builtin/seasonal-naive")
-
-print(model.capabilities.targets.multivariate)
-```
-
-without executing anything.
+A model descriptor fully explains how OpenForecast must materialize data before provider execution.
 
 ---
 
-# Plan 4 — Define recipes, fit tasks and forecast tasks
+# Step 6 — Recipes, FitPlan, origin selection and forecast tasks
 
 ## Goal
 
-Define the shared model-construction language **before** integrating Nixtla.
+Define OpenForecast's provider-independent model construction and training language.
 
-This is your forecasting intermediate representation.
-
----
-
-## Leaf model recipe
-
-Implement:
+## Leaf model
 
 ```python
-recipe = of.Model(
+of.Model(
     "nixtla/nhits",
     params={
-        "input_size": 168,
-        "max_steps": 1000,
+        "max_steps": 500,
     },
 )
 ```
 
-String shorthand:
+Do not expose semantic concepts such as context length through provider params when OpenForecast can own them.
+
+## Pipeline
 
 ```python
-of.fit(
-    model="nixtla/nhits",
-    ...
-)
-```
-
-must normalize internally to:
-
-```python
-Model(ref="nixtla/nhits")
-```
-
-Provider-specific hyperparameters are allowed in `params`.
-
-They are validated against:
-
-```text
-ModelDescriptor.parameters_schema
-```
-
-Do **not** create OpenForecast fields for every NHiTS parameter.
-
----
-
-# Pipeline recipe
-
-Create:
-
-```python
-recipe = of.Pipeline(
+of.Pipeline(
     steps=[
-        of.StandardScaler(
-            columns="targets",
-            per_instance=True,
-        ),
+        of.StandardScaler(columns="targets"),
         of.Model("nixtla/nhits"),
     ]
 )
 ```
 
-Start with one built-in transform:
-
-```text
-StandardScaler
-```
-
-That is enough to prove pipeline semantics.
-
-Pipeline transforms should be represented as recipe AST nodes and be serializable.
-
----
-
-# Ensemble recipe
-
-Implement:
+## Ensemble
 
 ```python
-recipe = of.Ensemble(
+of.Ensemble(
     models=[
         of.Model("nixtla/nhits"),
         of.Model("nixtla/autoarima"),
     ],
-    combine=of.WeightedMean(
-        weights=[0.7, 0.3],
-    ),
+    combine=of.Mean(),
 )
 ```
 
 Also:
 
 ```python
-combine=of.Mean()
+of.WeightedMean(weights=[0.7, 0.3])
 ```
 
-The engine, not Nixtla, owns cross-model ensemble composition.
-
-Restrict V1 aggregation to:
-
-```text
-point forecasts
-matching quantile levels
-```
-
-Do not pretend weighted quantiles form a rigorous distribution mixture.
-
----
-
-# Reduction recipe
-
-Define and serialize now:
+## Reduction
 
 ```python
-recipe = of.Reduction(
-    estimator="sklearn/lightgbm",
-    strategy="recursive",
-    lags=[1, 2, 24, 48, 168],
+of.Reduction(
+    estimator="lightgbm/regressor",
+    strategy="direct",
+    lags=[1, 24, 168],
 )
 ```
 
-Supported strategies in the semantic model:
+Strategies:
 
 ```text
 recursive
@@ -881,376 +1026,278 @@ direct
 multioutput
 ```
 
-Do **not** execute Reduction yet.
+Execution can be unsupported initially, but the protocol is defined now.
 
-It exists because sktime/Darts will compile it later.
-
-Trying to run it before an eligible provider exists should raise:
-
-```text
-UnsupportedRecipeError
-```
-
-This is preferable to postponing the protocol design until sktime arrives.
-
----
-
-# `FitPlan`
+## Origin selection
 
 Implement:
+
+```python
+of.AllOrigins(stride=1)
+of.LatestOrigin()
+of.AtOrigin(timestamp)
+of.OriginsBetween(start, end, stride=12)
+```
+
+These work identically for:
+
+```text
+TimeSeriesFrame -> simulated origins
+ForecastDataset -> observed origins
+```
+
+## Window semantics
+
+```python
+of.WindowPlan(
+    context=168,
+)
+```
+
+This is OpenForecast-native.
+
+Do not require callers to additionally specify:
+
+```text
+Nixtla input_size=168
+Darts input_chunk_length=168
+```
+
+Those compile from `WindowPlan`.
+
+## `FitPlan`
 
 ```python
 plan = of.FitPlan(
-    validation=of.Holdout(steps=24),
+    origins=of.AllOrigins(),
+    window=of.WindowPlan(context=168),
+    seed=42,
     resources=of.Resources(
         accelerator="auto",
     ),
-    seed=42,
 )
 ```
 
-Define a future-facing optional:
+Reserve HPO/search fields but reject unsupported configurations explicitly.
 
-```python
-search: SearchPlan | None
-```
-
-but in V1:
-
-```text
-search != None
-```
-
-raises:
-
-```text
-UnsupportedFitPlan
-```
-
-until tuning is implemented.
-
-This preserves the semantic boundary without pretending HPO already works.
-
----
-
-# `ForecastTask`
+## PIT transforms
 
 Implement:
 
 ```python
-task = of.ForecastTask(
-    horizon=24,
+of.LeadTimeFeature(
+    name="lead_hours",
+    unit="hour",
 )
 ```
 
-V1 horizons are **steps**, not `"48h"`.
-
-That avoids DST/calendar ambiguity.
-
-Later duration-based horizons can compile into steps.
-
----
-
-# `OutputSpec`
-
-Implement:
+and optionally:
 
 ```python
-of.OutputSpec.point()
+of.OriginCalendarFeatures(
+    hour=True,
+    weekday=True,
+)
+```
+
+## Explicit missing handling
+
+```python
+of.MissingIndicator(columns="features")
 ```
 
 and:
 
 ```python
-of.OutputSpec.quantiles([0.1, 0.5, 0.9])
+of.Impute(
+    columns="features",
+    method="median",
+)
 ```
 
-and reserve:
+A neural model requiring imputation can therefore be:
 
 ```python
+of.Pipeline(
+    steps=[
+        of.MissingIndicator(columns="features"),
+        of.Impute(columns="features", method="median"),
+        of.Model("nixtla/nhits"),
+    ]
+)
+```
+
+## Forecast task
+
+```python
+of.ForecastTask(
+    horizon=24,
+)
+```
+
+V1 horizon = steps.
+
+## Output
+
+```python
+of.OutputSpec.point()
+of.OutputSpec.quantiles([0.1, 0.5, 0.9])
 of.OutputSpec.samples(100)
 ```
 
-if supported by the model.
-
----
-
-# Canonical forecast result
-
-I would use a long Arrow representation.
-
-```text
-<instance keys>
-timestamp
-target
-kind
-quantile
-sample
-value
-```
-
-Examples:
-
-```text
-DE 2026-01-03T00 load point    null null 52.3
-DE 2026-01-03T00 load quantile 0.1  null 45.8
-DE 2026-01-03T00 load quantile 0.5  null 51.9
-DE 2026-01-03T00 load quantile 0.9  null 59.4
-```
-
-This gives you one stable Arrow schema for univariate, multivariate and probabilistic outputs.
-
-Expose convenience methods:
-
-```python
-forecast.to_pandas()
-forecast.point()
-forecast.quantile(0.5)
-forecast.to_wide()
-```
-
----
-
-# Serialization
-
-Every recipe/task must round-trip JSON:
-
-```python
-recipe.model_dump_json()
-ModelRecipe.model_validate_json(...)
-```
-
-This matters because the exact same AST will eventually travel through provider RPC and HTTP.
-
 ## Done when
 
-These parse and serialize:
-
-```python
-of.Model(...)
-of.Pipeline(...)
-of.Ensemble(...)
-of.Reduction(...)
-of.FitPlan(...)
-of.ForecastTask(...)
-of.OutputSpec(...)
-```
-
-without any provider being installed.
+All recipes/tasks serialize and deserialize independently of providers.
 
 ---
 
-# Plan 5 — Artifact lifecycle and local model registry
+# Step 7 — Model artifact lifecycle and local model registry
 
 ## Goal
 
-Make:
+Make fitted models first-class immutable resources while preserving string model identifiers.
+
+## Flow
 
 ```text
 ModelDefinition
-      ↓ fit
+      ↓
+fit
+      ↓
 ModelArtifact
-      ↓ forecast
-Forecast
+      ↓
+forecast
 ```
 
-real.
+## Artifact refs
 
----
-
-# Artifact identifiers
-
-Every fit creates an immutable revision:
-
-```text
-local/electricity-price@01K3X...
-```
-
-Optionally create a mutable alias:
-
-```text
-local/electricity-price
-```
-
-pointing to that revision.
-
-So:
+Fit:
 
 ```python
 model = of.fit(
     model="...",
-    data=train,
-    name="electricity-price",
+    data=data,
+    name="de-price",
 )
 ```
 
 returns:
 
-```python
-ModelHandle(
-    ref="local/electricity-price@01K3X..."
-)
+```text
+local/de-price@01K...
 ```
 
-and:
+Alias:
 
-```python
-str(model)
+```text
+local/de-price
 ```
 
-returns the immutable ref.
+points to the latest selected immutable revision.
 
----
-
-# Artifact layout
-
-Use platform-specific application storage via `platformdirs`.
-
-Conceptually:
+## Artifact structure
 
 ```text
 ~/.local/share/openforecast/
     models/
-        01K3X.../
+        <artifact-id>/
             manifest.json
             recipe.json
             schema.json
             provider/
                 ...
     aliases/
-        electricity-price.json
+        de-price.json
 ```
 
-The provider directory is opaque to core.
+Provider directory is opaque.
 
-The manifest contains:
+## Manifest
+
+Include:
+
+```text
+artifact ID
+source model
+recipe
+provider
+provider version
+OpenForecast version
+protocol version
+training schema hash
+
+training view:
+    series/windows/tabular
+
+origin fidelity:
+    observed/simulated
+
+origin selection
+context
+horizon
+number of samples
+materializer version
+feature schema
+missing-value transforms
+```
+
+Example:
 
 ```json
 {
-  "artifact_id": "...",
-  "source_model": "nixtla/nhits",
-  "recipe": {},
-  "provider": "nixtla",
-  "provider_version": "...",
-  "openforecast_version": "...",
-  "protocol_version": 1,
-  "training_schema_hash": "...",
-  "created_at": "...",
-  "metadata": {}
+  "training": {
+    "view": "windows",
+    "origin_fidelity": "observed",
+    "context": 168,
+    "horizon": 72,
+    "samples": 8832
+  }
 }
 ```
 
-Provider-specific model files live under:
+## Atomic writes
+
+Train into:
 
 ```text
-provider/
+.tmp/<artifact-id>
 ```
 
-OpenForecast does not inspect them.
+and rename atomically only after success.
 
----
-
-# Atomicity
-
-Fit into:
-
-```text
-.tmp/<id>/
-```
-
-and atomically rename only after success.
-
-A failed training run must never produce a resolvable model ref.
-
-Alias updates must be atomic.
-
----
-
-# User API
-
-Implement:
+## `ModelHandle`
 
 ```python
-model = of.models.get("local/electricity-price")
+class ModelHandle:
+    ref: ModelRef
+    manifest: ModelManifest
 ```
 
-and:
-
-```python
-model = of.load("local/electricity-price")
-```
-
-if you want the convenience alias.
-
-`ModelHandle` should contain metadata, not loaded heavyweight model objects.
-
-Loading the native artifact only happens in the provider environment.
+`ModelHandle` must not keep a heavyweight native model loaded.
 
 ## Done when
 
-A fake artifact can be:
+Artifacts can be:
 
 ```text
 created
-resolved by immutable ref
-resolved by alias
-deleted safely
-round-tripped through manifest serialization
+resolved
+aliased
+reloaded
+deleted
 ```
+
+without providers being involved in registry semantics.
 
 ---
 
-# Plan 6 — Execution engine and built-in reference provider
-
-This stage proves that OpenForecast itself works before Nixtla exists.
+# Step 8 — Core execution engine and built-in reference provider
 
 ## Goal
 
-Implement:
+Make `fit()` and `forecast()` work end-to-end before adding external providers.
 
-```python
-of.fit(...)
-of.forecast(...)
-```
-
-end to end using a tiny built-in reference provider.
-
----
-
-# Provider abstraction
-
-Core should know:
-
-```python
-class ProviderClient(Protocol):
-
-    def describe_models(self) -> list[ModelDescriptor]:
-        ...
-
-    def fit(
-        self,
-        recipe: ModelRecipe,
-        data: TimeSeriesFrame,
-        plan: FitPlan,
-        destination: Path,
-    ) -> ProviderArtifact:
-        ...
-
-    def forecast(
-        self,
-        artifact: ModelArtifact,
-        data: TimeSeriesFrame,
-        task: ForecastTask,
-        output: OutputSpec,
-    ) -> Forecast:
-        ...
-```
-
-This is a **client to a provider**, not necessarily an in-process Python implementation.
-
----
-
-# Built-in model
+## Reference model
 
 Implement:
 
@@ -1258,157 +1305,116 @@ Implement:
 builtin/seasonal-naive
 ```
 
-with parameters:
+Use it to test:
+
+```text
+single/panel
+univariate/multivariate
+fit/artifact/forecast
+```
+
+## Engine fit flow
 
 ```python
-{
-    "season_length": 24
-}
+def fit(model, data, horizon, plan):
+
+    recipe = normalize_recipe(model)
+
+    descriptor = registry.resolve(recipe)
+
+    view = view_planner.fit_view(
+        data=data,
+        contract=descriptor.training,
+        fit_plan=plan,
+        task=ForecastTask(horizon=horizon),
+    )
+
+    validate_view(
+        view,
+        descriptor.capabilities,
+    )
+
+    artifact = provider.fit(
+        recipe=recipe,
+        view=view,
+        plan=plan,
+    )
+
+    return persist(artifact)
 ```
 
-It should support:
-
-```text
-single univariate
-single multivariate
-panel univariate
-panel multivariate
-```
-
-by independently forecasting every:
-
-```text
-instance × target
-```
-
-combination.
-
-That makes it a useful protocol reference implementation.
-
----
-
-# Engine
-
-Implement:
+The engine should never contain:
 
 ```python
-class Engine:
-    def fit(...)
-    def forecast(...)
+if provider == "nixtla":
 ```
 
-Execution sequence for `fit()`:
-
-```text
-normalize ModelRecipe
-        ↓
-resolve leaf model descriptors
-        ↓
-validate recipe
-        ↓
-validate TimeSeriesFrame
-        ↓
-validate capabilities
-        ↓
-select provider
-        ↓
-fit
-        ↓
-persist ModelArtifact
-        ↓
-return ModelHandle
-```
-
-Forecast:
-
-```text
-resolve model string / handle
-        ↓
-determine artifact vs pretrained definition
-        ↓
-validate lifecycle
-        ↓
-validate context
-        ↓
-validate OutputSpec
-        ↓
-provider forecast
-        ↓
-normalize Forecast
-```
-
-Calling:
+## Forecast flow
 
 ```python
-of.forecast(
-    model="builtin/some-trainable-model",
+def forecast(model, data, horizon, output):
+
+    artifact = resolve_model(model)
+
+    context = normalize_forecast_context(data)
+
+    view = view_planner.forecast_view(
+        context=context,
+        contract=artifact.forecast_contract,
+        task=ForecastTask(horizon=horizon),
+    )
+
+    return provider.forecast(
+        artifact=artifact,
+        view=view,
+        output=output,
+    )
+```
+
+## PIT handling
+
+The only source-type branching belongs in:
+
+```text
+ViewPlanner
+```
+
+Never provider code.
+
+## Series model + PIT
+
+If a `SeriesView` model gets PIT data with:
+
+```text
+AllOrigins()
+```
+
+raise:
+
+```text
+OriginScopeError
+```
+
+But this is valid:
+
+```python
+of.fit(
+    "builtin/some-series-model",
+    data=forecast_dataset,
+    plan=of.FitPlan(
+        origins=of.AtOrigin(ref_time)
+    ),
 )
 ```
 
-must raise `ModelRequiresFit` if its descriptor requires fitting.
+because the planner materializes one `SeriesView`.
 
----
-
-# Implement pipeline execution
-
-For:
+## Public API
 
 ```python
-Pipeline(
-    StandardScaler(...),
-    Model(...)
-)
-```
-
-core should:
-
-```text
-fit scaler
-transform data
-fit child model
-persist scaler parameters
-persist child artifact
-```
-
-Forecast:
-
-```text
-transform context
-forecast child
-inverse-transform output
-```
-
-The resulting artifact is a composite OpenForecast artifact.
-
----
-
-# Implement ensemble execution
-
-For:
-
-```python
-Ensemble(...)
-```
-
-fit each child and persist child refs in the parent artifact.
-
-Forecast each child and combine normalized OpenForecast forecasts.
-
-The parent artifact should not copy all child binary payloads if artifact references are sufficient.
-
----
-
-# User-facing client
-
-At this point implement:
-
-```python
-import openforecast as of
-
 model = of.fit(
     model="builtin/seasonal-naive",
     data=train,
-    name="baseline",
     params={"season_length": 24},
 )
 
@@ -1419,94 +1425,50 @@ forecast = of.forecast(
 )
 ```
 
-Also object-oriented API:
+## Pipeline/ensemble
 
-```python
-client = of.OpenForecast()
+Implement OpenForecast-owned execution for:
 
-model = client.fit(...)
-forecast = client.forecast(...)
+```text
+StandardScaler -> model
+ensemble of child artifacts
 ```
-
-Top-level functions should call a default local client.
 
 ## Done when
 
-A full local fit/persist/reload/forecast test works with **no optional provider installed**.
+A completely local built-in model can fit/persist/reload/forecast from the public API.
 
 ---
 
-# Plan 7 — Provider process protocol and isolated uv environments
-
-Now build the architectural boundary that Nixtla will use.
+# Step 9 — Provider subprocess protocol and isolated uv environments
 
 ## Goal
 
-A provider must run in another Python environment/process without changing `Engine`.
+Run integrations in separate uv-managed environments while leaving the engine unchanged.
 
----
-
-# Environment layout
-
-Use:
+## Environment structure
 
 ```text
 ~/.cache/openforecast/providers/
     nixtla/
-        <provider-version>/
+        0.1.0/
             .venv/
 ```
 
-I would manage this directly rather than relying exclusively on global `uv tool install`, because OpenForecast needs deterministic versioned environments.
+Create with uv.
 
-Use uv to create/install:
-
-```bash
-uv venv <path>
-uv pip install --python <path>/bin/python openforecast-nixtla==...
-```
-
-For development:
-
-```bash
-openforecast providers install nixtla \
-    --source ./integrations/nixtla
-```
-
-can install the local package.
-
-The provider package itself has its own `uv.lock`.
-
----
-
-# CLI
-
-Implement:
+## CLI
 
 ```bash
 openforecast providers list
 openforecast providers install nixtla
-openforecast providers remove nixtla
 openforecast providers inspect nixtla
+openforecast providers remove nixtla
 ```
 
-Expected output:
+## Provider handshake
 
-```text
-PROVIDER   VERSION   STATUS
-builtin    0.1.0     available
-nixtla     0.1.0     installed
-darts      -         not installed
-sktime     -         not installed
-```
-
-No Darts/sktime packages need to exist yet.
-
----
-
-# Provider handshake
-
-Provider executable starts and receives:
+Request:
 
 ```json
 {
@@ -1515,7 +1477,7 @@ Provider executable starts and receives:
 }
 ```
 
-Returns:
+Response:
 
 ```json
 {
@@ -1526,59 +1488,65 @@ Returns:
 }
 ```
 
-Reject incompatible protocol versions explicitly.
+## RPC
 
----
-
-# RPC transport
-
-Use:
+Control:
 
 ```text
-stdin/stdout JSON Lines
+JSON Lines over stdin/stdout
 ```
 
-for control messages.
+Bulk data:
 
-Use Arrow IPC bundles for data.
+```text
+Arrow IPC bundles
+```
 
-For example:
+## Critical change
+
+Providers receive views, not source datasets.
+
+Example:
 
 ```json
 {
-  "protocol_version": 1,
   "operation": "fit",
-  "request_id": "...",
-  "recipe": {...},
-  "fit_plan": {...},
-  "data": {
-    "path": "/tmp/of-123/frame"
-  },
-  "artifact_destination": "/tmp/of-123/artifact"
-}
-```
-
-Provider response:
-
-```json
-{
-  "request_id": "...",
-  "status": "ok",
-  "artifact": {
-    "path": "/tmp/of-123/artifact"
+  "view": {
+    "kind": "windows",
+    "path": "/tmp/openforecast/view"
   }
 }
 ```
 
-Forecast response references a forecast Arrow IPC file.
+Window bundle:
 
----
+```text
+schema.json
+temporal.arrow
+static.arrow
+samples.arrow
+provenance.json
+```
 
-# Error envelope
+Tabular bundle:
 
-Do not dump Python tracebacks as protocol semantics.
+```text
+schema.json
+x.arrow
+y.arrow
+keys.arrow
+```
 
-Use:
+## Logging
+
+```text
+stdout = protocol only
+stderr = logs
+```
+
+## Errors
+
+Standardized:
 
 ```json
 {
@@ -1591,190 +1559,164 @@ Use:
 }
 ```
 
-Provider stderr may contain native logs.
+## Tests
 
-Core translates codes into OpenForecast exceptions.
-
----
-
-# Logging
-
-Critical rule:
-
-```text
-stdout = protocol only
-stderr = provider logs
-```
-
-Otherwise library logging can corrupt JSON Lines RPC.
-
----
-
-# Process tests
-
-Create a fake provider package/environment in tests and verify:
+Test:
 
 ```text
 handshake
-model discovery
 fit
 forecast
 provider crash
-malformed JSON
+malformed response
 protocol mismatch
 timeout
-stderr logging
+stderr pollution
 ```
 
 ## Done when
 
-You can substitute:
-
-```python
-BuiltinProviderClient
-```
-
-with:
-
-```python
-SubprocessProviderClient
-```
-
-without changing `Engine`.
+`Engine` can swap in a subprocess provider without knowing it is a subprocess.
 
 ---
 
-# Plan 8 — Build the provider conformance suite
-
-Do this **before Nixtla**.
+# Step 10 — Full conformance suite including point-in-time behavior
 
 ## Goal
 
-Any future provider/model can declare capabilities and automatically prove them.
+Create the contract all future providers/models must satisfy.
 
----
+## Golden semantic datasets
 
-# Conformance matrix
-
-Create reusable tests for:
+Create:
 
 ```text
-single-instance univariate
-single-instance multivariate
-panel univariate
-panel multivariate
+single_univariate
+single_multivariate
+panel_univariate
+panel_multivariate
 
-observed feature
-known feature
-static feature
-
-point forecast
-quantile forecast
-
-fit
-artifact save
-artifact load
-forecast
-
-alias resolution
-recipe serialization
+pit_panel_univariate
+pit_panel_multivariate
+pit_missingness
+pit_varying_vintages
+pit_known_future
+pit_observed_features
 ```
 
-For each capability:
+## View tests
+
+Test:
 
 ```text
-supported
-    → operation must succeed
+TimeSeriesFrame -> SeriesView
+TimeSeriesFrame -> WindowView
+TimeSeriesFrame -> TabularView
 
-unsupported
-    → OpenForecast validation must reject before native execution
+ForecastDataset -> SeriesView at one origin
+ForecastDataset -> WindowView
+ForecastDataset -> TabularView
 ```
 
-That second case is important.
+## Leakage sentinel
 
-A model claiming:
-
-```python
-capabilities.targets.multivariate = False
-```
-
-must produce:
+Example:
 
 ```text
-UnsupportedDataShape
+origin 08 -> target 12 -> wind=10
+origin 09 -> target 12 -> wind=20
+origin 10 -> target 12 -> wind=999999
 ```
 
-not a random downstream Nixtla exception.
+Materialize origin 09.
 
----
-
-# Golden fixtures
-
-Create tiny deterministic datasets:
+Assert:
 
 ```text
-hourly_single_uni
-hourly_single_multi
-hourly_panel_uni
-hourly_panel_multi
-with_observed
-with_known
-with_static
+20 exists
+999999 does not
 ```
 
-Keep them tiny enough for every integration's CI.
+## Window sample count
 
----
-
-# Contract fixtures
-
-Store canonical JSON fixtures for:
+For:
 
 ```text
-ModelDescriptor
-ModelRecipe
-FitPlan
-ModelArtifact manifest
-provider handshake
-provider fit request
-provider forecast request
+100 origins
+3 instances
 ```
 
-This protects your protocol from accidental breaking changes.
+expect:
+
+```text
+300 samples
+```
+
+for `AllOrigins()`.
+
+## Missingness
+
+If availability evolves:
+
+```text
+08 -> NaN
+09 -> NaN
+10 -> 42
+```
+
+preserve exactly that.
+
+## Event-time equivalence
+
+Construct PIT data where every vintage contains identical values.
+
+Then compare:
+
+```text
+TimeSeriesFrame -> WindowView
+ForecastDataset -> WindowView
+```
+
+The numerical windows should match.
+
+Only:
+
+```text
+OriginFidelity
+```
+
+differs.
+
+## Provider conformance
+
+A model declaring:
+
+```text
+view=windows
+```
+
+automatically gets tests against both:
+
+```text
+event-time source
+PIT source
+```
+
+The provider itself only receives `WindowView`.
 
 ## Done when
 
-The built-in SeasonalNaive provider passes every capability it claims.
-
-Future providers should be able to consume the same conformance harness.
+The built-in reference provider passes every capability it declares.
 
 ---
 
-# Plan 9 — First Nixtla provider: StatsForecast / AutoARIMA
-
-Now add the first real external provider.
+# Step 11 — Nixtla integration: StatsForecast / AutoARIMA
 
 ## Goal
 
-Install:
+Add the first external provider with a `SeriesView` consumer.
 
-```text
-openforecast-nixtla
-```
-
-and make:
-
-```python
-of.fit("nixtla/autoarima", ...)
-```
-
-work through an isolated uv environment.
-
-StatsForecast is a strong first backend because its current API explicitly distinguishes `fit()`/`predict()` from its stateless memory-efficient `forecast()` and provides save/load for fitted model state. ([Nixtla][5])
-
----
-
-# Integration structure
+## Integration
 
 ```text
 integrations/nixtla/
@@ -1792,607 +1734,583 @@ integrations/nixtla/
             neuralforecast.py
 ```
 
-`neuralforecast.py` may remain empty until Plan 10.
+## Model
 
----
-
-# Nixtla provider catalog
-
-Initially advertise:
+Advertise:
 
 ```text
 nixtla/autoarima
 ```
 
-Descriptor approximately:
+Contract approximately:
 
 ```yaml
-provider: nixtla
-
-lifecycle:
-  requires_fit: true
-  supports_fit: true
-
-capabilities:
-  instances:
-    single: true
-    panel: true
-
-  targets:
-    univariate: true
-    multivariate: false
-
-  features:
-    observed: false
-    known: true
-    static: false
-
-  outputs:
-    point: true
-    quantiles: true
-    samples: false
+training:
+  view: series
+  origin_scope: single
+  horizon_bound_at_fit: false
 ```
 
-Verify actual supported exogenous behavior against StatsForecast and only claim what the adapter implements.
+## Conversion
 
-Do not overclaim capabilities because the native library theoretically supports something.
+`SeriesView` becomes StatsForecast's expected representation internally.
 
-Capabilities describe the **OpenForecast integration**.
-
----
-
-# Conversion layer
-
-OpenForecast data:
-
-```text
-country
-timestamp
-load
-wind_fc
-```
-
-becomes internally:
+Provider is allowed to construct:
 
 ```text
 unique_id
 ds
 y
-wind_fc
 ```
 
-For a single instance, generate an internal reserved ID.
+but these concepts must never escape the integration.
 
-Never mutate the original Arrow tables.
-
-Keep mapping metadata so predictions map back to original OpenForecast instance keys and target names.
-
-StatsForecast's fit API currently accepts custom `id_col`, `time_col`, and `target_col`, so you may avoid physically renaming some fields; nevertheless, that remains provider implementation detail. ([Nixtla][5])
-
----
-
-# Fit
+## Fit
 
 Compile:
 
 ```python
 of.Model(
     "nixtla/autoarima",
-    params={...},
+    params={...}
 )
 ```
 
-into:
+into the StatsForecast implementation.
+
+Persist native state under the provider artifact directory.
+
+## Event-time API
 
 ```python
-AutoARIMA(...)
-```
-
-and:
-
-```python
-StatsForecast(
-    models=[...],
-    freq=compiled_frequency,
-)
-```
-
-then:
-
-```python
-sf.fit(...)
-```
-
-Persist native state into:
-
-```text
-artifact_destination/
-    statsforecast.pkl
-    provider.json
-```
-
-StatsForecast supports saving/restoring the fitted instance directly. ([Nixtla][5])
-
----
-
-# Forecast
-
-Provider loads:
-
-```text
-statsforecast.pkl
-```
-
-uses:
-
-```python
-sf.predict(
-    h=task.horizon,
-    X_df=...
-)
-```
-
-and converts the result to canonical OpenForecast `Forecast`.
-
----
-
-# API that must work
-
-```python
-import openforecast as of
-
-train = of.TimeSeriesFrame.from_pandas(
-    history=df,
-    time="timestamp",
-    frequency="1h",
-    instance_keys="country",
-    targets="load",
-)
-
 model = of.fit(
     model="nixtla/autoarima",
-    data=train,
-    name="load-arima",
-)
-
-print(model.ref)
-# local/load-arima@01K...
-
-forecast = of.forecast(
-    model=model,
-    data=context,
-    horizon=24,
+    data=timeseries,
 )
 ```
 
-And:
+## PIT API
+
+Valid:
 
 ```python
-forecast = of.forecast(
-    model="local/load-arima",
-    data=context,
-    horizon=24,
+model = of.fit(
+    model="nixtla/autoarima",
+    data=forecast_dataset,
+    plan=of.FitPlan(
+        origins=of.AtOrigin(ref_time)
+    ),
 )
 ```
 
-must give the same result.
+because both become `SeriesView`.
 
 This must fail:
 
 ```python
-of.forecast(
+of.fit(
     model="nixtla/autoarima",
-    data=context,
-    horizon=24,
+    data=forecast_dataset,
+    plan=of.FitPlan(
+        origins=of.AllOrigins()
+    ),
 )
 ```
 
-with:
+because AutoARIMA does not learn jointly across historical forecast origins.
+
+## String lifecycle behavior
+
+This:
+
+```python
+of.forecast(
+    model="nixtla/autoarima",
+    ...
+)
+```
+
+must raise:
 
 ```text
 ModelRequiresFit
 ```
 
-and an actionable message.
-
----
-
-# Conformance
-
-Run at minimum:
-
-```text
-single univariate
-panel univariate
-fit/save/load/forecast
-known future exogenous if implemented
-point output
-quantile output if implemented
-unsupported multivariate rejection
-```
-
 ## Done when
 
-Nixtla is fully uninstallable from root and:
-
-```bash
-uv run pytest
-```
-
-for the core succeeds even when no Nixtla packages exist.
-
-Then separately:
-
-```bash
-openforecast providers install nixtla --source integrations/nixtla
-```
-
-enables the model.
+StatsForecast works through the isolated provider without understanding PIT semantics.
 
 ---
 
-# Plan 10 — Extend Nixtla provider with NeuralForecast / NHiTS
-
-This is the stage that really validates the abstraction.
+# Step 12 — Nixtla integration: NeuralForecast / NHiTS with true PIT learning
 
 ## Goal
 
-Add:
+Prove that a global neural forecasting model can train from true point-in-time vintages using `WindowView`.
 
-```text
-nixtla/nhits
+This is the most important architecture-validation stage.
+
+## Model contract
+
+```yaml
+nixtla/nhits:
+
+  training:
+    view: windows
+    origin_scope: multiple
+    context_required: true
+    horizon_bound_at_fit: true
+    supports_unseen_instances: true
 ```
 
-without changing the OpenForecast data model, lifecycle model, model recipe format or public `fit()` / `forecast()` APIs.
+Only declare `supports_unseen_instances=true` after verifying it in integration tests.
 
-If adding NHiTS requires changing those concepts significantly, treat that as an architectural warning.
-
-NeuralForecast currently expects long-format `unique_id`, `ds`, `y`, and model-specific exogenous lists; the adapter should produce those from OpenForecast's semantic schema. ([Nixtla][3])
-
----
-
-# Catalog
-
-Advertise:
-
-```text
-nixtla/nhits
-```
-
-with a JSON Schema for supported model parameters:
-
-```json
-{
-  "type": "object",
-  "properties": {
-    "input_size": {"type": "integer", "minimum": 1},
-    "max_steps": {"type": "integer", "minimum": 1},
-    "learning_rate": {"type": "number", "exclusiveMinimum": 0}
-  },
-  "additionalProperties": false
-}
-```
-
-This is intentionally provider/model-specific.
-
----
-
-# Schema compilation
-
-OpenForecast:
+## Public API
 
 ```python
-FeatureSpec(
-    name="temperature",
-    availability="observed",
+dataset = of.ForecastDataset.from_pandas(
+    df,
+    origin_time="ref_time",
+    event_time="target_time",
+    instance_keys=["zone"],
+    targets=["price"],
+    known_features=[
+        "wind_fc",
+        "solar_fc",
+        "load_fc",
+    ],
+    event_frequency="1h",
+    origin_frequency="1h",
 )
 ```
 
-compiles to:
-
-```python
-hist_exog_list=["temperature"]
-```
-
-OpenForecast:
-
-```python
-FeatureSpec(
-    name="wind_forecast",
-    availability="known",
-)
-```
-
-compiles to:
-
-```python
-futr_exog_list=["wind_forecast"]
-```
-
-Static features compile to:
-
-```python
-stat_exog_list=[...]
-```
-
-where supported.
-
-This is precisely where OpenForecast's semantics prove valuable: the public protocol never mentions `hist_exog_list` or `futr_exog_list`. NeuralForecast itself requires these distinctions when constructing models. ([Nixtla][3])
-
----
-
-# Fit compilation
-
-This:
+Fit:
 
 ```python
 model = of.fit(
     model=of.Model(
         "nixtla/nhits",
         params={
-            "input_size": 168,
-            "max_steps": 100,
+            "max_steps": 500,
         },
     ),
-    data=train,
-    plan=of.FitPlan(seed=42),
-    name="load-nhits",
+    data=dataset,
+    horizon=72,
+    plan=of.FitPlan(
+        origins=of.AllOrigins(),
+        window=of.WindowPlan(
+            context=168,
+        ),
+    ),
+    name="de-price",
 )
 ```
 
-roughly compiles internally to:
+## Internal materialization
+
+```text
+ForecastDataset
+      ↓
+ViewPlanner
+      ↓
+WindowView
+
+(instance, origin) -> sample_id
+```
+
+Provider maps:
+
+```text
+sample_id  -> unique_id
+event_time -> ds
+target     -> y
+```
+
+Features:
+
+```text
+observed -> hist_exog_list
+known    -> futr_exog_list
+static   -> stat_exog_list
+```
+
+These mappings exist only inside the Nixtla provider.
+
+## Semantic compilation
+
+OpenForecast:
+
+```text
+WindowPlan(context=168)
+```
+
+becomes:
+
+```text
+NHiTS input_size=168
+```
+
+OpenForecast:
+
+```text
+horizon=72
+```
+
+becomes:
+
+```text
+NHiTS h=72
+```
+
+The user must not specify these twice.
+
+## One-window invariant
+
+Each synthetic sample must represent exactly:
+
+```text
+168 context steps
+72 forecast steps
+```
+
+and exactly one forecast origin.
+
+Test explicitly that Nixtla is not accidentally constructing cross-origin training samples.
+
+## Current-origin inference
 
 ```python
-NHITS(
-    h=24,
-    input_size=168,
-    max_steps=100,
-    hist_exog_list=[...],
-    futr_exog_list=[...],
-    stat_exog_list=[...],
+context = dataset.at_origin(current_ref_time)
+
+forecast = of.forecast(
+    model="local/de-price",
+    data=context,
+    horizon=72,
 )
 ```
 
-inside the provider.
+The provider receives a `ForecastView`, not a `ForecastDataset`.
 
-The `h` question is important.
+## Missing values
 
-If NHiTS requires horizon at training time, record that fact in capabilities/model metadata:
-
-```yaml
-training:
-  horizon_bound_at_fit: true
-```
-
-Then:
+If NHiTS cannot consume native PIT NaNs, require an explicit pipeline:
 
 ```python
-of.fit(..., horizon=24)
-```
-
-must store horizon `24` in the artifact.
-
-Trying:
-
-```python
-of.forecast(
-    model=model,
-    horizon=48,
+recipe = of.Pipeline(
+    steps=[
+        of.MissingIndicator(columns="features"),
+        of.Impute(
+            columns="features",
+            method="median",
+        ),
+        of.Model(
+            "nixtla/nhits",
+            params={"max_steps": 500},
+        ),
+    ]
 )
 ```
 
-should raise:
+Never silently destroy missingness.
+
+## Horizon validation
+
+If artifact was trained with:
+
+```text
+horizon=72
+```
+
+and user requests:
+
+```text
+horizon=48
+```
+
+or another incompatible horizon, raise:
 
 ```text
 IncompatibleForecastTask
 ```
 
-before invoking NeuralForecast.
+if the native model binds horizon during training.
 
-This is exactly the kind of semantic mismatch OpenForecast should normalize.
+## Done when
 
----
-
-# Native persistence
-
-Use NeuralForecast's own persistence APIs under the provider artifact directory:
-
-```text
-provider/
-    neuralforecast/
-        ...
-```
-
-NeuralForecast currently exposes `save(path=...)` and `load(path=...)` for fitted state. ([Nixtla][6])
-
-OpenForecast continues to know only:
-
-```text
-artifact manifest
-+
-opaque provider directory
-```
+NHiTS trains from real PIT vintages while the provider contains zero `ForecastDataset`-specific logic.
 
 ---
 
-# API that must now work
-
-Panel + future features:
-
-```python
-train = of.TimeSeriesFrame.from_pandas(
-    history=train_df,
-    time="timestamp",
-    frequency="1h",
-    instance_keys=["country"],
-    targets=["load"],
-    observed_features=["temperature_actual"],
-    known_features=["temperature_forecast", "holiday"],
-)
-
-model = of.fit(
-    model=of.Model(
-        "nixtla/nhits",
-        params={
-            "input_size": 168,
-            "max_steps": 100,
-        },
-    ),
-    data=train,
-    horizon=24,
-    name="europe-load",
-)
-
-context = of.TimeSeriesFrame.from_pandas(
-    history=context_df,
-    future=future_df,
-    time="timestamp",
-    frequency="1h",
-    instance_keys=["country"],
-    targets=["load"],
-    observed_features=["temperature_actual"],
-    known_features=["temperature_forecast", "holiday"],
-)
-
-forecast = of.forecast(
-    model=model,
-    data=context,
-    horizon=24,
-    output=of.OutputSpec.quantiles(
-        [0.1, 0.5, 0.9]
-    ),
-)
-```
-
-Where the requested quantiles are only allowed if the configured NHiTS loss/output supports them. Capability validation may therefore also depend on fitted artifact configuration.
-
----
-
-# Pipeline must work with NHiTS
-
-```python
-recipe = of.Pipeline(
-    steps=[
-        of.StandardScaler(
-            columns="targets",
-            per_instance=True,
-        ),
-        of.Model(
-            "nixtla/nhits",
-            params={
-                "input_size": 168,
-                "max_steps": 100,
-            },
-        ),
-    ]
-)
-
-model = of.fit(
-    model=recipe,
-    data=train,
-    horizon=24,
-)
-```
-
-The scaler belongs to OpenForecast.
-
-NHiTS remains just the leaf implementation.
-
----
-
-# Ensemble must work across Nixtla families
-
-This should now work:
-
-```python
-recipe = of.Ensemble(
-    models=[
-        of.Model(
-            "nixtla/nhits",
-            params={"input_size": 168},
-        ),
-        of.Model(
-            "nixtla/autoarima",
-        ),
-    ],
-    combine=of.WeightedMean(
-        weights=[0.7, 0.3],
-    ),
-)
-
-model = of.fit(
-    model=recipe,
-    data=train,
-    horizon=24,
-)
-```
-
-This is a crucial test.
-
-You now have one OpenForecast artifact representing:
-
-```text
-OpenForecast Ensemble
-        │
-        ├── local/<NHITS artifact>
-        │
-        └── local/<AutoARIMA artifact>
-```
-
-Nixtla itself does not own the ensemble.
-
-OpenForecast does.
-
----
-
-# Conformance
-
-NHiTS should pass everything it declares:
-
-```text
-single univariate
-panel univariate
-observed features
-known features
-static features if supported
-fit/save/load
-horizon-bound validation
-point output
-quantile output when configured
-```
-
-And fail gracefully for unsupported OpenForecast axes.
-
----
-
-# Plan 11 — Public API stabilization and full V1 end-to-end test
-
-This is where I would call the first OpenForecast milestone complete.
+# Step 13 — Darts integration and library-neutral WindowView validation
 
 ## Goal
 
-Ensure users never need to know about:
+Prove the OpenForecast abstraction is not secretly Nixtla-shaped.
+
+Add Darts as the second global-model implementation.
+
+## Structure
 
 ```text
-provider subprocesses
-Arrow IPC paths
-Nixtla DataFrames
-unique_id
-ds
-y
-StatsForecast
-NeuralForecast wrappers
+integrations/darts/
+    pyproject.toml
+    uv.lock
+    src/openforecast_darts/
 ```
 
-unless they intentionally inspect provider metadata.
+## Models
+
+Start with:
+
+```text
+one global model
+one local model
+```
+
+For example:
+
+```text
+darts/nhits
+```
+
+plus an appropriate local statistical model.
+
+## Global model contract
+
+Global model consumes:
+
+```text
+WindowView
+```
+
+Darts adapter converts each `sample_id` into one Darts `TimeSeries`.
+
+Conceptually:
+
+```python
+target_series = []
+past_covariates = []
+future_covariates = []
+
+for sample in view.samples:
+    target_series.append(...)
+    past_covariates.append(...)
+    future_covariates.append(...)
+```
+
+The provider sees no origin semantics.
+
+## Identical UX
+
+These should differ only in model ref:
+
+```python
+of.fit(
+    "nixtla/nhits",
+    data=dataset,
+    horizon=72,
+    plan=plan,
+)
+```
+
+and:
+
+```python
+of.fit(
+    "darts/nhits",
+    data=dataset,
+    horizon=72,
+    plan=plan,
+)
+```
+
+## Semantic compilation
+
+Map OpenForecast:
+
+```text
+context
+```
+
+to Darts:
+
+```text
+input_chunk_length
+```
+
+and:
+
+```text
+horizon
+```
+
+to appropriate Darts output horizon semantics.
+
+Again, users should not have to manually specify equivalent concepts twice.
+
+## Local Darts model
+
+A local Darts model consumes:
+
+```text
+SeriesView
+```
+
+and therefore supports PIT only when selecting a single origin.
+
+Same behavior as AutoARIMA.
+
+## Conformance
+
+Run exactly the same PIT `WindowView` tests used for NHiTS.
+
+## Done when
+
+Switching Nixtla ↔ Darts does not change OpenForecast's public PIT API.
 
 ---
 
-# Final Python API
+# Step 14 — sktime integration and reduction/panel validation
 
-These must all work.
+## Goal
 
-### Discover
+Use sktime to validate:
+
+```text
+SeriesView
+WindowView
+TabularView
+```
+
+against a third ecosystem with explicit panel/global semantics.
+
+## Structure
+
+```text
+integrations/sktime/
+    pyproject.toml
+    uv.lock
+    src/openforecast_sktime/
+```
+
+## Panel mapping
+
+For `WindowView`:
+
+```text
+sample_id
+event_time
+```
+
+becomes a sktime panel MultiIndex.
+
+Example:
+
+```text
+sample_id event_time y    wind_fc
+001       00:00      ...  ...
+001       01:00      ...  ...
+002       00:00      ...  ...
+002       01:00      ...  ...
+```
+
+## Series models
+
+Local sktime forecasters consume `SeriesView`.
+
+## Global/panel models
+
+Eligible global models consume `WindowView`.
+
+## Reduction support
+
+Implement the first execution path for:
+
+```python
+of.Reduction(
+    estimator="lightgbm/regressor",
+    strategy="recursive",
+    lags=[1, 24, 168],
+)
+```
+
+through sktime if appropriate.
+
+Alternatively add a direct OpenForecast reduction provider if that proves cleaner, but the public recipe remains unchanged.
+
+## PIT reduction
+
+For:
+
+```python
+of.Reduction(...)
+```
+
+with `ForecastDataset`, the ViewPlanner creates:
+
+```text
+TabularView
+```
+
+containing all:
+
+```text
+instance × origin × target
+```
+
+rows.
+
+This is the architecture needed for the user's existing LightGBM style.
+
+## Acceptance
+
+The PIT data must preserve:
+
+```text
+ref-specific feature values
+NaN distribution
+lead time if explicitly requested
+target duplication across multiple origins
+```
+
+## Done when
+
+The same `ForecastDataset` can power:
+
+```text
+Nixtla global neural model
+Darts global model
+sktime/global model
+tabular reduction
+```
+
+without changing its source representation.
+
+---
+
+# Step 15 — Public V1 API stabilization and full E2E suite
+
+## Goal
+
+Freeze the initial developer experience.
+
+Users should never need to know about:
+
+```text
+ViewPlanner
+WindowView
+unique_id
+ds
+Nixtla
+Darts internal TimeSeries
+sktime MultiIndex conversion
+IPC files
+provider subprocesses
+```
+
+unless debugging.
+
+## Discovery
 
 ```python
 import openforecast as of
@@ -2406,229 +2324,200 @@ Example:
 builtin/seasonal-naive
 nixtla/autoarima
 nixtla/nhits
+darts/nhits
+...
 ```
 
-And:
+Inspect:
 
 ```python
 model = of.models.get("nixtla/nhits")
 
 model.lifecycle.requires_fit
-# True
-
-model.capabilities.instances.panel
-# True
+model.training.view
+model.capabilities
 ```
 
----
-
-### Fit via string
+## Event-time fit
 
 ```python
 model = of.fit(
-    model="nixtla/nhits",
-    data=train,
+    "nixtla/nhits",
+    data=timeseries,
+    horizon=24,
+    plan=of.FitPlan(
+        window=of.WindowPlan(context=168),
+    ),
+)
+```
+
+## Point-in-time fit
+
+```python
+model = of.fit(
+    "nixtla/nhits",
+    data=forecast_dataset,
+    horizon=24,
+    plan=of.FitPlan(
+        origins=of.AllOrigins(),
+        window=of.WindowPlan(context=168),
+    ),
+)
+```
+
+## String artifact forecast
+
+```python
+forecast = of.forecast(
+    model="local/de-price",
+    data=current_context,
     horizon=24,
 )
 ```
 
----
-
-### Fit via explicit recipe
+## Explicit model recipe
 
 ```python
 model = of.fit(
     model=of.Model(
         "nixtla/nhits",
         params={
-            "input_size": 168,
+            "max_steps": 500,
         },
     ),
-    data=train,
+    data=dataset,
+    horizon=24,
+    plan=plan,
+)
+```
+
+## Pipeline
+
+```python
+model = of.fit(
+    model=of.Pipeline(
+        steps=[
+            of.MissingIndicator(columns="features"),
+            of.Impute(
+                columns="features",
+                method="median",
+            ),
+            of.StandardScaler(columns="targets"),
+            of.Model("nixtla/nhits"),
+        ]
+    ),
+    data=dataset,
+    horizon=24,
+    plan=plan,
+)
+```
+
+## Ensemble
+
+```python
+model = of.fit(
+    model=of.Ensemble(
+        models=[
+            of.Model("nixtla/nhits"),
+            of.Model("nixtla/autoarima"),
+        ],
+        combine=of.Mean(),
+    ),
+    data=data,
     horizon=24,
 )
 ```
 
----
+Only permit combinations whose child training contracts can be satisfied by the source data.
 
-### Forecast fitted artifact
+## Output schema
 
-```python
-forecast = of.forecast(
-    model=model,
-    data=context,
-    horizon=24,
-)
-```
-
----
-
-### Forecast by clean string ref
-
-```python
-forecast = of.forecast(
-    model="local/europe-load",
-    data=context,
-    horizon=24,
-)
-```
-
----
-
-### Pipeline
-
-```python
-recipe = of.Pipeline(
-    steps=[
-        of.StandardScaler(
-            columns="targets",
-            per_instance=True,
-        ),
-        of.Model("nixtla/nhits"),
-    ],
-)
-```
-
----
-
-### Ensemble
-
-```python
-recipe = of.Ensemble(
-    models=[
-        of.Model("nixtla/nhits"),
-        of.Model("nixtla/autoarima"),
-    ],
-    combine=of.Mean(),
-)
-```
-
----
-
-### Reduction protocol
-
-This must parse and validate:
-
-```python
-recipe = of.Reduction(
-    estimator="sklearn/lightgbm",
-    strategy="recursive",
-    lags=[1, 24, 168],
-)
-```
-
-but execution should clearly state:
+Canonical Arrow forecast should use a stable long representation:
 
 ```text
-No installed provider supports this Reduction recipe.
-
-Install a provider with reduction support.
+instance keys...
+event_time
+target
+kind
+quantile
+sample
+value
 ```
 
-Later sktime should make this **same recipe** executable.
-
-Do not change its structure when sktime arrives.
-
----
-
-# CLI smoke test
-
-Add:
-
-```bash
-openforecast models list
-openforecast models inspect nixtla/nhits
-
-openforecast providers list
-openforecast providers inspect nixtla
-```
-
-Do not turn the CLI into a second API architecture.
-
-CLI simply calls the same client.
-
----
-
-# Full acceptance suite
-
-Create one `tests/e2e/test_v1.py` that performs:
+Example:
 
 ```text
-install Nixtla provider in isolated environment
+DE 12:00 price point    null null 80
+DE 12:00 price quantile 0.1  null 65
+DE 12:00 price quantile 0.5  null 78
+DE 12:00 price quantile 0.9  null 95
+```
 
-discover nixtla/autoarima
-discover nixtla/nhits
+Convenience:
 
-construct panel TimeSeriesFrame
+```python
+forecast.to_pandas()
+forecast.to_wide()
+forecast.point()
+forecast.quantile(0.5)
+```
 
-fit AutoARIMA
-persist
+## E2E test
+
+One full test should:
+
+```text
+install Nixtla provider
+construct PIT dataset
+discover AutoARIMA
+discover NHiTS
+
+fit AutoARIMA at one origin
 reload
 forecast
 
-fit NHiTS with tiny max_steps
-persist
+fit PIT NHiTS across many origins
 reload
-forecast
+forecast current origin
 
-fit StandardScaler -> NHiTS pipeline
-forecast
+fit Darts model using same PIT dataset
 
-fit NHiTS + AutoARIMA ensemble
-forecast
+fit PIT reduction
 
-resolve artifact via local alias
+verify artifact aliases
 
-assert OpenForecast forecast Arrow schema
-
-assert no Nixtla-specific fields escape public objects
+verify no provider-specific field names
+escape into public objects
 ```
 
-For CI, use tiny NHiTS training:
+## Forbidden terminology test
 
-```text
-max_steps ≈ 1–5
-small dataset
-```
-
-You're testing integration correctness, not model accuracy.
-
----
-
-# V1 architectural invariant test
-
-I would literally add a test checking serialized OpenForecast public objects for forbidden terminology:
+Public protocol objects should not expose:
 
 ```text
 unique_id
 ds
-y
 hist_exog_list
 futr_exog_list
 stat_exog_list
+input_chunk_length
 ```
 
-Those terms are allowed under:
+These belong only inside provider adapters.
 
-```text
-integrations/nixtla/
-```
+## Done when
 
-but not inside semantic protocol types.
-
-This sounds slightly extreme, but it's an excellent way of preventing accidental abstraction leakage.
+The local OpenForecast V1 experience is coherent and provider-independent.
 
 ---
 
-# Plan 12 — HTTP/OpenAPI projection after local V1
-
-Only do this after the Nixtla milestone passes.
+# Step 16 — HTTP/OpenAPI projection and remote transport
 
 ## Goal
 
-Prove that the OpenForecast protocol can become a remote SaaS API without redesigning it.
+Expose the exact same OpenForecast semantics remotely without making HTTP the architecture.
 
-The dependency direction is:
+Dependency direction:
 
 ```text
 OpenForecast semantics
@@ -2639,28 +2528,16 @@ HTTP projection
         ↓
 OpenAPI
         ↓
-remote SDKs
+generated remote SDKs
 ```
 
-not:
-
-```text
-OpenAPI
-   ↓
-OpenForecast semantics
-```
-
----
-
-# Local server
-
-Implement:
+## Local server
 
 ```bash
 openforecast serve
 ```
 
-providing:
+Expose initial endpoints:
 
 ```text
 GET  /v1/models
@@ -2672,15 +2549,9 @@ POST /v1/forecast
 GET  /v1/artifacts/{ref}
 ```
 
-Initially this can be a development/local HTTP projection.
+Do not solve distributed asynchronous training yet.
 
-Do not yet solve production asynchronous training jobs.
-
----
-
-# SDK transport abstraction
-
-Refactor `OpenForecast` if necessary to:
+## Transport abstraction
 
 ```python
 client = OpenForecast(
@@ -2707,11 +2578,22 @@ client.fit(...)
 client.forecast(...)
 ```
 
----
+## Bulk data
 
-# OpenAPI
+Do not put huge datasets into nested JSON if avoidable.
 
-Generate OpenAPI from the actual Pydantic request/response models.
+Use:
+
+```text
+JSON/Pydantic for control
+Arrow IPC for bulk data
+```
+
+The HTTP API can later support multipart or uploaded Arrow objects.
+
+## OpenAPI
+
+Generate from Pydantic request/response models.
 
 Commit:
 
@@ -2726,41 +2608,52 @@ uv run generate-openapi
 git diff --exit-code spec/openapi/openapi.json
 ```
 
-That gives you deterministic API versioning.
+## Cross-language
 
-Later:
+Generated TypeScript/Go/Java SDKs initially support remote transport.
 
-```text
-TypeScript
-Go
-Java
+Python remains hand-written because it also supports local execution/provider management.
+
+## Done when
+
+This:
+
+```python
+OpenForecast(LocalTransport())
 ```
 
-clients can be generated from this document.
+and:
 
-The Python SDK should remain hand-written because its local transport does things an HTTP-generated SDK cannot do.
+```python
+OpenForecast(HttpTransport(...))
+```
+
+provide the same user-facing forecasting semantics.
 
 ---
 
-# Plan 13 — Benchmarking and the beginning of `openforecast/auto`
+# Step 17 — Benchmarking, PIT evaluation and foundation for `openforecast/auto`
 
-I would put this immediately after the Nixtla integration rather than before Darts/sktime.
+## Goal
 
-It uses the abstraction you've just built and begins creating the part that could eventually differentiate OpenForecast.
+Use the universal abstraction to benchmark models across providers and eventually build automatic routing/model selection.
 
-## Implement
+This is where OpenForecast begins becoming more than a wrapper.
+
+## Benchmark API
 
 ```python
 result = of.benchmark(
     models=[
+        "builtin/seasonal-naive",
         "nixtla/autoarima",
         "nixtla/nhits",
-        "builtin/seasonal-naive",
+        "darts/nhits",
     ],
     data=data,
     validation=of.RollingOrigin(
         horizon=24,
-        windows=3,
+        windows=5,
     ),
     metrics=[
         of.MAE(),
@@ -2769,129 +2662,191 @@ result = of.benchmark(
 )
 ```
 
-Return a normalized Arrow-backed result:
+## PIT-aware validation
+
+For `ForecastDataset`, benchmarking must use **actual historical origins** rather than reconstructing historical features from latest values.
+
+Example:
+
+```python
+result = of.benchmark(
+    models=[
+        "nixtla/nhits",
+        "darts/nhits",
+        of.Reduction(
+            estimator="lightgbm/regressor",
+            strategy="direct",
+        ),
+    ],
+    data=pit_dataset,
+    validation=of.ForecastOriginValidation(
+        origins=of.OriginsBetween(
+            start=...,
+            end=...,
+            stride=24,
+        ),
+        horizon=72,
+    ),
+)
+```
+
+For each validation origin:
+
+```text
+features must come from that exact historical origin
+truth comes from the truth TimeSeriesFrame
+later feature vintages are inaccessible
+```
+
+This should become a fundamental OpenForecast guarantee.
+
+## Benchmark result
+
+Arrow-backed:
 
 ```text
 model
 fold
+origin
 metric
 value
 fit_seconds
 forecast_seconds
 ```
 
-The important thing is that benchmarking consumes:
+Also track:
 
 ```text
-ModelRecipe
-TimeSeriesFrame
-FitPlan
-ForecastTask
+origin fidelity
+provider
+artifact
 ```
 
-rather than having a special Nixtla implementation.
+## Event-time vs PIT comparison
 
-Eventually:
+OpenForecast should eventually make it possible to explicitly benchmark:
+
+```text
+simulated historical availability
+vs
+true PIT historical availability
+```
+
+This could be highly valuable.
+
+## `openforecast/auto`
+
+Lay the foundation for:
 
 ```python
-of.fit(
+model = of.fit(
     model="openforecast/auto",
-    ...
+    data=dataset,
+    horizon=24,
 )
 ```
 
-can simply use that evaluation infrastructure.
+Internally it can:
+
+```text
+inspect data semantics
+determine eligible model contracts
+benchmark models
+rank results
+fit winner or ensemble
+persist selected recipe
+```
+
+Eligibility can automatically rule out:
+
+```text
+AutoARIMA for multi-origin learning
+models without missing-value support
+models without required feature capabilities
+models that cannot handle the target dimensionality
+```
+
+## Done when
+
+Benchmarking is entirely built on:
+
+```text
+ModelRecipe
+ForecastDataset / TimeSeriesFrame
+ViewPlanner
+FitPlan
+ForecastTask
+Forecast
+```
+
+with no Nixtla/Darts/sktime-specific benchmarking implementation.
 
 ---
 
-# What should deliberately NOT be implemented before the Nixtla milestone
-
-I'd keep these out for now:
+# Final architecture after Step 17
 
 ```text
-Darts
-sktime
-foundation models
-cloud execution
-Docker runtimes
-remote artifact storage
-async training jobs
-distributed training
-hyperparameter search
-hierarchical reconciliation
-online updating / partial_fit
-irregular time series
-custom user Python models
-Arrow Flight
-gRPC
-generated Python SDK
+                              OPENFORECAST
+
+                         SEMANTIC DATA LAYER
+
+              ┌────────────────────────────────┐
+              │                                │
+              ▼                                ▼
+
+       TimeSeriesFrame                  ForecastDataset
+                                               │
+                                    ┌──────────┴─────────┐
+                                    ▼                    ▼
+                              PointInTimeFrame      TimeSeriesFrame
+                               information              truth
+
+              │                                │
+              └───────────────┬────────────────┘
+                              ▼
+
+                         ViewPlanner
+
+                ┌─────────────┼─────────────┐
+                ▼             ▼             ▼
+
+           SeriesView     WindowView    TabularView
+                │             │             │
+                │             │             │
+                ▼             ▼             ▼
+
+          local models    global models    reductions
+
+          AutoARIMA       NHiTS            LightGBM
+          ETS             TFT              XGBoost
+                          PatchTST          CatBoost
+
+                │             │             │
+                └─────────────┼─────────────┘
+                              ▼
+
+                       PROVIDER LAYER
+
+             ┌────────────────┼────────────────┐
+             ▼                ▼                ▼
+
+           Nixtla            Darts           sktime
+
+             │                │                │
+             └────────────────┼────────────────┘
+                              ▼
+
+                       ModelArtifact
+                              │
+                              ▼
+
+                       ForecastContext
+                        one origin only
+                              │
+                              ▼
+                          Forecast
 ```
 
-But crucially, the architecture should already have clear extension points for them.
+The biggest principle I would preserve throughout all 17 steps is that **`ForecastDataset → WindowView` is an OpenForecast operation, not a Nixtla trick**. Nixtla might represent each window using `unique_id`; Darts might represent it as a `Sequence[TimeSeries]`; sktime might represent it as a panel MultiIndex. Those are compilation targets. The semantic meaning of the training sample belongs to OpenForecast.
 
----
-
-# The stage dependency graph
-
-The order matters:
-
-```text
-PLAN 1
-Repository
-    │
-    ▼
-PLAN 2
-TimeSeriesFrame + semantic axes
-    │
-    ▼
-PLAN 3
-ModelRef + capabilities
-    │
-    ▼
-PLAN 4
-Recipe + Fit/Forecast protocols
-    │
-    ▼
-PLAN 5
-ModelArtifact + local registry
-    │
-    ▼
-PLAN 6
-Engine + built-in reference model
-    │
-    ▼
-PLAN 7
-Provider RPC + uv isolation
-    │
-    ▼
-PLAN 8
-Conformance suite
-    │
-    ▼
-PLAN 9
-Nixtla / StatsForecast / AutoARIMA
-    │
-    ▼
-PLAN 10
-Nixtla / NeuralForecast / NHiTS
-    │
-    ▼
-PLAN 11
-V1 API stabilization + E2E
-    │
-    ├─────────────┐
-    ▼             ▼
-PLAN 12        PLAN 13
-HTTP/OpenAPI    Benchmark/Auto
-```
-
-I would **not let the agent combine Plans 2–4 into one PR**. Those are the pieces where bad abstractions are expensive to unwind. Plans 2, 3 and 4 should each be reviewed as protocol design changes before provider implementation begins.
-
-The milestone after Plan 11 is quite meaningful: you will have a real local OpenForecast where a user installs the lightweight core, pulls Nixtla into an isolated uv runtime, describes data using OpenForecast-native Arrow semantics, fits either statistical or neural models using clean `"nixtla/..."` strings, persists them as `"local/..."` model refs, composes pipelines/ensembles above the provider, and forecasts through exactly the same universal API. At that point Darts and sktime become **tests of the protocol**, rather than opportunities to redesign it.
-
-[1]: https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html?utm_source=chatgpt.com "pyarrow.Schema — Apache Arrow v25.0.1"
-[2]: https://docs.astral.sh/uv/concepts/projects/workspaces/?utm_source=chatgpt.com "Using workspaces | uv - Astral Docs"
-[3]: https://nixtlaverse.nixtla.io/neuralforecast/docs/capabilities/exogenous_variables.html?utm_source=chatgpt.com "Exogenous Variables"
-[4]: https://arrow.apache.org/docs/python/ipc.html?utm_source=chatgpt.com "Streaming, Serialization, and IPC — Apache Arrow v25.0.1"
-[5]: https://nixtlaverse.nixtla.io/statsforecast/src/core/core.html "StatsForecast core methods and API reference - Nixtla"
-[6]: https://nixtlaverse.nixtla.io/neuralforecast/core.html "Core | NeuralForecast - Nixtla"
+That is what makes point-in-time forecasting a genuine first-class capability rather than a special branch that will become painful as you add providers.

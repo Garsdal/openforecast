@@ -1,10 +1,14 @@
-"""Architecture tests.
+"""Architecture tests for the rules in ARCHITECTURE.md.
 
-Two invariants are enforced here, both by scanning source rather than by
-importing anything:
+Both invariants are checked by scanning source rather than by importing
+anything, so a violation fails the suite even if the offending module is never
+executed:
 
-1. ``openforecast`` never depends on a forecasting framework.
-2. Inner layers never import outer layers.
+1. ``openforecast`` never depends on a forecasting framework (rule 1).
+2. Imports only ever flow one way down the layer stack (rules 1, 2 and 7).
+
+The provider boundary test (rules 2 and 3) lands with the views package in
+Step 4; the forbidden-terminology scan (rule 6) lands in Step 15.
 """
 
 from __future__ import annotations
@@ -31,6 +35,8 @@ FORECASTING_FRAMEWORKS = frozenset(
         "utilsforecast",
         "darts",
         "sktime",
+        "lightgbm",
+        "xgboost",
         "torch",
         "pytorch_lightning",
         "lightning",
@@ -43,10 +49,13 @@ FORECASTING_FRAMEWORKS = frozenset(
 )
 
 # Lower index == inner layer. A module may import its own layer and any layer
-# above it in this list, never one below.
+# above it in this list, never one below. Mirrors the diagram in ARCHITECTURE.md.
 LAYERS: tuple[tuple[str, ...], ...] = (
     ("openforecast.protocol",),
     ("openforecast.data", "openforecast.models", "openforecast.recipes", "openforecast.tasks"),
+    # views/ materializes from semantic datasets, so it sits below them and
+    # above everything that executes against them.
+    ("openforecast.views",),
     ("openforecast.runtime", "openforecast.registry", "openforecast.artifacts"),
     ("openforecast.client", "openforecast.commands", "openforecast.server"),
 )
@@ -61,6 +70,23 @@ def _layer_of(module: str) -> int | None:
 
 def _all_imports() -> list[ImportSite]:
     return [site for path in iter_source_files() for site in iter_imports(path)]
+
+
+def _module_path(module: str) -> Path:
+    relative = Path(*module.split(".")[1:])
+    return PACKAGE_ROOT / relative
+
+
+def test_every_layer_maps_to_a_real_module() -> None:
+    """The layer map is only meaningful if every name in it actually exists."""
+    missing = [
+        module
+        for layer in LAYERS
+        for module in layer
+        if not (_module_path(module) / "__init__.py").is_file()
+        and not _module_path(module).with_suffix(".py").is_file()
+    ]
+    assert not missing, f"layer map references modules that do not exist: {missing}"
 
 
 def test_package_root_exists() -> None:

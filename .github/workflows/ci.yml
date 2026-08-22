@@ -42,4 +42,4 @@ jobs:
         run: |
           uv tree --no-dev > tree.txt
           cat tree.txt
-          ! grep -Eiq '(neural|stats|ml|hierarchical)forecast|darts|sktime|torch|jax|tensorflow' tree.txt
+          ! grep -Eiq '(neural|stats|ml|hierarchical)forecast|darts|sktime|torch|jax|tensorflow|lightgbm|xgboost' tree.txt
