@@ -20,10 +20,51 @@ train on them directly, and the model records that its origins were *observed*
 rather than *simulated* by cutting windows out of a single freshest series.
 
 > **Status: early development.** This repository currently contains the
-> foundation from [Step 1](PLAN.md) — packaging, layering rules, tooling and
-> tests. The only public symbol is `openforecast.__version__`; the semantic
-> types shown above land in later steps. See [PLAN.md](PLAN.md) for the full
-> 17-step roadmap.
+> foundation from Step 1 — packaging, layering rules, tooling and tests — and
+> the event-time semantic model from Step 2: `TimeSeriesFrame` and the
+> vocabulary that describes one. Models, views, recipes and the engine shown
+> above land in later steps. See [PLAN.md](PLAN.md) for the full 17-step
+> roadmap.
+
+## The event-time semantic model
+
+`TimeSeriesFrame` represents ordinary `instance × event_time × variable` data as
+three Arrow tables — history, future and static — against one schema:
+
+```python
+import openforecast as of
+
+frame = of.TimeSeriesFrame.from_pandas(
+    history=df,
+    time="timestamp",
+    frequency="1h",
+    instance_keys=["country"],
+    targets=["load"],
+    observed_features=["temperature_actual"],
+    known_features=["temperature_forecast"],
+    static_features=["capacity"],
+)
+
+frame.schema.is_panel          # True
+frame.schema.is_univariate     # True
+frame.write("de-load")
+frame = of.TimeSeriesFrame.read("de-load")
+```
+
+Features carry two orthogonal axes: `kind` (temporal or static) and
+`availability` (observed only up to the origin, or known into the future).
+Interesting categories are derived from those axes rather than enumerated, so
+there is no `PANEL_MULTIVARIATE`.
+
+Construction validates and never repairs. Duplicate instance/time rows,
+timestamps off the declared frequency grid, targets or observed features in the
+future table, and static features that vary within an instance are all errors —
+each of them silently changes what the data means. Gaps and missing values are
+preserved as they are: a missing observation is information.
+
+Forecast vintages are deliberately *not* expressible here. Point-in-time data
+gets its own first-class representation in Step 3 rather than optional fields on
+this one.
 
 ## The architectural invariant
 

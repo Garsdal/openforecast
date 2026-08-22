@@ -51,7 +51,8 @@ FORECASTING_FRAMEWORKS = frozenset(
 # Lower index == inner layer. A module may import its own layer and any layer
 # above it in this list, never one below. Mirrors the diagram in ARCHITECTURE.md.
 LAYERS: tuple[tuple[str, ...], ...] = (
-    ("openforecast.protocol",),
+    # errors/ is importable from anywhere and imports nothing itself.
+    ("openforecast.errors", "openforecast.protocol"),
     ("openforecast.data", "openforecast.models", "openforecast.recipes", "openforecast.tasks"),
     # views/ materializes from semantic datasets, so it sits below them and
     # above everything that executes against them.
@@ -99,6 +100,27 @@ def test_no_forecasting_framework_is_imported() -> None:
         "openforecast must not import a forecasting framework; "
         "integrations depend on openforecast, never the reverse:\n" + "\n".join(offenders)
     )
+
+
+def test_the_runtime_dependency_set_stays_lightweight() -> None:
+    """The core install is the three libraries the semantics are built on.
+
+    A fourth runtime dependency is an architectural decision, not a convenience,
+    so it should require changing this list deliberately.
+    """
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    declared = {_requirement_name(item) for item in pyproject["project"]["dependencies"]}
+    assert declared == {"pydantic", "pyarrow", "platformdirs"}
+
+
+def test_pandas_is_never_imported() -> None:
+    """``from_pandas`` converts through Arrow rather than depending on pandas.
+
+    pandas is a test dependency: OpenForecast accepts a DataFrame at its edge,
+    hands it to ``pyarrow``, and stores Arrow from then on.
+    """
+    offenders = [str(site) for site in _all_imports() if site.top_level == "pandas"]
+    assert not offenders, "openforecast must not import pandas:\n" + "\n".join(offenders)
 
 
 def test_no_forecasting_framework_is_declared_as_a_dependency() -> None:

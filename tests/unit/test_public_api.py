@@ -4,28 +4,46 @@ from types import ModuleType
 
 import openforecast as of
 
+# The event-time semantic model of Step 2. Point-in-time types join this list in
+# Step 3; the list is asserted exactly so that nothing reaches the public
+# surface by accident.
+EXPECTED_PUBLIC_SURFACE = {
+    "DataError",
+    "FeatureAvailability",
+    "FeatureKind",
+    "FeatureSpec",
+    "Frequency",
+    "FrequencyError",
+    "FrequencyUnit",
+    "OpenForecastError",
+    "SchemaError",
+    "TimeSeriesFrame",
+    "TimeSeriesSchema",
+    "__version__",
+}
+
 
 def test_version_is_exported() -> None:
     assert isinstance(of.__version__, str)
     assert of.__version__
 
 
-def test_public_surface_is_only_the_version() -> None:
-    """Step 1 exposes no semantic types; they are added when implemented.
-
-    Submodules are excluded because merely importing ``openforecast.data``
-    anywhere in the session binds it as an attribute of the package.
-    """
-    assert of.__all__ == ["__version__"]
+def test_public_surface_is_exactly_what_is_implemented() -> None:
+    """Submodules are excluded: importing one anywhere binds it on the package."""
+    assert set(of.__all__) == EXPECTED_PUBLIC_SURFACE
     public = {
         name
         for name in dir(of)
         if not name.startswith("_") and not isinstance(getattr(of, name), ModuleType)
     }
-    assert public == set()
+    assert public == EXPECTED_PUBLIC_SURFACE - {"__version__"}
 
 
-def test_subpackages_are_importable_but_empty() -> None:
+def test_all_is_sorted() -> None:
+    assert list(of.__all__) == sorted(of.__all__)
+
+
+def test_unimplemented_subpackages_are_importable_but_empty() -> None:
     """The skeleton is real packages, not stub APIs."""
     from openforecast import views
 
