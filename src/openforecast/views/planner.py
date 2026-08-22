@@ -26,18 +26,17 @@ carries the values that actually existed at its origin. The resulting views are
 the same type, and
 :class:`~openforecast.views.provenance.OriginFidelity` is what tells them apart.
 
-``ViewRequest`` stands in for the (contract, fit plan, task) triple that Steps 5
-and 6 introduce: a model's ``TrainingContract`` will supply ``kind``, a
-``FitPlan`` the origins and the context length, and a ``ForecastTask`` the
-horizon. Nothing here needs to change when they arrive — only who fills the
-fields in.
+``ViewRequest`` is the (contract, fit plan, task) triple, flattened: a model's
+``TrainingContract`` supplies ``kind``, a ``FitPlan`` the origins and the context
+length, and a ``ForecastTask`` the horizon. :meth:`ViewRequest.for_contract` is
+that translation, so the engine of Step 8 reads a descriptor and a plan and has
+nothing left to decide.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from enum import StrEnum
 from typing import Any, Self
 
 import pyarrow as pa
@@ -47,8 +46,11 @@ from openforecast.data._arrow import InstanceKey, build_table, column_values, ke
 from openforecast.data.features import FeatureSpec
 from openforecast.data.forecast_context import ForecastContext
 from openforecast.data.frequency import Frequency
-from openforecast.data.point_in_time import resolve_origin
-from openforecast.errors import DataError, OriginScopeError, SchemaError
+from openforecast.errors import DataError, OriginScopeError, RecipeError, SchemaError
+from openforecast.models.contract import TrainingContract
+from openforecast.tasks.forecast import ForecastTask
+from openforecast.tasks.origins import AllOrigins, OriginMode, OriginSelection
+from openforecast.tasks.plan import FitPlan
 from openforecast.views._sources import Cell, Source, Vintage, source_for
 from openforecast.views.base import (
     CONTEXT_END,
@@ -70,102 +72,12 @@ from openforecast.views.sequences import SequenceView, SequenceViewSchema
 from openforecast.views.series import SeriesView, SeriesViewSchema
 from openforecast.views.tabular import TabularView, TabularViewSchema
 
-__all__ = ["FitView", "OriginMode", "OriginSelection", "ViewPlanner", "ViewRequest"]
+__all__ = ["FitView", "ViewPlanner", "ViewRequest"]
 
 #: What ``fit_view`` returns. A provider is handed exactly one of these.
 FitView = SeriesView | SequenceView | TabularView
 
 Column = tuple[list[Any], pa.DataType]
-
-
-class OriginMode(StrEnum):
-    ALL = "all"
-    LATEST = "latest"
-    AT = "at"
-    BETWEEN = "between"
-
-
-class OriginSelection(BaseModel):
-    """Which forecast origins become training samples.
-
-    The same selection means the same thing for both sources: on a
-    ``ForecastDataset`` it picks among the vintages that exist, on a
-    ``TimeSeriesFrame`` among the origins that can be simulated.
-
-    Step 6 replaces this with ``of.AllOrigins()``, ``of.LatestOrigin()``,
-    ``of.AtOrigin(t)`` and ``of.OriginsBetween(start, end, stride)``; the
-    constructors here are deliberately the same four.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    mode: OriginMode = OriginMode.ALL
-    origin: datetime | None = None
-    start: datetime | None = None
-    end: datetime | None = None
-    stride: int = Field(default=1, ge=1)
-
-    @model_validator(mode="after")
-    def _check_bounds(self) -> Self:
-        if self.mode is OriginMode.AT:
-            if self.origin is None:
-                raise SchemaError("a selection at one origin must say which origin")
-            if self.start is not None or self.end is not None:
-                raise SchemaError("a selection at one origin cannot also declare a range")
-        elif self.mode is OriginMode.BETWEEN:
-            if self.start is None or self.end is None:
-                raise SchemaError("a selection between origins needs both a start and an end")
-            if self.end < self.start:
-                raise SchemaError(
-                    f"the range ends before it starts: "
-                    f"{self.start.isoformat()} .. {self.end.isoformat()}"
-                )
-        elif self.origin is not None or self.start is not None or self.end is not None:
-            raise SchemaError(f"a {self.mode} selection does not take origin bounds")
-        return self
-
-    @classmethod
-    def all(cls, stride: int = 1) -> OriginSelection:
-        return cls(mode=OriginMode.ALL, stride=stride)
-
-    @classmethod
-    def latest(cls) -> OriginSelection:
-        return cls(mode=OriginMode.LATEST)
-
-    @classmethod
-    def at(cls, origin: datetime) -> OriginSelection:
-        return cls(mode=OriginMode.AT, origin=origin)
-
-    @classmethod
-    def between(cls, start: datetime, end: datetime, stride: int = 1) -> OriginSelection:
-        return cls(mode=OriginMode.BETWEEN, start=start, end=end, stride=stride)
-
-    def select(self, available: Sequence[datetime]) -> tuple[datetime, ...]:
-        """The chosen origins, in ascending order.
-
-        An origin that was asked for by name must exist exactly: answering for
-        10:00 when 11:00 was requested would train on the wrong vintage.
-        """
-        ordered = sorted(set(available))
-        if not ordered:
-            raise DataError("the data holds no forecast origins")
-        if self.mode is OriginMode.LATEST:
-            return (ordered[-1],)
-        if self.mode is OriginMode.AT:
-            if self.origin is None:  # unreachable: the validator requires it
-                raise SchemaError("a selection at one origin must say which origin")
-            return (resolve_origin(self.origin, ordered),)
-        if self.mode is OriginMode.BETWEEN:
-            start, end = self.start, self.end
-            if start is None or end is None:  # unreachable: the validator requires both
-                raise SchemaError("a selection between origins needs both a start and an end")
-            ordered = [moment for moment in ordered if start <= moment <= end]
-            if not ordered:
-                raise DataError(
-                    f"no origin between {start.isoformat()} and {end.isoformat()}; "
-                    f"available: {summarize(available)}"
-                )
-        return tuple(ordered[:: self.stride])
 
 
 class ViewRequest(BaseModel):
@@ -181,7 +93,7 @@ class ViewRequest(BaseModel):
     kind: ViewKind
     horizon: int | None = Field(default=None, ge=1)
     context: int | None = Field(default=None, ge=1)
-    origins: OriginSelection = OriginSelection()
+    origins: OriginSelection = AllOrigins()
 
     @model_validator(mode="after")
     def _check_requirements(self) -> Self:
@@ -203,6 +115,57 @@ class ViewRequest(BaseModel):
                 "on the recipe, not on the view"
             )
         return self
+
+    @classmethod
+    def for_contract(
+        cls,
+        contract: TrainingContract,
+        *,
+        plan: FitPlan | None = None,
+        task: ForecastTask | None = None,
+    ) -> ViewRequest:
+        """What a model's contract, a fit plan and a forecast task jointly ask for.
+
+        Purely a translation: the contract says which view, the plan says which
+        origins and how much context, the task says how far ahead. Whether the
+        materialized result is data the model accepts is a capability question,
+        and the engine asks it of the view rather than of the request.
+
+        A field the requested view does not bind is an error rather than
+        something quietly dropped — a ``WindowPlan`` handed to a series model was
+        written by someone expecting it to have an effect.
+        """
+        plan = FitPlan() if plan is None else plan
+        if contract.view is ViewKind.SERIES:
+            if plan.window is not None:
+                raise RecipeError(
+                    "a series model sizes no context window: it trains on one complete "
+                    "time series, so a WindowPlan would have no effect. Drop it, or fit "
+                    "a model that learns from sequences"
+                )
+            return cls(kind=ViewKind.SERIES, origins=plan.origins)
+        if task is None:
+            raise RecipeError(
+                f"a {contract.view} view needs a horizon: its training samples are "
+                f"bounded by one, so a ForecastTask is required to materialize it"
+            )
+        if contract.context_required and plan.window is None:
+            raise RecipeError(
+                "this model learns from context -> horizon sequences and cannot be "
+                "given a default context length; state one with "
+                "of.FitPlan(window=of.WindowPlan(context=...))"
+            )
+        if contract.view is ViewKind.TABULAR and plan.window is not None:
+            raise RecipeError(
+                "a tabular view binds no context length; lagged features are declared "
+                "on the recipe, as of.Reduction(lags=[...])"
+            )
+        return cls(
+            kind=contract.view,
+            horizon=task.horizon,
+            context=plan.context,
+            origins=plan.origins,
+        )
 
     @property
     def required_horizon(self) -> int:

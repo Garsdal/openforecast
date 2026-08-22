@@ -79,7 +79,8 @@ AST-scans the package and fails on:
 - any import that points down the layer stack (rules 1, 2 and 7);
 - provider terminology appearing in semantic protocol types (rule 6);
 - any second definition of `ViewKind`, so the contract that requests a view and
-  the view that satisfies it cannot drift apart;
+  the view that satisfies it cannot drift apart, and any second definition of
+  the four origin selections, for the same reason;
 - any import in `integrations/` that reaches past the view boundary: a provider
   may import `openforecast.views`, `openforecast.errors` and
   `openforecast.protocol`, and may not name `TimeSeriesFrame`,
@@ -103,7 +104,18 @@ detectable rather than plausible.
 
 Rule 5 is enforced by the validation layers of Steps 3 and 6 and by the
 conformance suite in Step 10, since it is a property of behavior rather than of
-imports.
+imports. In Step 6 that means imputation is only ever something a recipe asks
+for: `of.Impute` is a step the caller writes and the manifest records, and a
+`MissingIndicator` placed after an imputation of the same columns is refused,
+because it would come out constant and discard the missingness it was added to
+preserve.
+
+Rule 6 has one deliberate exception in the source: `recipes/nodes.py` contains
+the provider spellings `input_size`, `input_chunk_length`, `hist_exog_list` and
+friends in a *rejection* list. They appear there so that they cannot appear
+anywhere else — passing one as a provider parameter raises an error naming the
+OpenForecast field to use instead. Nothing constructs them, and no public object
+serializes them.
 
 ## The execution views
 
@@ -159,3 +171,39 @@ time, or to generalize to an instance it never saw — it has no shared paramete
 to generalize with. Those declarations are rejected at construction, which is
 the same rule the user meets later as `OriginScopeError` when point-in-time data
 reaches AutoARIMA with `AllOrigins()`.
+
+## Recipes, plans and tasks
+
+What to fit, how to fit it, and what to predict are three separate objects — a
+`Recipe`, a `FitPlan` and a `ForecastTask` — so that one recipe can be fitted at
+a single origin and across every origin, or asked for a different horizon,
+without being rewritten.
+
+`ViewRequest.for_contract(contract, plan=..., task=...)` is where the three
+meet: the contract says which view, the plan says which origins and how much
+context, the task says how far ahead. That translation is the only thing between
+a model descriptor and a materialized view, which is what leaves the engine of
+Step 8 with nothing to decide. A field the requested view does not bind — a
+`WindowPlan` handed to a series model — is refused rather than dropped, since it
+was written by someone expecting it to have an effect.
+
+Two properties keep provider vocabulary out of what the user writes:
+
+- **A concept OpenForecast owns is stated once.** `WindowPlan(context=168)`
+  compiles to `input_size` or `input_chunk_length`; a horizon, a seed, a
+  frequency and the feature roles work the same way. Passing any of them through
+  `of.Model(params=...)` raises an error naming the field to use instead
+  (rule 6), because two copies of one number are free to disagree and the
+  provider's spelling would win silently.
+- **The origin selections are source-agnostic.** `AllOrigins`, `LatestOrigin`,
+  `AtOrigin` and `OriginsBetween` mean the same thing whether the origins are
+  simulated from one freshest series or observed as real vintages, so the same
+  plan works on both and only `OriginFidelity` differs. They live in `tasks/`,
+  above `views/`, and `openforecast.views` re-exports them, so the four a user
+  writes are the four the planner resolves — the same arrangement `ViewKind`
+  uses, and asserted by the same kind of test.
+
+Recipes are a serializable AST discriminated on `kind`, and `parse_recipe` reads
+one back. Nothing in it is provider-specific, which is what lets the same JSON
+be an artifact manifest field in Step 7, a provider request in Step 9 and an
+HTTP body in Step 16.

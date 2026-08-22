@@ -14,19 +14,25 @@ from typing import Any
 
 import pandas as pd
 import pytest
+from pydantic import ValidationError
 
+import openforecast as of
 from openforecast import (
     DataError,
     ForecastContext,
     ForecastDataset,
     OriginScopeError,
+    RecipeError,
     SchemaError,
     TimeSeriesFrame,
 )
+from openforecast.models import TrainingContract
 from openforecast.views import (
+    AllOrigins,
+    AtOrigin,
+    LatestOrigin,
     OriginFidelity,
-    OriginMode,
-    OriginSelection,
+    OriginsBetween,
     SequenceView,
     SeriesView,
     SourceKind,
@@ -233,7 +239,7 @@ def test_a_later_vintage_cannot_reach_an_earlier_origin() -> None:
         *[row(1, event, wind=20.0) for event in range(4)],
         *[row(2, event, wind=POISON) for event in range(4)],
     ]
-    view = sequence_view(dataset(rows), context=2, horizon=1, origins=OriginSelection.at(at(1)))
+    view = sequence_view(dataset(rows), context=2, horizon=1, origins=AtOrigin(at(1)))
     values = view.temporal.column("wind_fc").to_pylist()
 
     assert 20.0 in values
@@ -298,7 +304,7 @@ def test_a_series_view_of_point_in_time_data_needs_one_origin() -> None:
 
 def test_a_series_view_of_one_selected_origin_is_that_vintage() -> None:
     built = dataset(vintages(origins=4, span=4))
-    view = series_view(built, origins=OriginSelection.at(at(2)))
+    view = series_view(built, origins=AtOrigin(at(2)))
     assert view.schema.origin_time == at(2)
     # The series stops at its origin: a series carries no future.
     assert view.temporal.column("event_time").to_pylist() == [at(0), at(1), at(2)]
@@ -364,37 +370,38 @@ def test_materialization_is_deterministic() -> None:
 
 def test_a_stride_thins_the_origins() -> None:
     built = dataset(vintages(origins=6, span=6))
-    view = sequence_view(built, context=1, horizon=1, origins=OriginSelection.all(stride=2))
+    view = sequence_view(built, context=1, horizon=1, origins=AllOrigins(stride=2))
     assert view.origins == (at(0), at(2), at(4))
 
 
 def test_the_latest_origin_is_the_newest_vintage() -> None:
     built = dataset(vintages(origins=6, span=7))
-    view = sequence_view(built, context=1, horizon=1, origins=OriginSelection.latest())
+    view = sequence_view(built, context=1, horizon=1, origins=LatestOrigin())
     assert view.origins == (at(5),)
 
 
 def test_origins_between_two_moments_are_bounded_at_both_ends() -> None:
     built = dataset(vintages(origins=6, span=6))
-    view = sequence_view(built, context=1, horizon=1, origins=OriginSelection.between(at(1), at(3)))
+    view = sequence_view(built, context=1, horizon=1, origins=OriginsBetween(at(1), at(3)))
     assert view.origins == (at(1), at(2), at(3))
 
 
 def test_an_origin_that_does_not_exist_is_not_approximated() -> None:
     built = dataset(vintages(origins=3, span=3))
     with pytest.raises(DataError, match=r"no origin"):
-        sequence_view(built, context=1, horizon=1, origins=OriginSelection.at(at(90)))
+        sequence_view(built, context=1, horizon=1, origins=AtOrigin(at(90)))
 
 
 def test_a_range_with_no_origin_in_it_is_an_error() -> None:
     built = dataset(vintages(origins=3, span=3))
     with pytest.raises(DataError, match=r"no origin between"):
-        sequence_view(built, context=1, horizon=1, origins=OriginSelection.between(at(40), at(50)))
+        sequence_view(built, context=1, horizon=1, origins=OriginsBetween(at(40), at(50)))
 
 
 def test_a_selection_cannot_mix_its_modes() -> None:
-    with pytest.raises(SchemaError, match=r"does not take origin bounds"):
-        OriginSelection(origin=at(1))
+    """Each selection is its own type, so a mixed one cannot be written at all."""
+    with pytest.raises(ValidationError, match=r"start"):
+        AtOrigin(at(1), start=at(0))
 
 
 # -- the forecast view -----------------------------------------------------
@@ -478,21 +485,84 @@ def test_a_series_request_binds_neither_context_nor_horizon() -> None:
         ViewRequest(kind=ViewKind.SERIES, horizon=2)
 
 
-def test_a_selection_at_one_origin_cannot_also_be_a_range() -> None:
-    with pytest.raises(SchemaError, match=r"cannot also declare a range"):
-        OriginSelection(mode=OriginMode.AT, origin=at(1), start=at(0), end=at(2))
-
-
-def test_a_range_needs_both_of_its_ends() -> None:
-    with pytest.raises(SchemaError, match=r"both a start and an end"):
-        OriginSelection(mode=OriginMode.BETWEEN, start=at(0))
-
-
-def test_a_range_cannot_end_before_it_starts() -> None:
-    with pytest.raises(SchemaError, match=r"ends before it starts"):
-        OriginSelection.between(at(3), at(1))
-
-
 def test_a_tabular_request_binds_no_context_length() -> None:
     with pytest.raises(SchemaError, match=r"binds no context length"):
         ViewRequest(kind=ViewKind.TABULAR, horizon=2, context=4)
+
+
+# -- what a contract, a plan and a task jointly ask for --------------------
+
+
+def test_a_contract_and_a_plan_become_one_request() -> None:
+    """The translation Step 8's engine performs, so the engine can stay trivial."""
+    request = ViewRequest.for_contract(
+        TrainingContract.sequences(),
+        plan=of.FitPlan(origins=of.LatestOrigin(), window=of.WindowPlan(context=168)),
+        task=of.ForecastTask(72),
+    )
+
+    assert request == ViewRequest(
+        kind=ViewKind.SEQUENCES,
+        context=168,
+        horizon=72,
+        origins=of.LatestOrigin(),
+    )
+
+
+def test_a_series_contract_asks_for_neither_context_nor_horizon() -> None:
+    request = ViewRequest.for_contract(
+        TrainingContract.series(),
+        plan=of.FitPlan(origins=of.AtOrigin(at(2))),
+        task=of.ForecastTask(24),
+    )
+
+    assert request == ViewRequest(kind=ViewKind.SERIES, origins=of.AtOrigin(at(2)))
+
+
+def test_a_window_handed_to_a_series_model_is_refused_rather_than_dropped() -> None:
+    """It was written by someone expecting it to have an effect."""
+    with pytest.raises(RecipeError, match=r"sizes no context window"):
+        ViewRequest.for_contract(
+            TrainingContract.series(),
+            plan=of.FitPlan(window=of.WindowPlan(context=168)),
+        )
+
+
+def test_a_sequence_model_is_not_given_a_default_context_length() -> None:
+    with pytest.raises(RecipeError, match=r"cannot be\s+given a default context length"):
+        ViewRequest.for_contract(TrainingContract.sequences(), task=of.ForecastTask(24))
+
+
+def test_a_window_handed_to_a_tabular_model_is_refused() -> None:
+    with pytest.raises(RecipeError, match=r"binds no context length"):
+        ViewRequest.for_contract(
+            TrainingContract.tabular(),
+            plan=of.FitPlan(window=of.WindowPlan(context=168)),
+            task=of.ForecastTask(24),
+        )
+
+
+def test_a_bounded_view_needs_a_task_to_bound_it() -> None:
+    with pytest.raises(RecipeError, match=r"needs a horizon"):
+        ViewRequest.for_contract(TrainingContract.tabular())
+
+
+def test_a_plan_defaults_to_every_origin() -> None:
+    request = ViewRequest.for_contract(TrainingContract.tabular(), task=of.ForecastTask(24))
+
+    assert request.origins == of.AllOrigins()
+
+
+def test_the_request_a_contract_produces_materializes() -> None:
+    """The translation is only useful if the planner accepts what it produces."""
+    built = dataset(vintages(origins=4, span=4))
+    request = ViewRequest.for_contract(
+        TrainingContract.sequences(),
+        plan=of.FitPlan(origins=of.AllOrigins(), window=of.WindowPlan(context=1)),
+        task=of.ForecastTask(1),
+    )
+
+    view = planner.fit_view(built, request)
+
+    assert isinstance(view, SequenceView)
+    assert view.provenance.origin_fidelity is OriginFidelity.OBSERVED

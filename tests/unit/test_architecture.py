@@ -242,6 +242,26 @@ def test_the_view_vocabulary_is_defined_exactly_once() -> None:
     )
 
 
+def test_the_origin_selections_are_defined_exactly_once() -> None:
+    """The four selections a user writes are the four the planner resolves.
+
+    ``of.AllOrigins()`` and the origins a ``ViewPlanner`` materializes have to be
+    the same objects. ``tasks/`` sits above ``views/`` in the layering, so the
+    planner imports them from there and ``openforecast.views`` re-exports them,
+    leaving a provider's import surface unchanged — the same arrangement
+    ``ViewKind`` uses, and for the same reason.
+    """
+    selections = {"AllOrigins", "LatestOrigin", "AtOrigin", "OriginsBetween", "OriginMode"}
+    definitions = {
+        node.name: path
+        for path in iter_source_files()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+        if isinstance(node, ast.ClassDef) and node.name in selections
+    }
+    assert set(definitions) == selections
+    assert set(definitions.values()) == {PACKAGE_ROOT / "tasks" / "origins.py"}
+
+
 def test_inner_layers_do_not_import_outer_layers() -> None:
     violations: list[str] = []
     for path in iter_source_files():
