@@ -207,3 +207,46 @@ Recipes are a serializable AST discriminated on `kind`, and `parse_recipe` reads
 one back. Nothing in it is provider-specific, which is what lets the same JSON
 be an artifact manifest field in Step 7, a provider request in Step 9 and an
 HTTP body in Step 16.
+
+## Fitted models
+
+A fitted model is a resource with an identity, not a value a caller holds. Three
+properties make the rest of the design work:
+
+**Immutability.** A revision — `local/de-price@01K...` — is written once and
+never rewritten, so the same pinned reference forecasts the same way forever.
+What moves is the alias: `local/de-price` means the latest selected revision, so
+a scheduled job names a model once and a rollback is a pointer move.
+
+**Atomicity.** A provider trains into `.tmp/<artifact-id>` and the directory is
+renamed into `models/` only after the fit succeeded. The failure mode being
+avoided is not a lost artifact but a *resolvable* one: half-written provider
+state that would forecast rather than fail.
+
+**Provider ignorance in the registry.** The `provider/` subdirectory is created,
+handed over and never opened. Everything needed to decide whether an artifact can
+answer a request lives in the manifest, which is why resolving, listing, aliasing
+and deleting need no provider process — the same reason `fit()` needs none in
+order to plan.
+
+The manifest is therefore held to one rule: **every training fact is read off the
+materialized view rather than reported by whoever fitted it.** The sample count,
+the context and horizon, and the `OriginFidelity` all come from the
+`SeriesView`, `SequenceView` or `TabularView` that was handed over, so a manifest
+cannot describe a fit that did not happen. The recipe and the training view's
+schema live in their own files beside it and are hashed into it, so an artifact
+edited on disk fails to load instead of forecasting as something it no longer is.
+
+`PROTOCOL_VERSION` lives in `protocol/` rather than in the transport that will
+negotiate it in Step 9, because the manifest needs it first and the two have to
+be one number. An artifact written for another version is refused rather than
+read optimistically: the provider directory is opaque, so guessing at a layout
+that may have changed is exactly the mistake worth making impossible.
+
+One consequence reaches the public API. `ModelRegistry` resolves a reference
+against the catalog and the artifact store together, and forecasting with a
+reference that names an unfitted model raises `ModelRequiresFit` rather than
+fitting one on whatever data the forecast call happened to be given — a number
+that looks like a forecast from a model the caller never trained is worse than an
+error. A model declaring `requires_fit=False` resolves to its descriptor instead,
+because zero-shot use is a declaration, not an assumption.

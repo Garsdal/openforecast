@@ -13,12 +13,14 @@ caller sees the OpenForecast error it can act on rather than a wrapped one.
 from __future__ import annotations
 
 __all__ = [
+    "ArtifactError",
     "DataError",
     "DuplicateModelError",
     "FrequencyError",
     "InconsistentTruthError",
     "ModelError",
     "ModelRefError",
+    "ModelRequiresFit",
     "OpenForecastError",
     "OriginScopeError",
     "RecipeError",
@@ -107,11 +109,38 @@ class UnknownModelError(ModelError):
     """
 
 
+class ModelRequiresFit(ModelError):
+    """The reference names a model that has to be fitted before it can forecast.
+
+    ``of.forecast(model="nixtla/autoarima", ...)`` names a model, not a fitted
+    one. The alternative — quietly fitting on whatever data the forecast call was
+    given — would return a number that looks like a forecast from a model the
+    caller never trained, so the string lifecycle is explicit instead: fit it,
+    and forecast with the artifact reference that comes back.
+    """
+
+
 class DuplicateModelError(ModelError):
     """Two descriptors claim the same reference.
 
     A reference has to identify one model. Letting the second registration win
     would make which model you get depend on provider load order.
+    """
+
+
+class ArtifactError(OpenForecastError):
+    """A fitted artifact is not what it claims to be, or cannot be written.
+
+    About the stored representation rather than about the model: a manifest whose
+    recipe no longer hashes to what it did, an artifact written by a protocol
+    version this build does not speak, a revision an alias points at that is no
+    longer there. An artifact is immutable, so any of these means something
+    outside OpenForecast changed it, and reading on would produce a forecast from
+    a model nobody can describe.
+
+    A reference that simply names no artifact raises
+    :class:`UnknownModelError` instead: the store is intact, the name is not in
+    it.
     """
 
 
