@@ -17,6 +17,7 @@ __all__ = [
     "FrequencyError",
     "InconsistentTruthError",
     "OpenForecastError",
+    "OriginScopeError",
     "SchemaError",
 ]
 
@@ -42,6 +43,16 @@ class DataError(OpenForecastError):
 
     Raised instead of repairing the data. Duplicate rows are not deduplicated,
     off-grid timestamps are not snapped, missing values are not imputed.
+    """
+
+
+class OriginScopeError(OpenForecastError):
+    """More forecast origins were selected than the requested view can express.
+
+    A ``SeriesView`` is one complete time series, so it has room for exactly one
+    origin. Asking for every historical vintage of a point-in-time dataset in
+    that shape has no meaning, and picking one of them silently would train a
+    model on data the caller never asked for.
     """
 
 

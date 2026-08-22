@@ -591,13 +591,42 @@ must be converted into provider-neutral **execution views**.
 
 Providers consume only execution views.
 
+## The three execution views
+
+Each view is named after the training unit it holds, not after a model family:
+
+```text
+View            Training unit                      Typical models
+
+SeriesView      one complete time series           ARIMA, ETS, Theta
+SequenceView    many context -> horizon sequences  NHiTS, TFT, PatchTST
+TabularView     individual supervised target rows  LightGBM, XGBoost, CatBoost
+```
+
+`ForecastView` is the inference counterpart of all three.
+
+Define the vocabulary once:
+
+```python
+class ViewKind(StrEnum):
+    SERIES = "series"
+    SEQUENCES = "sequences"
+    TABULAR = "tabular"
+    FORECAST = "forecast"
+```
+
+Step 5's `TrainingContract.view` is this same enum rather than a second one with
+the same members. It lives in `openforecast/views/base.py`; if the layering
+prevents `models/` from importing it there, lift it into a shared vocabulary
+module rather than duplicating it.
+
 ## Implement package
 
 ```text
 openforecast/views/
     base.py
     series.py
-    windows.py
+    sequences.py
     tabular.py
     forecast.py
     planner.py
@@ -611,6 +640,7 @@ For classical single-time-axis forecasters.
 ```python
 class SeriesView:
     temporal: pa.Table
+    series: pa.Table
     static: pa.Table | None
     schema: SeriesViewSchema
 ```
@@ -618,11 +648,14 @@ class SeriesView:
 Shape:
 
 ```text
-series_id
-event_time
-target columns
-feature columns
+temporal   series_id, event_time, target columns, feature columns
+series     series_id, instance keys
+static     series_id, static features
 ```
+
+`series_id` is opaque and deterministic, like `sample_id`. The key table is what
+maps a forecast back to the instance it belongs to; without it the instance keys
+would have to travel inside `temporal`, where a provider can condition on them.
 
 Used by:
 
@@ -633,16 +666,16 @@ Theta
 local forecasters
 ```
 
-## `WindowView`
+## `SequenceView`
 
-For global/window-learning models.
+For global models that learn from forecast-conditioned sequences.
 
 ```python
-class WindowView:
+class SequenceView:
     temporal: pa.Table
     static: pa.Table | None
     samples: pa.Table
-    schema: WindowViewSchema
+    schema: SequenceViewSchema
 ```
 
 `temporal`:
@@ -736,23 +769,42 @@ class ViewPlanner:
         ...
 ```
 
+`TrainingContract`, `FitPlan` and `ForecastTask` arrive in Steps 5 and 6, so
+Step 4 collapses the three into one `ViewRequest` (which view, which origins,
+what context and horizon) plus an `OriginSelection` with the same four
+constructors Step 6 exposes as `AllOrigins`, `LatestOrigin`, `AtOrigin` and
+`OriginsBetween`. Steps 5 and 6 replace who fills the fields in, not what the
+planner does with them.
+
+Materialization rules:
+
+```text
+a sample the data does not fully cover is dropped, never padded
+a value the source did not have stays missing, never imputed
+an observed feature is masked past the origin being materialized
+each sample spans exactly context + horizon steps of the frequency grid
+```
+
+The last one is validated by the view rather than trusted, so no integration can
+accidentally learn across two origins.
+
 ## Required mapping
 
 ```text
-                     Series      Windows      Tabular
+                     Series      Sequences    Tabular
 
 TimeSeriesFrame       yes         yes          yes
 ForecastDataset       selected    yes          yes
 ForecastContext       forecast    forecast     forecast
 ```
 
-For ordinary `TimeSeriesFrame` → windows:
+For ordinary `TimeSeriesFrame` → sequences:
 
 ```text
 historical forecast origins are simulated
 ```
 
-For `ForecastDataset` → windows:
+For `ForecastDataset` → sequences:
 
 ```text
 actual historical forecast vintages are used
@@ -774,7 +826,7 @@ A model trained using real PIT data must record:
 OBSERVED
 ```
 
-A model trained by cutting windows from one freshest historical time series records:
+A model trained by cutting sequences from one freshest historical time series records:
 
 ```text
 SIMULATED
@@ -782,25 +834,33 @@ SIMULATED
 
 ## Provider boundary enforcement
 
-Add an architecture test prohibiting integrations from importing:
+Add an architecture test prohibiting integrations from importing any semantic
+source dataset:
 
 ```text
-ForecastDataset
+TimeSeriesFrame
 PointInTimeFrame
+ForecastDataset
+ForecastContext
 ```
 
-Providers can import only:
+A provider's whole import surface is:
 
 ```text
-SeriesView
-WindowView
-TabularView
-ForecastView
+openforecast.views
+openforecast.errors
+openforecast.protocol
 ```
+
+`openforecast.views` therefore re-exports the vocabulary its schemas are built
+from — `FeatureSpec`, `Frequency` — so that nothing needs `openforecast.data`.
+
+Since `integrations/` holds no Python yet, test the check itself against a
+violating fixture so that it cannot pass vacuously.
 
 ## Done when
 
-The same `WindowView` type can be generated from both ordinary event-time and PIT data.
+The same `SequenceView` type can be generated from both ordinary event-time and PIT data.
 
 ---
 
@@ -846,19 +906,13 @@ class ModelLifecycle(BaseModel):
 ## Execution contract
 
 ```python
-class FitViewKind(StrEnum):
-    SERIES = "series"
-    WINDOWS = "windows"
-    TABULAR = "tabular"
-
-
 class OriginScope(StrEnum):
     SINGLE = "single"
     MULTIPLE = "multiple"
 
 
 class TrainingContract(BaseModel):
-    view: FitViewKind
+    view: ViewKind
     origin_scope: OriginScope
 
     context_required: bool = False
@@ -879,7 +933,7 @@ horizon_bound_at_fit: false
 ### NHiTS
 
 ```yaml
-view: windows
+view: sequences
 origin_scope: multiple
 context_required: true
 horizon_bound_at_fit: true
@@ -1054,7 +1108,9 @@ of.WindowPlan(
 )
 ```
 
-This is OpenForecast-native.
+This is OpenForecast-native. It sizes the context window of a `SequenceView`
+sample; it is a plan, not a view, which is why it keeps the word *window* while
+the view is a `SequenceView`.
 
 Do not require callers to additionally specify:
 
@@ -1227,7 +1283,7 @@ protocol version
 training schema hash
 
 training view:
-    series/windows/tabular
+    series/sequences/tabular
 
 origin fidelity:
     observed/simulated
@@ -1246,7 +1302,7 @@ Example:
 ```json
 {
   "training": {
-    "view": "windows",
+    "view": "sequences",
     "origin_fidelity": "observed",
     "context": 168,
     "horizon": 72,
@@ -1512,13 +1568,13 @@ Example:
 {
   "operation": "fit",
   "view": {
-    "kind": "windows",
+    "kind": "sequences",
     "path": "/tmp/openforecast/view"
   }
 }
 ```
 
-Window bundle:
+Sequence bundle:
 
 ```text
 schema.json
@@ -1610,11 +1666,11 @@ Test:
 
 ```text
 TimeSeriesFrame -> SeriesView
-TimeSeriesFrame -> WindowView
+TimeSeriesFrame -> SequenceView
 TimeSeriesFrame -> TabularView
 
 ForecastDataset -> SeriesView at one origin
-ForecastDataset -> WindowView
+ForecastDataset -> SequenceView
 ForecastDataset -> TabularView
 ```
 
@@ -1637,7 +1693,7 @@ Assert:
 999999 does not
 ```
 
-## Window sample count
+## Sequence sample count
 
 For:
 
@@ -1673,11 +1729,11 @@ Construct PIT data where every vintage contains identical values.
 Then compare:
 
 ```text
-TimeSeriesFrame -> WindowView
-ForecastDataset -> WindowView
+TimeSeriesFrame -> SequenceView
+ForecastDataset -> SequenceView
 ```
 
-The numerical windows should match.
+The numerical sequences should match.
 
 Only:
 
@@ -1692,7 +1748,7 @@ differs.
 A model declaring:
 
 ```text
-view=windows
+view=sequences
 ```
 
 automatically gets tests against both:
@@ -1702,7 +1758,7 @@ event-time source
 PIT source
 ```
 
-The provider itself only receives `WindowView`.
+The provider itself only receives `SequenceView`.
 
 ## Done when
 
@@ -1846,7 +1902,7 @@ StatsForecast works through the isolated provider without understanding PIT sema
 
 ## Goal
 
-Prove that a global neural forecasting model can train from true point-in-time vintages using `WindowView`.
+Prove that a global neural forecasting model can train from true point-in-time vintages using `SequenceView`.
 
 This is the most important architecture-validation stage.
 
@@ -1856,7 +1912,7 @@ This is the most important architecture-validation stage.
 nixtla/nhits:
 
   training:
-    view: windows
+    view: sequences
     origin_scope: multiple
     context_required: true
     horizon_bound_at_fit: true
@@ -1913,7 +1969,7 @@ ForecastDataset
       ↓
 ViewPlanner
       ↓
-WindowView
+SequenceView
 
 (instance, origin) -> sample_id
 ```
@@ -1964,7 +2020,7 @@ NHiTS h=72
 
 The user must not specify these twice.
 
-## One-window invariant
+## One-sequence invariant
 
 Each synthetic sample must represent exactly:
 
@@ -2041,7 +2097,7 @@ NHiTS trains from real PIT vintages while the provider contains zero `ForecastDa
 
 ---
 
-# Step 13 — Darts integration and library-neutral WindowView validation
+# Step 13 — Darts integration and library-neutral SequenceView validation
 
 ## Goal
 
@@ -2080,7 +2136,7 @@ plus an appropriate local statistical model.
 Global model consumes:
 
 ```text
-WindowView
+SequenceView
 ```
 
 Darts adapter converts each `sample_id` into one Darts `TimeSeries`.
@@ -2162,7 +2218,7 @@ Same behavior as AutoARIMA.
 
 ## Conformance
 
-Run exactly the same PIT `WindowView` tests used for NHiTS.
+Run exactly the same PIT `SequenceView` tests used for NHiTS.
 
 ## Done when
 
@@ -2178,7 +2234,7 @@ Use sktime to validate:
 
 ```text
 SeriesView
-WindowView
+SequenceView
 TabularView
 ```
 
@@ -2195,7 +2251,7 @@ integrations/sktime/
 
 ## Panel mapping
 
-For `WindowView`:
+For `SequenceView`:
 
 ```text
 sample_id
@@ -2220,7 +2276,7 @@ Local sktime forecasters consume `SeriesView`.
 
 ## Global/panel models
 
-Eligible global models consume `WindowView`.
+Eligible global models consume `SequenceView`.
 
 ## Reduction support
 
@@ -2298,7 +2354,7 @@ Users should never need to know about:
 
 ```text
 ViewPlanner
-WindowView
+SequenceView
 unique_id
 ds
 Nixtla
@@ -2810,7 +2866,7 @@ with no Nixtla/Darts/sktime-specific benchmarking implementation.
                 ┌─────────────┼─────────────┐
                 ▼             ▼             ▼
 
-           SeriesView     WindowView    TabularView
+           SeriesView    SequenceView   TabularView
                 │             │             │
                 │             │             │
                 ▼             ▼             ▼
@@ -2847,6 +2903,6 @@ with no Nixtla/Darts/sktime-specific benchmarking implementation.
                           Forecast
 ```
 
-The biggest principle I would preserve throughout all 17 steps is that **`ForecastDataset → WindowView` is an OpenForecast operation, not a Nixtla trick**. Nixtla might represent each window using `unique_id`; Darts might represent it as a `Sequence[TimeSeries]`; sktime might represent it as a panel MultiIndex. Those are compilation targets. The semantic meaning of the training sample belongs to OpenForecast.
+The biggest principle I would preserve throughout all 17 steps is that **`ForecastDataset → SequenceView` is an OpenForecast operation, not a Nixtla trick**. Nixtla might represent each window using `unique_id`; Darts might represent it as a `Sequence[TimeSeries]`; sktime might represent it as a panel MultiIndex. Those are compilation targets. The semantic meaning of the training sample belongs to OpenForecast.
 
 That is what makes point-in-time forecasting a genuine first-class capability rather than a special branch that will become painful as you add providers.

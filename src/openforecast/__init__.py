@@ -5,6 +5,10 @@ outlives the design it was guessing at. Today it is the semantic data layer:
 ``TimeSeriesFrame`` for ordinary event-time data, ``PointInTimeFrame`` and
 ``ForecastDataset`` for real forecast vintages, ``ForecastContext`` for one
 inference origin, and the vocabulary needed to describe them.
+
+The execution views of Step 4 are deliberately not re-exported here: they are a
+provider-facing boundary, imported from :mod:`openforecast.views`, not something
+a user of the library needs to name.
 """
 
 from openforecast.data import (
@@ -25,6 +29,7 @@ from openforecast.errors import (
     FrequencyError,
     InconsistentTruthError,
     OpenForecastError,
+    OriginScopeError,
     SchemaError,
 )
 
@@ -40,6 +45,7 @@ __all__ = [
     "FrequencyUnit",
     "InconsistentTruthError",
     "OpenForecastError",
+    "OriginScopeError",
     "PointInTimeFrame",
     "PointInTimeSchema",
     "SchemaError",

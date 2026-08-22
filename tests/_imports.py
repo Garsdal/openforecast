@@ -35,19 +35,26 @@ def iter_source_files(root: Path = PACKAGE_ROOT) -> Iterator[Path]:
 
 
 def iter_imports(path: Path) -> Iterator[ImportSite]:
-    """Yield every module name imported by ``path``.
+    """Yield every module name imported by the file at ``path``."""
+    yield from imports_in_source(path.read_text(encoding="utf-8"), path)
+
+
+def imports_in_source(source: str, path: Path) -> Iterator[ImportSite]:
+    """Yield every module name imported by ``source``.
 
     Relative imports are resolved against the file's own package so that the
-    layering check sees canonical ``openforecast.*`` names.
+    layering check sees canonical ``openforecast.*`` names. A file outside the
+    package cannot reach it relatively, so there its relative imports are
+    reported as written.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = ast.parse(source, filename=str(path))
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield ImportSite(alias.name, path, node.lineno)
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
-            if node.level:
+            if node.level and _inside_package(path):
                 module = _resolve_relative(path, node.level, module)
             if not module:
                 continue
@@ -59,6 +66,10 @@ def iter_imports(path: Path) -> Iterator[ImportSite]:
             for alias in node.names:
                 if alias.name != "*":
                     yield ImportSite(f"{module}.{alias.name}", path, node.lineno)
+
+
+def _inside_package(path: Path) -> bool:
+    return path.resolve().is_relative_to(PACKAGE_ROOT)
 
 
 def _resolve_relative(path: Path, level: int, module: str) -> str:

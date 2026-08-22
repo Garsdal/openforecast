@@ -1,9 +1,10 @@
 """Arrow plumbing shared by the semantic frames.
 
-Private to :mod:`openforecast.data`. Everything here is a validation or a
-mechanical table operation — nothing in this module decides what data *means*,
-which is why both the event-time and the point-in-time frame can use it without
-either one leaking its vocabulary into the other.
+Internal to OpenForecast: the semantic frames and the views materialized from
+them. Everything here is a validation or a mechanical table operation — nothing
+in this module decides what data *means*, which is why both the event-time and
+the point-in-time frame can use it without either one leaking its vocabulary
+into the other.
 
 The validations raise :class:`~openforecast.errors.DataError` rather than
 repairing anything: no deduplication, no snapping to the grid, no imputation.

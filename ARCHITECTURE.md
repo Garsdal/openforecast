@@ -17,9 +17,9 @@ And its immediate corollary:
    The core install is `pydantic`, `pyarrow`, `platformdirs`. Integrations
    depend on OpenForecast, never the reverse.
 2. **Providers consume execution views, not source semantic datasets.**
-   A provider receives a `SeriesView`, `WindowView`, `TabularView` or
+   A provider receives a `SeriesView`, `SequenceView`, `TabularView` or
    `ForecastView` — never a `TimeSeriesFrame`, `PointInTimeFrame` or
-   `ForecastDataset`.
+   `ForecastDataset`. Its whole import surface is `openforecast.views`.
 3. **Providers must not branch on `TimeSeriesFrame` versus `ForecastDataset`.**
    If a provider needs to know which one it came from, the view abstraction has
    failed and the fix belongs in the `ViewPlanner`, not the provider.
@@ -69,18 +69,20 @@ AST-scans the package and fails on:
   any import of `pandas` — a DataFrame is accepted at the edge and converted by
   `pyarrow`, never stored or depended on (rule 1);
 - any import that points down the layer stack (rules 1, 2 and 7);
-- provider terminology appearing in semantic protocol types (rule 6).
+- provider terminology appearing in semantic protocol types (rule 6);
+- any import in `integrations/` that reaches past the view boundary: a provider
+  may import `openforecast.views`, `openforecast.errors` and
+  `openforecast.protocol`, and may not name `TimeSeriesFrame`,
+  `PointInTimeFrame`, `ForecastDataset` or `ForecastContext` (rules 2 and 3).
+  `integrations/` holds no Python yet, so that check is itself tested against a
+  violating fixture rather than passing vacuously.
 
 CI additionally greps `uv tree --no-dev` so that a framework cannot arrive as
 somebody else's transitive dependency.
 
-Two checks are named here but land with the code they constrain:
-
-- the provider boundary test — integrations may import the four view types and
-  must not import `ForecastDataset` or `PointInTimeFrame` — arrives with the
-  views package in Step 4 (rules 2 and 3);
-- the forbidden-terminology scan over serialized public objects arrives in
-  Step 15 (rule 6).
+One check is named here but lands with the code it constrains: the
+forbidden-terminology scan over serialized public objects arrives in Step 15
+(rule 6).
 
 Rule 4 is enforced by the point-in-time semantic model: `at_origin` matches an
 origin exactly rather than approximately, a vintage is filtered before anything
@@ -92,3 +94,26 @@ detectable rather than plausible.
 Rule 5 is enforced by the validation layers of Steps 3 and 6 and by the
 conformance suite in Step 10, since it is a property of behavior rather than of
 imports.
+
+## The execution views
+
+The three fit views are named after the training unit they hold rather than
+after a model family, because that is the only thing a provider needs to know
+about the data it is handed:
+
+| View           | Training unit                        | Typical models                |
+| -------------- | ------------------------------------ | ----------------------------- |
+| `SeriesView`   | one complete time series             | ARIMA, ETS, Theta             |
+| `SequenceView` | many context → horizon sequences     | NHiTS, TFT, PatchTST          |
+| `TabularView`  | individual supervised target rows    | LightGBM, XGBoost, CatBoost   |
+
+`ForecastView` is the inference counterpart of all three: one origin, one
+horizon.
+
+Two properties make rule 3 hold rather than merely being stated. First, both
+semantic sources materialize into the *same* view types, with
+`OriginFidelity` — `simulated` for windows cut out of one freshest series,
+`observed` for real vintages — as the only difference. Second, the views are
+keyed by opaque, deterministic identifiers (`series_id`, `sample_id`, `row_id`)
+with the instance keys and origins held in a separate key table, so a provider
+cannot condition on them even by accident.
