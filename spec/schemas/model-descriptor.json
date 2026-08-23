@@ -1,0 +1,315 @@
+{
+  "$defs": {
+    "FeatureCapabilities": {
+      "additionalProperties": false,
+      "description": "Which feature roles the model can consume.\n\nNamed after the roles OpenForecast declares, not after any provider's\ncovariate vocabulary; ``hist_exog_list`` and friends are a translation that\nhappens inside an integration.",
+      "properties": {
+        "known": {
+          "default": false,
+          "title": "Known",
+          "type": "boolean"
+        },
+        "observed": {
+          "default": false,
+          "title": "Observed",
+          "type": "boolean"
+        },
+        "static": {
+          "default": false,
+          "title": "Static",
+          "type": "boolean"
+        }
+      },
+      "title": "FeatureCapabilities",
+      "type": "object"
+    },
+    "InstanceCapabilities": {
+      "additionalProperties": false,
+      "description": "How many series at once.",
+      "properties": {
+        "panel": {
+          "default": false,
+          "title": "Panel",
+          "type": "boolean"
+        },
+        "single": {
+          "default": true,
+          "title": "Single",
+          "type": "boolean"
+        }
+      },
+      "title": "InstanceCapabilities",
+      "type": "object"
+    },
+    "MissingValueSupport": {
+      "enum": [
+        "native",
+        "requires_transform",
+        "unsupported"
+      ],
+      "title": "MissingValueSupport",
+      "type": "string"
+    },
+    "ModelCapabilities": {
+      "additionalProperties": false,
+      "description": "The full capability declaration of one model.",
+      "properties": {
+        "features": {
+          "$ref": "#/$defs/FeatureCapabilities",
+          "default": {
+            "known": false,
+            "observed": false,
+            "static": false
+          }
+        },
+        "instances": {
+          "$ref": "#/$defs/InstanceCapabilities",
+          "default": {
+            "panel": false,
+            "single": true
+          }
+        },
+        "missing_values": {
+          "$ref": "#/$defs/MissingValueSupport",
+          "default": "unsupported"
+        },
+        "outputs": {
+          "$ref": "#/$defs/OutputCapabilities",
+          "default": {
+            "point": true,
+            "quantiles": false,
+            "samples": false
+          }
+        },
+        "targets": {
+          "$ref": "#/$defs/TargetCapabilities",
+          "default": {
+            "multivariate": false,
+            "univariate": true
+          }
+        }
+      },
+      "title": "ModelCapabilities",
+      "type": "object"
+    },
+    "ModelLifecycle": {
+      "additionalProperties": false,
+      "description": "What has to happen to a model before it can forecast.",
+      "properties": {
+        "requires_fit": {
+          "title": "Requires Fit",
+          "type": "boolean"
+        },
+        "supports_fit": {
+          "title": "Supports Fit",
+          "type": "boolean"
+        },
+        "supports_update": {
+          "default": false,
+          "title": "Supports Update",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "requires_fit",
+        "supports_fit"
+      ],
+      "title": "ModelLifecycle",
+      "type": "object"
+    },
+    "ModelRef": {
+      "additionalProperties": false,
+      "description": "A parsed model reference.\n\nFrozen and hashable, so it can key a catalog: two references that print the\nsame are the same reference.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "namespace": {
+          "title": "Namespace",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        }
+      },
+      "required": [
+        "namespace",
+        "name"
+      ],
+      "title": "ModelRef",
+      "type": "object"
+    },
+    "OriginScope": {
+      "enum": [
+        "single",
+        "multiple"
+      ],
+      "title": "OriginScope",
+      "type": "string"
+    },
+    "OutputCapabilities": {
+      "additionalProperties": false,
+      "description": "What the model can produce.",
+      "properties": {
+        "point": {
+          "default": true,
+          "title": "Point",
+          "type": "boolean"
+        },
+        "quantiles": {
+          "default": false,
+          "title": "Quantiles",
+          "type": "boolean"
+        },
+        "samples": {
+          "default": false,
+          "title": "Samples",
+          "type": "boolean"
+        }
+      },
+      "title": "OutputCapabilities",
+      "type": "object"
+    },
+    "TargetCapabilities": {
+      "additionalProperties": false,
+      "description": "How many targets at once.",
+      "properties": {
+        "multivariate": {
+          "default": false,
+          "title": "Multivariate",
+          "type": "boolean"
+        },
+        "univariate": {
+          "default": true,
+          "title": "Univariate",
+          "type": "boolean"
+        }
+      },
+      "title": "TargetCapabilities",
+      "type": "object"
+    },
+    "TrainingContract": {
+      "additionalProperties": false,
+      "description": "How OpenForecast must materialize data before this model executes.",
+      "properties": {
+        "context_required": {
+          "default": false,
+          "title": "Context Required",
+          "type": "boolean"
+        },
+        "horizon_bound_at_fit": {
+          "default": false,
+          "title": "Horizon Bound At Fit",
+          "type": "boolean"
+        },
+        "origin_scope": {
+          "$ref": "#/$defs/OriginScope"
+        },
+        "supports_unseen_instances": {
+          "default": false,
+          "title": "Supports Unseen Instances",
+          "type": "boolean"
+        },
+        "view": {
+          "$ref": "#/$defs/ViewKind"
+        }
+      },
+      "required": [
+        "view",
+        "origin_scope"
+      ],
+      "title": "TrainingContract",
+      "type": "object"
+    },
+    "ViewKind": {
+      "description": "Which execution view a model consumes.\n\nEach names a training unit rather than a model family:\n\n```text\nseries      one complete time series           ARIMA, ETS, Theta\nsequences   many context -> horizon sequences  NHiTS, TFT, PatchTST\ntabular     individual supervised target rows  LightGBM, XGBoost, CatBoost\n```\n\n``forecast`` is the inference counterpart of all three.",
+      "enum": [
+        "series",
+        "sequences",
+        "tabular",
+        "forecast"
+      ],
+      "title": "ViewKind",
+      "type": "string"
+    }
+  },
+  "$id": "model-descriptor.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "What a model advertises: its lifecycle, its training contract, the shapes it accepts and the outputs it can produce.",
+  "properties": {
+    "capabilities": {
+      "$ref": "#/$defs/ModelCapabilities",
+      "default": {
+        "features": {
+          "known": false,
+          "observed": false,
+          "static": false
+        },
+        "instances": {
+          "panel": false,
+          "single": true
+        },
+        "missing_values": "unsupported",
+        "outputs": {
+          "point": true,
+          "quantiles": false,
+          "samples": false
+        },
+        "targets": {
+          "multivariate": false,
+          "univariate": true
+        }
+      }
+    },
+    "display_name": {
+      "title": "Display Name",
+      "type": "string"
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/ModelLifecycle"
+    },
+    "parameters_schema": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Parameters Schema",
+      "type": "object"
+    },
+    "provider": {
+      "title": "Provider",
+      "type": "string"
+    },
+    "ref": {
+      "$ref": "#/$defs/ModelRef"
+    },
+    "training": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TrainingContract"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "ref",
+    "provider",
+    "display_name",
+    "lifecycle"
+  ],
+  "title": "Model descriptor",
+  "type": "object"
+}

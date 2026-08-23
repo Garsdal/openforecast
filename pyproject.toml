@@ -23,6 +23,7 @@ server = [
 openforecast = "openforecast.commands:main"
 generate-openapi = "openforecast.server.openapi:main"
 generate-reference = "openforecast.docs.reference:main"
+generate-schemas = "openforecast.docs.schemas:main"
 
 [project.urls]
 Homepage = "https://github.com/Garsdal/openforecast"

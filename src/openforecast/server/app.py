@@ -81,13 +81,17 @@ def create_app(transport: Transport | None = None) -> FastAPI:
     def failed(_request: Request, error: Exception) -> JSONResponse:
         """Answer with the exception, not just a status code.
 
-        The class name travels so that a remote client re-raises what a local
-        call would have raised, which is what makes ``except of.DataError`` mean
-        the same thing on both transports.
+        The envelope is the exception's own ``as_json()`` plus the class name, so
+        a remote caller reads the same ``code``, ``message`` and ``details`` a
+        local one reads, and re-raises what a local call would have raised —
+        which is what makes ``except of.DataError`` mean the same thing on both
+        transports.
         """
         if not isinstance(error, OpenForecastError):  # pragma: no cover - not registered for
             raise error
-        body = ErrorBody(error=ErrorInfo(type=type(error).__name__, message=str(error)))
+        body = ErrorBody(
+            error=ErrorInfo(type=type(error).__name__, **error.as_json()),
+        )
         return JSONResponse(status_code=status_for(error), content=body.model_dump(mode="json"))
 
     # Every endpoint below is a plain ``def`` rather than ``async def``, and

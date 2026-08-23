@@ -137,8 +137,18 @@
       },
       "ErrorInfo": {
         "additionalProperties": false,
-        "description": "A failure, in terms a caller can act on.\n\n``type`` is the name of the OpenForecast exception the same failure would\nhave raised in process, so a remote client re-raises what a local one would\nand a caller's ``except of.DataError`` does not depend on where the model\nran.",
+        "description": "A failure, in terms a caller can act on.\n\n``code``, ``message`` and ``details`` are :meth:`OpenForecastError.as_json\n<openforecast.errors.OpenForecastError.as_json>` \u2014 the same three fields the\nCLI's ``--json`` writes and a provider answers with, because Step 27 says\nthere is one error protocol rather than one per boundary. An agent recovers\non the ``code``: a rewritten sentence must never change what a caller does.\n\n``type`` is the name of the OpenForecast exception the same failure would\nhave raised in process, so a remote client re-raises what a local one would\nand a caller's ``except of.DataError`` does not depend on where the model\nran. It travels beside the code rather than instead of it: the code is the\ncontract, and the class name is how a Python client rebuilds the exact\nsubclass this build happens to have.",
         "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Details",
+            "type": "object"
+          },
           "message": {
             "title": "Message",
             "type": "string"
@@ -150,6 +160,7 @@
         },
         "required": [
           "type",
+          "code",
           "message"
         ],
         "title": "ErrorInfo",

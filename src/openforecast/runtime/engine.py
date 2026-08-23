@@ -78,6 +78,7 @@ from openforecast.errors import (
     IncompatibleForecastTask,
     ProviderError,
     RecipeError,
+    UnsupportedOutput,
     UnsupportedPlanError,
 )
 from openforecast.models.catalog import DEFAULT_CATALOG, ModelCatalog
@@ -312,7 +313,10 @@ class Engine:
             bound = [record.horizon for record in handle.training_records]
             raise IncompatibleForecastTask(
                 f"{handle.ref} was fitted with its horizon bound to {bound} and cannot "
-                f"forecast {horizon} steps; fit it for the horizon you need"
+                f"forecast {horizon} steps; fit it for the horizon you need",
+                model=str(handle.ref),
+                horizon=horizon,
+                fitted_horizons=[record.horizon for record in handle.training_records],
             )
         artifact = self._store.read(handle.ref)
         _check_data_schema(handle.data_schema, context, handle.ref)
@@ -692,10 +696,15 @@ def _check_output(output: OutputSpec, descriptor: ModelDescriptor) -> None:
         if asked_for_native_quantiles and outputs.samples
         else ""
     )
-    raise DataError(
+    raise UnsupportedOutput(
         f"{descriptor.ref} cannot produce a {output.kind} forecast; it declares "
         f"point={outputs.point}, quantiles={outputs.quantiles}, samples={outputs.samples}."
-        f"{remedy}"
+        f"{remedy}",
+        model=str(descriptor.ref),
+        asked_for=str(output.kind),
+        point=outputs.point,
+        quantiles=outputs.quantiles,
+        samples=outputs.samples,
     )
 
 

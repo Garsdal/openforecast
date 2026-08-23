@@ -1,0 +1,125 @@
+{
+  "$defs": {
+    "FeatureAvailability": {
+      "enum": [
+        "observed",
+        "known"
+      ],
+      "title": "FeatureAvailability",
+      "type": "string"
+    },
+    "FeatureKind": {
+      "enum": [
+        "temporal",
+        "static"
+      ],
+      "title": "FeatureKind",
+      "type": "string"
+    },
+    "FeatureSpec": {
+      "additionalProperties": false,
+      "description": "One non-target column, with its semantics.",
+      "properties": {
+        "availability": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FeatureAvailability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "kind": {
+          "$ref": "#/$defs/FeatureKind",
+          "default": "temporal"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "FeatureSpec",
+      "type": "object"
+    },
+    "Frequency": {
+      "additionalProperties": false,
+      "description": "How far apart consecutive steps of a time axis are.",
+      "properties": {
+        "step": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Step",
+          "type": "integer"
+        },
+        "unit": {
+          "$ref": "#/$defs/FrequencyUnit"
+        }
+      },
+      "required": [
+        "unit"
+      ],
+      "title": "Frequency",
+      "type": "object"
+    },
+    "FrequencyUnit": {
+      "enum": [
+        "second",
+        "minute",
+        "hour",
+        "day",
+        "week",
+        "month"
+      ],
+      "title": "FrequencyUnit",
+      "type": "string"
+    }
+  },
+  "$id": "time-series-schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "What the columns of an event-time dataset mean: the timestamp, the targets, the features and their availability.",
+  "properties": {
+    "features": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/FeatureSpec"
+      },
+      "title": "Features",
+      "type": "array"
+    },
+    "frequency": {
+      "$ref": "#/$defs/Frequency"
+    },
+    "instance_keys": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Instance Keys",
+      "type": "array"
+    },
+    "targets": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Targets",
+      "type": "array"
+    },
+    "time": {
+      "title": "Time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "time",
+    "frequency",
+    "targets"
+  ],
+  "title": "Time series schema",
+  "type": "object"
+}

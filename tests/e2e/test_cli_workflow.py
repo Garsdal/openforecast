@@ -18,6 +18,7 @@ loads, not a CLI format.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -107,6 +108,42 @@ def test_the_whole_workflow_is_json_on_stdout(store: str, data: str, tmp_path: P
     assert checked["ok"] is True
 
 
+def test_a_request_is_constructed_from_the_schema_and_executed(
+    store: str, data: str, tmp_path: Path
+) -> None:
+    """Step 27's "done when", as the loop an agent walks.
+
+    Ask the build what a fit request is, build one out of the fields the schema
+    declared, run it, and forecast with what came back — with nothing read from a
+    doc page and nothing guessed at.
+    """
+    schema = run("schema", "fit", "--json").json
+    payload = {
+        name: value
+        for name, value in (("model", MODEL), ("data", data), ("horizon", HORIZON))
+        if name in schema["properties"]
+    }
+    assert set(schema["required"]) <= set(payload)
+
+    fitted = run(
+        "fit", "--store", store, "--config", write_config(tmp_path / "fit.json", payload), "--json"
+    ).json
+
+    forecast = run(
+        "forecast",
+        "--store",
+        store,
+        "--model",
+        f"local/{fitted['name']}@{fitted['artifact_id']}",
+        "--data",
+        data,
+        "--horizon",
+        str(HORIZON),
+        "--json",
+    ).json
+    assert len(forecast["rows"]) == HORIZON
+
+
 def test_the_unpinned_alias_follows_the_latest_fit(store: str, data: str) -> None:
     """``local/de-price`` is what a script forecasts with between fits."""
     first = fit(store, data, "--name", "de-price", "--json").json
@@ -156,6 +193,12 @@ def test_a_quantile_request_a_model_cannot_answer_fails_before_anything_is_print
 
 
 def test_forecasting_with_a_model_nobody_fitted_fails(store: str, data: str) -> None:
+    """Step 27.3: a caller who asked for JSON is answered in JSON when it fails.
+
+    On stderr, with stdout empty — so a script reading the stream still cannot
+    mistake a failure for an answer — and as the same envelope the HTTP
+    projection returns, so recovery is a branch on ``code``.
+    """
     result = run(
         "forecast",
         "--store",
@@ -167,6 +210,25 @@ def test_forecasting_with_a_model_nobody_fitted_fails(store: str, data: str) -> 
         "--horizon",
         "3",
         "--json",
+    )
+
+    assert result.code == 1
+    assert result.out == ""
+    assert json.loads(result.err)["error"]["code"] == "MODEL_NOT_FOUND"
+
+
+def test_a_failure_without_json_is_one_sentence(store: str, data: str) -> None:
+    """The human rendering is unchanged: a person reads a sentence, not a document."""
+    result = run(
+        "forecast",
+        "--store",
+        store,
+        "--model",
+        "local/never-fitted",
+        "--data",
+        data,
+        "--horizon",
+        "3",
     )
 
     assert result.code == 1

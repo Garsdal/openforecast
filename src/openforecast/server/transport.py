@@ -270,10 +270,14 @@ def _reraise(error: HTTPError) -> OpenForecastError:
         )
     found = getattr(errors, envelope.error.type, None)
     if isinstance(found, type) and issubclass(found, OpenForecastError):
-        return found(envelope.error.message)
+        # The details cross unchanged, so ``error.details["model"]`` says the
+        # same thing here as it did in the process that raised it.
+        return found(envelope.error.message, **envelope.error.details)
     return ProviderError(
         f"the forecasting service reported {envelope.error.type}, which this build does "
-        f"not know: {envelope.error.message}"
+        f"not know: {envelope.error.message}",
+        reported_type=envelope.error.type,
+        reported_code=envelope.error.code,
     )
 
 

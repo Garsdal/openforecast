@@ -75,7 +75,8 @@ class ModelRegistry:
         if descriptor.lifecycle.requires_fit:
             raise ModelRequiresFit(
                 f"{parsed} has to be fitted before it can forecast; fit it with of.fit and "
-                f"forecast with the {LOCAL_NAMESPACE}/... reference that comes back"
+                f"forecast with the {LOCAL_NAMESPACE}/... reference that comes back",
+                model=str(parsed),
             )
         return descriptor
 
@@ -100,13 +101,16 @@ class ModelRegistry:
             source = handle.manifest.source_model or "the recipe recorded in it"
             raise ModelError(
                 f"{parsed} is a fitted artifact, not a model to fit; it was fitted from "
-                f"{source}, so fit that instead"
+                f"{source}, so fit that instead",
+                model=str(parsed),
+                source_model=handle.manifest.source_model,
             )
         descriptor = self._catalog.get(parsed)
         if not descriptor.is_fittable:
             raise ModelDoesNotSupportFit(
                 f"{parsed} cannot be fitted; it is used zero-shot, so forecast with the "
-                f"reference directly: of.forecast(model='{parsed}', data=..., horizon=...)"
+                f"reference directly: of.forecast(model='{parsed}', data=..., horizon=...)",
+                model=str(parsed),
             )
         return descriptor
 

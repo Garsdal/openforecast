@@ -133,6 +133,33 @@ prints as the `ModelDescriptor` the HTTP projection returns for
 `GET /v1/models`, so an agent reading a model over the CLI and one reading it
 over the network are reading one schema rather than two spellings of it.
 
+## Asking the build what a request is
+
+```bash
+openforecast schema fit
+openforecast schema fit --json
+```
+
+`--json` prints the JSON Schema of the request itself, which is the same document
+committed under `spec/schemas`, generated from the Pydantic models the commands
+validate against. So the shape of a request never has to be guessed at:
+
+```text
+inspect schema  ->  construct request  ->  execute
+```
+
+```bash
+openforecast schema forecast --json | jq '.required'
+openforecast schema backtest --json | jq '.properties | keys'
+openforecast schema recipe --json | jq '."$defs" | keys'
+```
+
+There is one for every request and for every object a request is built out of —
+`fit`, `forecast`, `backtest`, `recipe`, `plan`, `output`, `series-schema`,
+`model` and `error` — and `openforecast schema --help` lists them. Without
+`--json` the command prints the top-level fields and which of them are required,
+which is the version worth reading in a terminal.
+
 ## Streams and exit codes
 
 ```text
@@ -152,6 +179,28 @@ openforecast models get nixtla/nhits
 
 That is what makes a pipeline reliable: `openforecast models list --json | jq`
 either parses or the exit code says why not.
+
+With `--json`, a failure is structured too — still on stderr, still with an empty
+stdout and a non-zero exit code:
+
+```bash
+openforecast forecast --model nixtla/nhits --data ./dataset --horizon 24 --json
+```
+
+```json
+{
+  "error": {
+    "code": "MODEL_REQUIRES_FIT",
+    "message": "nixtla/nhits has to be fitted before it can forecast; ...",
+    "details": {"model": "nixtla/nhits"}
+  }
+}
+```
+
+The `code` is the part to write a branch on. It is the same envelope the HTTP API
+answers with and the same three fields `except of.OpenForecastError as error`
+gives you in Python, and the codes are stable — a message is free to be rewritten
+for clarity, so recovery that string-matches one is recovery that breaks.
 
 ## Checking an installation
 

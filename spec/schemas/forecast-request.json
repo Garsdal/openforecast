@@ -1,0 +1,97 @@
+{
+  "$defs": {
+    "OutputKind": {
+      "enum": [
+        "point",
+        "quantiles",
+        "samples"
+      ],
+      "title": "OutputKind",
+      "type": "string"
+    },
+    "OutputSpec": {
+      "additionalProperties": false,
+      "description": "What kind of forecast to produce.\n\nThe fields are ``levels`` and ``draws`` rather than ``quantiles`` and\n``samples`` because the constructors own those two names \u2014 and the\nconstructors are the interface:\n\n```python\nof.OutputSpec.quantiles([0.1, 0.5, 0.9])   # spec.levels\nof.OutputSpec.samples(100)                 # spec.draws\n```",
+      "properties": {
+        "draws": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Draws"
+        },
+        "kind": {
+          "$ref": "#/$defs/OutputKind",
+          "default": "point"
+        },
+        "levels": {
+          "default": [],
+          "items": {
+            "type": "number"
+          },
+          "title": "Levels",
+          "type": "array"
+        }
+      },
+      "title": "OutputSpec",
+      "type": "object"
+    }
+  },
+  "$id": "forecast-request.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The arguments of `of.forecast`. `model` is the reference a fit produced, so a recipe is not accepted here.",
+  "properties": {
+    "data": {
+      "format": "path",
+      "title": "Data",
+      "type": "string"
+    },
+    "horizon": {
+      "minimum": 1,
+      "title": "Horizon",
+      "type": "integer"
+    },
+    "model": {
+      "title": "Model",
+      "type": "string"
+    },
+    "origin_time": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Origin Time"
+    },
+    "output": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OutputSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "data",
+    "model",
+    "horizon"
+  ],
+  "title": "Forecast request",
+  "type": "object"
+}

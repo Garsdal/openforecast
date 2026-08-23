@@ -10,10 +10,12 @@ two are the same facts rather than two answers — the table is a projection of
 the document. Shared here so that adding a command is adding a projection and
 not a second opinion about how a null prints.
 
-Everything written through this module goes to the stream the command was handed,
-which is stdout. That is Step 26.4's half of the contract: stdout is the
-requested output and nothing else, so ``--json`` really can be piped into ``jq``.
-Logs, progress and warnings are stderr's, and no function here writes there.
+Everything written through this module goes to the stream it is handed, and for a
+command's answer that is stdout. That is Step 26.4's half of the contract: stdout
+is the requested output and nothing else, so ``--json`` really can be piped into
+``jq``. Nothing here chooses a stream, which is what lets the one thing that is
+*not* an answer — the structured error envelope of Step 27.3 — be rendered by the
+same :func:`dump` onto stderr, where a failure belongs.
 """
 
 from __future__ import annotations

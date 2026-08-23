@@ -62,7 +62,12 @@ from typing import IO, Any, NoReturn
 import pyarrow as pa
 from pydantic import BaseModel, ValidationError
 
-from openforecast.errors import DataError, ProviderError, RecipeError, UnknownModelError
+from openforecast.errors import (
+    DataError,
+    InvalidModelParameters,
+    ProviderError,
+    UnknownModelError,
+)
 from openforecast.models.descriptor import ModelDescriptor
 from openforecast.models.ref import ModelRef
 from openforecast.protocol import PROTOCOL_VERSION
@@ -106,7 +111,7 @@ _LOGGER = logging.getLogger("openforecast.provider")
 # model happened to run.
 _CODE_ERRORS = {
     ErrorCode.UNKNOWN_MODEL: UnknownModelError,
-    ErrorCode.INVALID_MODEL_PARAMETERS: RecipeError,
+    ErrorCode.INVALID_MODEL_PARAMETERS: InvalidModelParameters,
     ErrorCode.INVALID_VIEW: DataError,
 }
 
@@ -362,8 +367,20 @@ class SubprocessProvider:
             self._fail(f"answered with something that is not a response: {error}")
 
     def _error(self, payload: ErrorPayload) -> Exception:
+        """The provider's envelope as the exception it would have been in-process.
+
+        The details cross unchanged, and the provider's own code joins them: the
+        envelope this raises reports the OpenForecast code a caller branches on,
+        so the finer-grained thing the provider actually said stays available
+        without being the thing recovery depends on.
+        """
         cls = _CODE_ERRORS.get(payload.code, ProviderError)
-        return cls(f"{self._label()} failed [{payload.code}]: {payload.message}")
+        return cls(
+            f"{self._label()} failed [{payload.code}]: {payload.message}",
+            provider=self._label(),
+            provider_code=str(payload.code),
+            **payload.details,
+        )
 
     def _fail(self, what: str, *, ended: bool = False) -> NoReturn:
         """Stop the process and raise; the transport is not trusted after this.

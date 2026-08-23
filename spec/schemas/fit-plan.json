@@ -1,0 +1,268 @@
+{
+  "$defs": {
+    "Accelerator": {
+      "enum": [
+        "auto",
+        "cpu",
+        "gpu"
+      ],
+      "title": "Accelerator",
+      "type": "string"
+    },
+    "AllOrigins": {
+      "additionalProperties": false,
+      "description": "Every origin the data holds, optionally thinned by ``stride``.\n\nA stride of 12 on hourly vintages trains on two origins a day. It thins the\nsamples rather than the horizon each sample covers, so the sequences stay\nexactly as long \u2014 this is a way to spend less compute on highly overlapping\norigins, not a way to change what a sample means.",
+      "properties": {
+        "mode": {
+          "const": "all",
+          "default": "all",
+          "title": "Mode",
+          "type": "string"
+        },
+        "stride": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Stride",
+          "type": "integer"
+        }
+      },
+      "title": "AllOrigins",
+      "type": "object"
+    },
+    "AtOrigin": {
+      "additionalProperties": false,
+      "description": "Exactly one named origin.\n\nMatched exactly rather than approximately. Answering for 10:00 when 11:00\nwas asked for would train the model on a vintage the caller never named.",
+      "properties": {
+        "mode": {
+          "const": "at",
+          "default": "at",
+          "title": "Mode",
+          "type": "string"
+        },
+        "origin": {
+          "format": "date-time",
+          "title": "Origin",
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin"
+      ],
+      "title": "AtOrigin",
+      "type": "object"
+    },
+    "LatestOrigin": {
+      "additionalProperties": false,
+      "description": "Only the freshest origin \u2014 the one production inference would run at.",
+      "properties": {
+        "mode": {
+          "const": "latest",
+          "default": "latest",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "title": "LatestOrigin",
+      "type": "object"
+    },
+    "OriginsBetween": {
+      "additionalProperties": false,
+      "description": "Every origin in a closed interval, optionally thinned by ``stride``.\n\nThe bounds are inclusive, and an interval the data does not cover is an\nerror rather than an empty fit: it almost always means the caller is\nreasoning about a different dataset than the one they passed.",
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "mode": {
+          "const": "between",
+          "default": "between",
+          "title": "Mode",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "stride": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Stride",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "OriginsBetween",
+      "type": "object"
+    },
+    "Resources": {
+      "additionalProperties": false,
+      "description": "What hardware a fit may use.\n\nDeliberately thin. A provider knows how to talk to its own accelerators; the\npoint of naming them here is that the *request* is OpenForecast's, so two\nproviders do not need two different spellings of \"use the GPU\".",
+      "properties": {
+        "accelerator": {
+          "$ref": "#/$defs/Accelerator",
+          "default": "auto"
+        },
+        "devices": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Devices"
+        }
+      },
+      "title": "Resources",
+      "type": "object"
+    },
+    "SearchPlan": {
+      "additionalProperties": false,
+      "description": "Hyperparameter search \u2014 reserved, not yet executable.\n\nThe shape is fixed now so that the plan that reaches a provider does not\nhave to change when search lands. Attaching one to a ``FitPlan`` raises\n:class:`~openforecast.errors.UnsupportedPlanError` today, because the\nalternative \u2014 accepting it and fitting once with the first candidate \u2014 would\nlook exactly like a search that ran.",
+      "properties": {
+        "space": {
+          "additionalProperties": {
+            "items": {},
+            "type": "array"
+          },
+          "title": "Space",
+          "type": "object"
+        },
+        "strategy": {
+          "$ref": "#/$defs/SearchStrategy"
+        },
+        "trials": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trials"
+        }
+      },
+      "required": [
+        "strategy",
+        "space"
+      ],
+      "title": "SearchPlan",
+      "type": "object"
+    },
+    "SearchStrategy": {
+      "enum": [
+        "grid",
+        "random"
+      ],
+      "title": "SearchStrategy",
+      "type": "string"
+    },
+    "WindowPlan": {
+      "additionalProperties": false,
+      "description": "How much history one training sample conditions on.\n\nSteps of the data's frequency, not a duration: 168 on hourly data is a week,\nand the same number on daily data is half a year. The frequency lives on the\ndata, so saying it again here would let the two disagree.",
+      "properties": {
+        "context": {
+          "minimum": 1,
+          "title": "Context",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "context"
+      ],
+      "title": "WindowPlan",
+      "type": "object"
+    }
+  },
+  "$id": "fit-plan.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "How the view a model trains on is materialized \u2014 the context window, the origins, the lags. Never what the model is.",
+  "properties": {
+    "origins": {
+      "default": {
+        "mode": "all",
+        "stride": 1
+      },
+      "discriminator": {
+        "mapping": {
+          "all": "#/$defs/AllOrigins",
+          "at": "#/$defs/AtOrigin",
+          "between": "#/$defs/OriginsBetween",
+          "latest": "#/$defs/LatestOrigin"
+        },
+        "propertyName": "mode"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/AllOrigins"
+        },
+        {
+          "$ref": "#/$defs/LatestOrigin"
+        },
+        {
+          "$ref": "#/$defs/AtOrigin"
+        },
+        {
+          "$ref": "#/$defs/OriginsBetween"
+        }
+      ],
+      "title": "Origins"
+    },
+    "resources": {
+      "$ref": "#/$defs/Resources",
+      "default": {
+        "accelerator": "auto",
+        "devices": null
+      }
+    },
+    "search": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SearchPlan"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "seed": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Seed"
+    },
+    "window": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WindowPlan"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "title": "Fit plan",
+  "type": "object"
+}

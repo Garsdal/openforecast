@@ -1,0 +1,46 @@
+{
+  "$defs": {
+    "OutputKind": {
+      "enum": [
+        "point",
+        "quantiles",
+        "samples"
+      ],
+      "title": "OutputKind",
+      "type": "string"
+    }
+  },
+  "$id": "output-spec.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "What kind of forecast to answer with: a point, quantiles, or sample paths.",
+  "properties": {
+    "draws": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Draws"
+    },
+    "kind": {
+      "$ref": "#/$defs/OutputKind",
+      "default": "point"
+    },
+    "levels": {
+      "default": [],
+      "items": {
+        "type": "number"
+      },
+      "title": "Levels",
+      "type": "array"
+    }
+  },
+  "title": "Output specification",
+  "type": "object"
+}

@@ -29,7 +29,7 @@ from typing import Any
 import pyarrow as pa
 
 from openforecast.data.features import FeatureSpec
-from openforecast.errors import DataError
+from openforecast.errors import DataError, UnsupportedDataShape, UnsupportedFeature
 from openforecast.models.capabilities import MissingValueSupport
 from openforecast.models.descriptor import ModelDescriptor
 from openforecast.recipes.transforms import Impute, Transform
@@ -90,23 +90,33 @@ def _check_shape(
     capabilities = descriptor.capabilities
     if not capabilities.instances.supports(is_panel=bool(instance_keys)):
         shape = "a panel" if instance_keys else "a single series"
-        raise DataError(
+        raise UnsupportedDataShape(
             f"{descriptor.ref} cannot be {verb} {shape}; it declares "
-            f"single={capabilities.instances.single}, panel={capabilities.instances.panel}"
+            f"single={capabilities.instances.single}, panel={capabilities.instances.panel}",
+            model=str(descriptor.ref),
+            instance_keys=list(instance_keys),
+            single=capabilities.instances.single,
+            panel=capabilities.instances.panel,
         )
     if not capabilities.targets.supports(len(targets)):
-        raise DataError(
+        raise UnsupportedDataShape(
             f"{descriptor.ref} cannot be {verb} {len(targets)} targets "
             f"{list(targets)}; it declares univariate="
-            f"{capabilities.targets.univariate}, multivariate={capabilities.targets.multivariate}"
+            f"{capabilities.targets.univariate}, multivariate={capabilities.targets.multivariate}",
+            model=str(descriptor.ref),
+            targets=list(targets),
+            univariate=capabilities.targets.univariate,
+            multivariate=capabilities.targets.multivariate,
         )
     unsupported = capabilities.features.unsupported(features)
     if unsupported:
-        raise DataError(
+        raise UnsupportedFeature(
             f"{descriptor.ref} cannot be given the features {list(unsupported)}; it declares "
             f"observed={capabilities.features.observed}, known={capabilities.features.known}, "
             f"static={capabilities.features.static}. Drop them from the data, or fit a model "
-            f"that consumes them"
+            f"that consumes them",
+            model=str(descriptor.ref),
+            features=list(unsupported),
         )
 
 

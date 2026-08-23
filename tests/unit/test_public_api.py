@@ -48,6 +48,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "IncompatibleForecastTask",
     "InconsistentTruthError",
     "IntervalWidth",
+    "InvalidModelParameters",
     "LatestOrigin",
     "LeadTimeFeature",
     "LocalTransport",
@@ -73,6 +74,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "PointInTimeFrame",
     "PointInTimeSchema",
     "ProviderError",
+    "ProviderNotInstalled",
     "RMSE",
     "Recipe",
     "RecipeError",
@@ -86,6 +88,9 @@ EXPECTED_PUBLIC_SURFACE = {
     "TimeSeriesSchema",
     "Transport",
     "UnknownModelError",
+    "UnsupportedDataShape",
+    "UnsupportedFeature",
+    "UnsupportedOutput",
     "UnsupportedPlanError",
     "Validation",
     "WindowPlan",
@@ -534,17 +539,23 @@ def test_importing_openforecast_does_not_import_a_web_framework() -> None:
     assert answer.stdout.strip() == "[]"
 
 
-def test_every_error_carries_a_code_a_caller_can_branch_on() -> None:
-    """Derived from the class name, so the two cannot disagree.
+def test_every_error_carries_the_envelope_a_caller_branches_on() -> None:
+    """The public half of Step 27.3: three fields, on anything exported.
 
-    Step 27 is where the rest of the envelope lands. What has to be true already
-    is that an agent can recover on ``error.code`` rather than by string-matching
-    prose, and that the code and the ``except`` clause name the same thing.
+    Which code belongs to which class is frozen in ``tests/unit/test_errors.py``,
+    because that is the compatibility surface. What is asserted here is that the
+    surface a caller reaches through ``import openforecast`` has it at all.
     """
-    assert of.ModelDoesNotSupportFit("x").code == "MODEL_DOES_NOT_SUPPORT_FIT"
-    assert of.ModelRequiresFit("x").code == "MODEL_REQUIRES_FIT"
-    assert of.UnknownModelError("x").code == "UNKNOWN_MODEL_ERROR"
-    assert of.OpenForecastError("x").code == "OPEN_FORECAST_ERROR"
+    error = of.ModelRequiresFit("nixtla/nhits has to be fitted", model="nixtla/nhits")
+
+    assert error.code == "MODEL_REQUIRES_FIT"
+    assert error.message == "nixtla/nhits has to be fitted"
+    assert error.details == {"model": "nixtla/nhits"}
+    assert error.as_json() == {
+        "code": "MODEL_REQUIRES_FIT",
+        "message": "nixtla/nhits has to be fitted",
+        "details": {"model": "nixtla/nhits"},
+    }
 
 
 def test_every_exported_error_has_a_distinct_code() -> None:
@@ -554,7 +565,7 @@ def test_every_exported_error_has_a_distinct_code() -> None:
         if isinstance(candidate := getattr(of, name), type)
         and issubclass(candidate, of.OpenForecastError)
     ]
-    codes = [candidate("").code for candidate in errors]
+    codes = [candidate.code for candidate in errors]
 
     assert len(codes) == len(set(codes))
     assert all(code.isupper() for code in codes)
