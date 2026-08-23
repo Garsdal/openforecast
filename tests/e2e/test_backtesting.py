@@ -36,6 +36,7 @@ from openforecast.models import (
     ModelCatalog,
     OutputCapabilities,
     TargetCapabilities,
+    TrainingContract,
 )
 from openforecast.runtime import ProviderRegistry
 from tests import providers
@@ -328,6 +329,50 @@ def test_point_in_time_data_is_backtested_at_the_origins_it_holds(
 
     assert result.origins == (at(8), at(10), at(12))
     assert values(result.metrics, "origin_fidelity") == ["observed"] * 3
+
+
+def test_a_cross_view_ensemble_is_backtested_like_any_other_candidate(
+    tmp_path: Path,
+) -> None:
+    """Step 21.6: no ensemble-specific evaluation logic, because there is none to add.
+
+    The candidate is an ensemble of a model that learns from sequences and one
+    that learns from tabular rows, over real vintages, fitted and scored by the
+    ordinary lifecycle: one row per fold in the result, named once, exactly as a
+    bare model reference would be.
+    """
+    deep = providers.descriptor(
+        "sequences", training=TrainingContract.sequences(supports_unseen_instances=True)
+    )
+    trees = providers.descriptor("trees", provider="other", training=TrainingContract.tabular())
+    client = of.OpenForecast(
+        store=tmp_path / "crossing",
+        catalog=ModelCatalog((deep, trees)),
+        providers=ProviderRegistry(
+            [
+                providers.StubProvider(models=(deep,), value=10.0),
+                providers.StubProvider(name="other", models=(trees,), value=20.0),
+            ]
+        ),
+    )
+    recipe = of.Ensemble(models=(of.Model("stub/sequences"), of.Model("other/trees")))
+
+    result = of.backtest(
+        models=[of.Candidate(recipe, name="blend")],
+        data=dataset(),
+        validation=of.ForecastOriginValidation(
+            horizon=2, origins=of.OriginsBetween(at(8), at(12), stride=2)
+        ),
+        metrics=[of.MAE()],
+        plan=of.FitPlan(window=of.WindowPlan(context=3)),
+        client=client,
+    )
+
+    assert result.models == ("blend",)
+    assert result.metrics.num_rows == 3  # one metric per fold, not per member
+    assert values(result.metrics, "origin_fidelity") == ["observed"] * 3
+    # Every member answered its own constant, and what was scored is their mean.
+    assert set(values(result.predictions, "prediction")) == {15.0}
 
 
 def test_a_fit_at_a_historical_origin_never_saw_a_later_vintage(

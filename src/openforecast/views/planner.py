@@ -123,6 +123,7 @@ class ViewRequest(BaseModel):
         *,
         plan: FitPlan | None = None,
         task: ForecastTask | None = None,
+        shared_plan: bool = False,
     ) -> ViewRequest:
         """What a model's contract, a fit plan and a forecast task jointly ask for.
 
@@ -134,10 +135,16 @@ class ViewRequest(BaseModel):
         A field the requested view does not bind is an error rather than
         something quietly dropped — a ``WindowPlan`` handed to a series model was
         written by someone expecting it to have an effect.
+
+        ``shared_plan`` says the plan was written for several models at once, as
+        an ensemble's is. A ``WindowPlan`` then does have an effect, on whichever
+        member sizes a context window, and a member that binds none is not the
+        one it was addressed to; that the plan reaches *someone* is checked
+        against the whole recipe rather than one contract at a time.
         """
         plan = FitPlan() if plan is None else plan
         if contract.view is ViewKind.SERIES:
-            if plan.window is not None:
+            if plan.window is not None and not shared_plan:
                 raise RecipeError(
                     "a series model sizes no context window: it trains on one complete "
                     "time series, so a WindowPlan would have no effect. Drop it, or fit "
@@ -155,7 +162,7 @@ class ViewRequest(BaseModel):
                 "given a default context length; state one with "
                 "of.FitPlan(window=of.WindowPlan(context=...))"
             )
-        if contract.view is ViewKind.TABULAR and plan.window is not None:
+        if contract.view is ViewKind.TABULAR and plan.window is not None and not shared_plan:
             raise RecipeError(
                 "a tabular view binds no context length; lagged features are declared "
                 "on the recipe, as of.Reduction(lags=[...])"
@@ -163,7 +170,7 @@ class ViewRequest(BaseModel):
         return cls(
             kind=contract.view,
             horizon=task.horizon,
-            context=plan.context,
+            context=plan.context if contract.view is ViewKind.SEQUENCES else None,
             origins=plan.origins,
         )
 

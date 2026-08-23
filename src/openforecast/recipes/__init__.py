@@ -13,7 +13,7 @@ of.Pipeline(steps=[
 
 of.Ensemble(
     models=[of.Model("nixtla/nhits"), of.Model("nixtla/autoarima")],
-    combine=of.WeightedMean(weights=[0.7, 0.3]),
+    weights=[0.7, 0.3],
 )
 
 of.Reduction(estimator="lightgbm/regressor", strategy="direct", lags=[1, 24, 168])
@@ -42,17 +42,13 @@ one down, store it and read it back is what Step 6 delivers.
 
 from openforecast.recipes.base import ColumnSelector, ColumnSet, ColumnTransform, RecipeKind
 from openforecast.recipes.nodes import (
-    Combiner,
-    CombinerKind,
     Ensemble,
-    Mean,
     Model,
     Pipeline,
     PipelineStep,
     Recipe,
     Reduction,
     ReductionStrategy,
-    WeightedMean,
     declared_transforms,
     estimator_refs,
     parse_recipe,
@@ -71,13 +67,10 @@ __all__ = [
     "ColumnSelector",
     "ColumnSet",
     "ColumnTransform",
-    "Combiner",
-    "CombinerKind",
     "Ensemble",
     "Impute",
     "ImputeMethod",
     "LeadTimeFeature",
-    "Mean",
     "MissingIndicator",
     "Model",
     "OriginCalendarFeatures",
@@ -89,7 +82,6 @@ __all__ = [
     "ReductionStrategy",
     "StandardScaler",
     "Transform",
-    "WeightedMean",
     "declared_transforms",
     "estimator_refs",
     "parse_recipe",

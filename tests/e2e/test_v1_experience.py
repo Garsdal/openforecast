@@ -400,7 +400,7 @@ def test_a_pipeline_and_an_ensemble_span_two_libraries(build: BuildClient) -> No
             ),
             of.Model(TIDE, params=dict(FAST[TIDE])),
         ),
-        combine=of.WeightedMean(weights=(3, 1)),
+        weights=(3, 1),
     )
 
     handle = client.fit(recipe, data, horizon=HORIZON, plan=sequences_plan(), name="blend")
@@ -410,6 +410,34 @@ def test_a_pipeline_and_an_ensemble_span_two_libraries(build: BuildClient) -> No
     assert handle.manifest.provider == "openforecast"
     assert len(handle.training_records) == 2
     assert forecast.num_rows == INSTANCES * HORIZON
+
+
+def test_an_ensemble_spans_two_execution_views(build: BuildClient) -> None:
+    """Step 21's milestone, in libraries rather than in stubs.
+
+    ``sktime/pooled-trees`` learns from context -> horizon sequences and
+    ``sklearn/hist-gradient-boosting`` from supervised rows. Each child plans
+    independently out of the same vintages, and the ``WindowPlan`` reaches the
+    one that sizes a window — neither provider is handed anything that says an
+    ensemble exists, and what comes back is one persisted model.
+    """
+    data = windows()
+    client = build("sktime", "sklearn")
+    recipe = of.Ensemble(
+        models=(
+            of.Model(POOLED_TREES, params=dict(FAST[POOLED_TREES])),
+            of.Model(HIST_GRADIENT_BOOSTING, params=dict(FAST[HIST_GRADIENT_BOOSTING])),
+        ),
+        weights=(3, 1),
+    )
+
+    handle = client.fit(recipe, data, horizon=HORIZON, plan=sequences_plan(), name="blend")
+    forecast = client.forecast(handle, data.at_origin(LATEST_ORIGIN), horizon=HORIZON)
+
+    assert [record.view for record in handle.training_records] == ["sequences", "tabular"]
+    assert handle.manifest.provider == "openforecast"
+    assert forecast.num_rows == INSTANCES * HORIZON
+    assert all(value == value for value in values(forecast)), "the answer holds NaNs"
 
 
 def test_a_horizon_the_reduction_never_bound_is_still_servable(build: BuildClient) -> None:

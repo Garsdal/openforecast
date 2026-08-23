@@ -414,6 +414,17 @@ leaf rather than one for itself, because an ensemble's members may consume
 different views and there is no single materialization it could honestly
 describe. Its `provider` is `openforecast`: no library produced a weighted mean.
 
+Members plan independently, which is the whole point: a sequence model and a
+tabular model in one ensemble are handed a `SequenceView` and a `TabularView` of
+the same data, and converge only on the `Forecast` that comes back. The
+combination is a weighted mean of those — equal unless the recipe says
+otherwise — applied to a quantile forecast level by level, which is quantile
+averaging rather than the quantile of a mixture. Sample paths are not combined:
+draw *i* of one member and draw *i* of another are unrelated draws. And because
+a half-trained ensemble is not a partial answer but a wrong one, every member is
+checked — contract against data, capabilities against the request — before the
+first of them is started.
+
 Transform statistics are fitted once and persisted. A scaler that recomputed its
 mean from the forecast context would leak whatever that context happens to
 contain into the answer, and nothing in the output would show it; the same

@@ -232,7 +232,7 @@ def test_an_ensemble_combines_two_fitted_models(client: of.OpenForecast) -> None
             of.Model(MODEL, params={"season_length": 4}),
             of.Model(MODEL, params={"season_length": 1}),
         ),
-        combine=of.WeightedMean(weights=(3, 1)),
+        weights=(3, 1),
     )
 
     handle = client.fit(recipe, data, name="blend")
