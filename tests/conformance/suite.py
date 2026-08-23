@@ -27,6 +27,12 @@ A model that declares less gets fewer positive cases and more refusals — never
 fewer checks. Declaring no panel support does not exempt a provider from panel
 data; it changes what panel data must do, which is fail as a declaration
 mismatch before the provider is started.
+
+Since Step 23 the same generator covers the second lifecycle. A model with no
+training contract gets the same cases with the fit half removed and the forecast
+half unchanged, and its refusals move to the forecast — which is the first and
+only moment its declaration meets data. It also gains one refusal the trainable
+models cannot have: being fitted at all.
 """
 
 from __future__ import annotations
@@ -42,13 +48,18 @@ import pyarrow as pa
 import pytest
 
 import openforecast as of
-from openforecast.artifacts.handle import ModelHandle
-from openforecast.errors import DataError, OpenForecastError, OriginScopeError
+from openforecast.errors import (
+    DataError,
+    ModelDoesNotSupportFit,
+    OpenForecastError,
+    OriginScopeError,
+)
 from openforecast.models import ModelDescriptor, ModelRef
 from openforecast.models.capabilities import MissingValueSupport
 from openforecast.models.catalog import ModelCatalog
 from openforecast.models.contract import TrainingContract
 from openforecast.protocol import ForecastColumn
+from openforecast.runtime.engine import ModelInput
 from openforecast.runtime.provider import ProviderClient, ProviderRegistry
 from openforecast.views import (
     FitView,
@@ -165,6 +176,10 @@ class Refusal:
     match: str
     horizon: int = HORIZON
     params: Mapping[str, Any] = field(default_factory=lambda: {})
+    #: Which call must refuse. A trainable model is refused at the fit, which is
+    #: the first moment its declaration meets data; a pretrained one has no fit,
+    #: so the same declaration meets the same data at the forecast instead.
+    operation: str = "fit"
 
     def data(self) -> SemanticDataset:
         return self.build()
@@ -235,8 +250,23 @@ def refusals_for(
     settings = _declared(descriptor, params)
     capabilities = descriptor.capabilities
     contract = descriptor.training
+    operation = "fit" if descriptor.is_fittable else "forecast"
+    # The same four declarations, refused at whichever call is the first one to
+    # hand this model data. Only the verb in the sentence differs.
+    verb = "fitted on" if descriptor.is_fittable else "given"
     refusals: list[Refusal] = []
 
+    if not descriptor.is_fittable:
+        refusals.append(
+            Refusal(
+                name="being fitted",
+                build=partial(_frame, descriptor, instances=1, targets=_target_names(1)),
+                plan=_plan(contract),
+                error=ModelDoesNotSupportFit,
+                match="cannot be fitted",
+                params=settings,
+            )
+        )
     if not capabilities.instances.panel:
         refusals.append(
             Refusal(
@@ -246,8 +276,9 @@ def refusals_for(
                 ),
                 plan=_plan(contract),
                 error=DataError,
-                match="cannot be fitted on a panel",
+                match=f"cannot be {verb} a panel",
                 params=settings,
+                operation=operation,
             )
         )
     if not capabilities.targets.multivariate:
@@ -257,8 +288,9 @@ def refusals_for(
                 build=partial(_frame, descriptor, instances=1, targets=_target_names(2)),
                 plan=_plan(contract),
                 error=DataError,
-                match="cannot be fitted on 2 targets",
+                match=f"cannot be {verb} 2 targets",
                 params=settings,
+                operation=operation,
             )
         )
     unsupported = _unsupported_role(descriptor)
@@ -271,6 +303,7 @@ def refusals_for(
                 error=DataError,
                 match="cannot be given the features",
                 params=settings,
+                operation=operation,
             )
         )
     if capabilities.missing_values is MissingValueSupport.UNSUPPORTED:
@@ -282,9 +315,13 @@ def refusals_for(
                 error=DataError,
                 match="has missing values",
                 params=settings,
+                operation=operation,
             )
         )
-    if not contract.learns_across_origins and _consumes_point_in_time(descriptor):
+    # A model that has no training contract selects no training origins, so there
+    # is no scope for a vintage selection to overflow.
+    narrow = contract is not None and not contract.learns_across_origins
+    if narrow and _consumes_point_in_time(descriptor):
         refusals.append(
             Refusal(
                 name="every vintage at once",
@@ -304,27 +341,43 @@ def refusals_for(
 def run_case(
     case: Case, *, descriptor: ModelDescriptor, provider: ProviderClient, store: Path
 ) -> None:
-    """Fit and forecast one case, asserting everything the declaration implies."""
+    """Fit and forecast one case, asserting everything the declaration implies.
+
+    A pretrained model runs the same case with the first half missing. There is
+    no fit, so there is no fit view to check and no artifact to read the
+    declaration back out of — and the forecast half is asserted identically,
+    which is the claim: what comes back does not depend on which lifecycle
+    produced it.
+    """
     contract = descriptor.training
     recording = Recording(provider)
     client = client_for(descriptor, recording, store)
     data = case.data()
 
-    handle = client.fit(
-        str(descriptor.ref), data, horizon=case.horizon, plan=case.plan, params=dict(case.params)
-    )
+    subject: ModelInput = str(descriptor.ref)
+    if contract is not None:
+        handle = client.fit(
+            str(descriptor.ref),
+            data,
+            horizon=case.horizon,
+            plan=case.plan,
+            params=dict(case.params),
+        )
+        subject = handle
 
-    # The provider was handed the view its contract names, and only that.
-    assert [type(view) for view in recording.fit_views] == [VIEW_TYPES[contract.view]]
-    assert recording.fit_views[0].provenance.source is case.source
-    assert recording.fit_views[0].provenance.origin_fidelity is case.fidelity
+        # The provider was handed the view its contract names, and only that.
+        assert [type(view) for view in recording.fit_views] == [VIEW_TYPES[contract.view]]
+        assert recording.fit_views[0].provenance.source is case.source
+        assert recording.fit_views[0].provenance.origin_fidelity is case.fidelity
 
-    # And the artifact says the same thing, so it survives the process.
-    assert handle.training.view == contract.view
-    assert handle.training.source == case.source
-    assert handle.training.origin_fidelity == case.fidelity
-    assert handle.training.context == (CONTEXT if contract.view is ViewKind.SEQUENCES else None)
-    assert handle.training.samples >= 1
+        # And the artifact says the same thing, so it survives the process.
+        assert handle.training.view == contract.view
+        assert handle.training.source == case.source
+        assert handle.training.origin_fidelity == case.fidelity
+        assert handle.training.context == (CONTEXT if contract.view is ViewKind.SEQUENCES else None)
+        assert handle.training.samples >= 1
+    else:
+        assert not descriptor.lifecycle.requires_fit
 
     if not descriptor.capabilities.outputs.point:
         # Everything above is about the fit; a model that produces no point
@@ -332,21 +385,24 @@ def run_case(
         return
 
     inference = _inference_data(data, case)
-    forecast = client.forecast(handle, inference, horizon=case.horizon)
+    forecast = client.forecast(subject, inference, horizon=case.horizon)
     answer = forecast.table
+
+    # A zero-shot model reaches its provider without any fit having happened.
+    assert recording.fit_views == [] or contract is not None
 
     assert [type(view) for view in recording.forecast_views] == [ForecastView]
     assert answer.num_rows == case.instances * case.horizon * len(case.targets)
     assert set(datasets.column(answer, ForecastColumn.TARGET.value)) == set(case.targets)
     assert set(datasets.column(answer, ForecastColumn.KIND.value)) == {"point"}
-    assert forecast.origin_time == _origin_of(data, case)
+    assert forecast.origin_time == _origin_of(data, case.plan)
     assert len(forecast.event_times) == case.horizon
     # A forecast comes back labeled with the instance it is about, which is the
     # only thing that makes a panel answer usable.
     assert forecast.instance_keys == (("zone",) if case.instances > 1 else ())
 
     run_probabilistic(
-        client, handle, inference, descriptor=descriptor, case=case, rows=answer.num_rows
+        client, subject, inference, descriptor=descriptor, case=case, rows=answer.num_rows
     )
 
 
@@ -360,7 +416,7 @@ CONFORMANCE_DRAWS = 8
 
 def run_probabilistic(
     client: of.OpenForecast,
-    handle: ModelHandle,
+    subject: ModelInput,
     inference: object,
     *,
     descriptor: ModelDescriptor,
@@ -379,7 +435,7 @@ def run_probabilistic(
     outputs = descriptor.capabilities.outputs
     if outputs.quantiles:
         quantiles = client.forecast(
-            handle,
+            subject,
             inference,
             horizon=case.horizon,
             output=of.OutputSpec.quantiles(list(CONFORMANCE_LEVELS)),
@@ -391,7 +447,7 @@ def run_probabilistic(
 
     if outputs.samples:
         samples = client.forecast(
-            handle,
+            subject,
             inference,
             horizon=case.horizon,
             output=of.OutputSpec.samples(CONFORMANCE_DRAWS),
@@ -412,19 +468,28 @@ def run_refusal(
     """Assert the model refuses what it declared it cannot do, and says why."""
     recording = Recording(provider)
     client = client_for(descriptor, recording, store)
+    data = refusal.data()
 
     with pytest.raises(refusal.error, match=refusal.match):
-        client.fit(
-            str(descriptor.ref),
-            refusal.data(),
-            horizon=refusal.horizon,
-            plan=refusal.plan,
-            params=dict(refusal.params),
-        )
+        if refusal.operation == "fit":
+            client.fit(
+                str(descriptor.ref),
+                data,
+                horizon=refusal.horizon,
+                plan=refusal.plan,
+                params=dict(refusal.params),
+            )
+        else:
+            client.forecast(
+                str(descriptor.ref),
+                _one_origin(data, refusal.plan),
+                horizon=refusal.horizon,
+            )
 
     # A refusal is a declaration meeting data, so it happens before the provider
     # is started rather than inside somebody's library.
     assert recording.fit_views == []
+    assert recording.forecast_views == []
 
 
 def client_for(
@@ -463,17 +528,25 @@ def _target_names(count: int) -> tuple[str, ...]:
     return ("load", "wind")[:count]
 
 
-def _plan(contract: TrainingContract, origins: of.OriginSelection | None = None) -> of.FitPlan:
-    """The plan the contract asks for: a window only where a window means something."""
-    window = of.WindowPlan(context=CONTEXT) if contract.view is ViewKind.SEQUENCES else None
+def _plan(
+    contract: TrainingContract | None, origins: of.OriginSelection | None = None
+) -> of.FitPlan:
+    """The plan the contract asks for: a window only where a window means something.
+
+    An absent contract asks for nothing at all — there is no fit to plan — and
+    the plain plan it returns is still what the suite reads the inference origin
+    off, which every case needs whether or not it fits anything.
+    """
+    sequences = contract is not None and contract.view is ViewKind.SEQUENCES
+    window = of.WindowPlan(context=CONTEXT) if sequences else None
     if origins is None:
         return of.FitPlan(window=window)
     return of.FitPlan(window=window, origins=origins)
 
 
-def _origins(contract: TrainingContract) -> of.OriginSelection:
+def _origins(contract: TrainingContract | None) -> of.OriginSelection:
     """Every vintage for a model that learns across them, one for a model that cannot."""
-    if contract.learns_across_origins:
+    if contract is None or contract.learns_across_origins:
         return of.AllOrigins()
     return of.AtOrigin(datasets.at(CONTEXT - 1 + ORIGINS - 1))
 
@@ -526,7 +599,7 @@ def _dataset(
         observed=observed,
         known=known,
         static=static and instances > 1,
-        cumulative=descriptor.training.view is ViewKind.SERIES,
+        cumulative=descriptor.training is not None and descriptor.training.view is ViewKind.SERIES,
     )
 
 
@@ -591,20 +664,25 @@ def _consumes_point_in_time(descriptor: ModelDescriptor) -> bool:
 
 
 def _inference_data(data: SemanticDataset, case: Case) -> object:
-    """The one origin the forecast is made at.
+    """The one origin the forecast is made at."""
+    return _one_origin(data, case.plan)
+
+
+def _one_origin(data: SemanticDataset, plan: of.FitPlan) -> object:
+    """The data as a single inference origin.
 
     An event-time frame describes its own last origin. A point-in-time dataset
     holds many and is narrowed explicitly, because choosing one silently would
     forecast from information the caller never named.
     """
     if isinstance(data, of.ForecastDataset):
-        return data.at_origin(_origin_of(data, case))
+        return data.at_origin(_origin_of(data, plan))
     return data
 
 
-def _origin_of(data: SemanticDataset, case: Case) -> datetime:
+def _origin_of(data: SemanticDataset, plan: of.FitPlan) -> datetime:
     if isinstance(data, of.ForecastDataset):
-        selected = case.plan.origins.select(data.origins)
+        selected = plan.origins.select(data.origins)
         return selected[-1]
     moments: list[datetime] = datasets.column(data.history, data.schema.time)
     return max(moments)

@@ -15,6 +15,7 @@ fit NHiTS             across every historical origin
 fit darts/tide        the same dataset, the same plan, one string changed
 fit sktime            the reduction, whose horizon is not bound at fit
 fit sklearn           supervised rows, straight out of the vintages
+forecast chronos      no fit at all, the same vintage, the same call
 aliases               local/de-price follows the latest fit; @01K... does not
 terminology           nothing a provider calls its own reaches a public object
 ```
@@ -72,6 +73,7 @@ NHITS = "nixtla/nhits"
 TIDE = "darts/tide"
 POOLED_TREES = "sktime/pooled-trees"
 HIST_GRADIENT_BOOSTING = "sklearn/hist-gradient-boosting"
+CHRONOS = "amazon/chronos-2"
 
 #: The shape of the golden point-in-time datasets below, which is the shape the
 #: conformance suite uses: origin ``k`` sits at event step ``context - 1 + k``.
@@ -111,16 +113,21 @@ BuildClient = Callable[..., of.OpenForecast]
 # -- the data ---------------------------------------------------------------
 
 
-def windows() -> of.ForecastDataset:
+def windows(*, static: bool = True) -> of.ForecastDataset:
     """Real vintages, each carrying the window around its own origin.
 
     What every global model here is fitted on: two zones, four historical
     origins, one target and a known feature whose values name the origin that
     published them, so a vintage leaking into another is identifiable rather
     than merely suspicious.
+
+    ``static=False`` drops the per-zone capacity. Chronos-2 takes past and future
+    covariates and no static ones, and a model is refused data it declared it
+    cannot be given — so the pretrained cases below ask for the shape it declared
+    rather than for a capability it never claimed.
     """
     return datasets.point_in_time(
-        instances=INSTANCES, origins=ORIGINS, context=CONTEXT, horizon=HORIZON, static=True
+        instances=INSTANCES, origins=ORIGINS, context=CONTEXT, horizon=HORIZON, static=static
     )
 
 
@@ -248,8 +255,8 @@ def test_a_descriptor_answers_what_a_model_needs_before_it_is_fitted(
     descriptor = build(provider).models.get(ref)
 
     assert descriptor.lifecycle.requires_fit
-    assert descriptor.training.view == view
-    assert descriptor.training.horizon_bound_at_fit is horizon_bound
+    assert descriptor.required_training.view == view
+    assert descriptor.required_training.horizon_bound_at_fit is horizon_bound
     assert descriptor.capabilities.outputs.point
 
 
@@ -474,6 +481,80 @@ def test_a_horizon_a_global_model_bound_at_fit_is_refused(build: BuildClient) ->
 
     with pytest.raises(of.IncompatibleForecastTask):
         client.forecast(handle, data.at_origin(LATEST_ORIGIN), horizon=HORIZON + 2)
+
+
+# -- the pretrained lifecycle ------------------------------------------------
+
+
+def test_a_pretrained_model_forecasts_a_vintage_without_being_fitted(
+    build: BuildClient,
+) -> None:
+    """Step 23's "done when", in a library rather than in a stub.
+
+    The same dataset, the same origin and the same call the four trainable
+    models are given — with the fit removed, because there is nothing to fit.
+    """
+    data = windows(static=False)
+    client = build("amazon")
+
+    forecast = client.forecast(CHRONOS, data.at_origin(LATEST_ORIGIN), horizon=HORIZON)
+
+    assert forecast.model == CHRONOS
+    assert forecast.origin_time == LATEST_ORIGIN
+    assert forecast.num_rows == INSTANCES * HORIZON
+    assert all(value == value for value in values(forecast)), "the answer holds NaNs"
+
+
+def test_the_pretrained_model_is_discoverable_like_any_other(build: BuildClient) -> None:
+    descriptor = build("amazon").models.get(CHRONOS)
+
+    assert not descriptor.lifecycle.requires_fit
+    assert not descriptor.is_fittable
+    assert descriptor.training is None
+    assert descriptor.capabilities.outputs.quantiles
+
+
+def test_fitting_the_pretrained_model_is_refused_with_a_code(build: BuildClient) -> None:
+    with pytest.raises(of.ModelDoesNotSupportFit) as raised:
+        build("amazon").fit(CHRONOS, windows(static=False), horizon=HORIZON, plan=sequences_plan())
+
+    assert raised.value.code == "MODEL_DOES_NOT_SUPPORT_FIT"
+
+
+def test_one_backtest_compares_both_lifecycles_at_the_same_origins(
+    build: BuildClient,
+) -> None:
+    """The claim the whole step exists for, over four libraries and one interface.
+
+    A trainable model is fitted at each origin and the pretrained one is not,
+    and both are scored on exactly what was knowable at that origin.
+    """
+    data = windows(static=False)
+    client = build("sklearn", "amazon")
+
+    result = of.backtest(
+        models=[
+            of.Candidate(
+                of.Model(HIST_GRADIENT_BOOSTING, params=dict(FAST[HIST_GRADIENT_BOOSTING]))
+            ),
+            CHRONOS,
+        ],
+        data=data,
+        validation=of.ForecastOriginValidation(horizon=HORIZON, origins=of.AtOrigin(LATEST_ORIGIN)),
+        metrics=[of.MAE()],
+        client=client,
+    )
+
+    assert set(result.models) == {HIST_GRADIENT_BOOSTING, CHRONOS}
+    fidelity = dict(
+        zip(
+            result.metrics.column("model").to_pylist(),
+            result.metrics.column("origin_fidelity").to_pylist(),
+            strict=True,
+        )
+    )
+    assert fidelity[CHRONOS] == "pretrained"
+    assert fidelity[HIST_GRADIENT_BOOSTING] == "observed"
 
 
 # -- artifacts ---------------------------------------------------------------

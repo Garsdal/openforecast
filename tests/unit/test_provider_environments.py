@@ -23,10 +23,12 @@ from openforecast.errors import ProviderError, UnknownModelError
 from openforecast.models.catalog import ModelCatalog
 from openforecast.runtime.environments import (
     ENVIRONMENT_FILENAME,
+    INTEGRATION_NAMES,
     ProviderEnvironment,
     ProviderEnvironments,
     UvBuilder,
     default_cache_root,
+    integration_for,
     known_source,
     module_for,
 )
@@ -256,6 +258,27 @@ def test_a_checkout_installs_the_integration_beside_it(tmp_path: Path) -> None:
     (integration / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
 
     assert known_source("nixtla", repository=tmp_path) == str(integration)
+
+
+def test_a_provider_named_after_its_publisher_still_finds_its_distribution() -> None:
+    """The one pair in the repository where the two names disagree.
+
+    A provider name is the namespace of the models it advertises, so Chronos-2 is
+    ``amazon/chronos-2``; the distribution is named after the library it wraps.
+    ``INTEGRATION_NAMES`` is where that is written down, and it is what makes
+    ``openforecast providers install amazon`` find ``integrations/chronos``.
+    """
+    assert integration_for("amazon") == "chronos"
+    assert integration_for("nixtla") == "nixtla"
+    assert module_for("amazon") == "openforecast_chronos"
+    assert known_source("amazon", repository=Path("/nowhere")) == "openforecast-chronos"
+
+
+def test_the_checkout_holds_an_integration_for_every_renamed_provider() -> None:
+    """A table entry pointing at nothing would be a name that installs nothing."""
+    root = Path(__file__).resolve().parents[2]
+    for provider, integration in INTEGRATION_NAMES.items():
+        assert (root / "integrations" / integration / "pyproject.toml").is_file(), provider
 
 
 def test_environments_live_in_the_cache_and_artifacts_do_not() -> None:

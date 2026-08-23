@@ -875,15 +875,21 @@
             "$ref": "#/components/schemas/ModelRef"
           },
           "training": {
-            "$ref": "#/components/schemas/TrainingContract"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrainingContract"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "ref",
           "provider",
           "display_name",
-          "lifecycle",
-          "training"
+          "lifecycle"
         ],
         "title": "ModelDescriptor",
         "type": "object"

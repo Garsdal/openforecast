@@ -263,6 +263,14 @@ def _fitted_ref(model: ModelInput) -> str:
     if isinstance(model, ModelRef | str):
         return str(model)
     if isinstance(model, Model):
+        if model.params:
+            # A fitted model compiled its parameters at fit time and a pretrained
+            # one takes them from nowhere, so nothing downstream would read these.
+            raise RecipeError(
+                f"{model.ref} was given the parameters {sorted(model.params)} for a forecast, "
+                f"and a forecast reads none: a fitted model already carries the ones it was "
+                f"fitted with, and a pretrained one is used as it was published"
+            )
         return str(model.ref)
     raise RecipeError(
         "a forecast is made with a fitted model, not with a recipe; fit the recipe "

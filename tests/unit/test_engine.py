@@ -21,6 +21,7 @@ from openforecast.artifacts import ArtifactStore
 from openforecast.errors import (
     DataError,
     IncompatibleForecastTask,
+    ModelDoesNotSupportFit,
     ProviderError,
     RecipeError,
     UnsupportedPlanError,
@@ -31,6 +32,8 @@ from openforecast.models import (
     MissingValueSupport,
     ModelCapabilities,
     ModelCatalog,
+    ModelDescriptor,
+    ModelLifecycle,
     ModelRef,
     OriginScope,
     OutputCapabilities,
@@ -350,6 +353,142 @@ def test_an_output_the_model_cannot_produce_is_refused(engine: Engine) -> None:
 
     with pytest.raises(DataError, match="cannot produce a quantiles forecast"):
         engine.forecast(handle, frame(), horizon=2, output=of.OutputSpec.quantiles([0.5]))
+
+
+# -- the pretrained lifecycle -----------------------------------------------
+
+PRETRAINED = "stub/pretrained"
+
+
+def pretrained_descriptor(**overrides: Any) -> ModelDescriptor:
+    return providers.descriptor("pretrained", lifecycle=ModelLifecycle.pretrained(), **overrides)
+
+
+@pytest.fixture
+def pretrained() -> providers.StubProvider:
+    return providers.StubProvider(models=(pretrained_descriptor(),))
+
+
+@pytest.fixture
+def zero_shot(tmp_path: Path, pretrained: providers.StubProvider) -> Engine:
+    return Engine(
+        store=ArtifactStore(tmp_path),
+        catalog=ModelCatalog(pretrained.descriptors()),
+        providers=ProviderRegistry([pretrained]),
+    )
+
+
+def test_a_pretrained_model_forecasts_from_its_own_reference(zero_shot: Engine) -> None:
+    """The claim of Step 23: no fit, no artifact, the same call and the same answer."""
+    forecast = zero_shot.forecast(PRETRAINED, frame(), horizon=2)
+
+    assert forecast.model == PRETRAINED
+    assert len(forecast.event_times) == 2
+    # Two zones, two steps: labeled with the instance, like any other forecast.
+    assert forecast.instance_keys == ("zone",)
+    assert forecast.table.num_rows == 4
+
+
+def test_a_pretrained_model_is_handed_an_empty_state_directory(
+    zero_shot: Engine, pretrained: providers.StubProvider
+) -> None:
+    """There is no fitted state, and the absence is a directory rather than a lie."""
+    zero_shot.forecast(PRETRAINED, frame(), horizon=2)
+
+    ((_, contents),) = pretrained.states
+    assert contents == ()
+    assert pretrained.fits == []
+
+
+def test_nothing_is_published_by_a_zero_shot_forecast(zero_shot: Engine) -> None:
+    zero_shot.forecast(PRETRAINED, frame(), horizon=2)
+
+    assert zero_shot.store.list() == ()
+
+
+def test_fitting_a_pretrained_model_is_refused_with_its_own_error(zero_shot: Engine) -> None:
+    with pytest.raises(ModelDoesNotSupportFit, match="cannot be fitted") as raised:
+        zero_shot.fit(PRETRAINED, frame())
+
+    assert raised.value.code == "MODEL_DOES_NOT_SUPPORT_FIT"
+
+
+def test_a_pretrained_model_inside_an_ensemble_is_refused_before_anything_runs(
+    tmp_path: Path, pretrained: providers.StubProvider
+) -> None:
+    """An ensemble is fitted whole, so a member that cannot be fitted refuses it whole."""
+    trainable = providers.descriptor("series")
+    provider = providers.StubProvider(models=(*pretrained.descriptors(), trainable))
+    engine = Engine(
+        store=ArtifactStore(tmp_path),
+        catalog=ModelCatalog(provider.descriptors()),
+        providers=ProviderRegistry([provider]),
+    )
+
+    with pytest.raises(ModelDoesNotSupportFit):
+        engine.fit(of.Ensemble(models=(of.Model(SERIES), of.Model(PRETRAINED))), frame())
+    assert provider.fits == []
+
+
+def test_a_pretrained_model_is_checked_against_the_only_view_it_ever_sees(
+    tmp_path: Path,
+) -> None:
+    """A fitted model is checked at the fit; this one has no fit to be checked at."""
+    narrow = pretrained_descriptor(
+        capabilities=ModelCapabilities(
+            instances=InstanceCapabilities(single=True, panel=False),
+            targets=TargetCapabilities(univariate=True),
+            features=FeatureCapabilities(observed=True, known=True, static=True),
+            outputs=OutputCapabilities(point=True),
+            missing_values=MissingValueSupport.NATIVE,
+        )
+    )
+    engine = Engine(
+        store=ArtifactStore(tmp_path),
+        catalog=ModelCatalog((narrow,)),
+        providers=ProviderRegistry([providers.StubProvider(models=(narrow,))]),
+    )
+
+    with pytest.raises(DataError, match="cannot be given a panel"):
+        engine.forecast(PRETRAINED, frame(), horizon=2)
+
+
+def test_a_pretrained_model_answers_what_it_declares_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    quantile_only = pretrained_descriptor(
+        capabilities=ModelCapabilities(
+            instances=InstanceCapabilities(single=True, panel=True),
+            features=FeatureCapabilities(observed=True, known=True, static=True),
+            outputs=OutputCapabilities(point=False, quantiles=True),
+            missing_values=MissingValueSupport.NATIVE,
+        )
+    )
+    engine = Engine(
+        store=ArtifactStore(tmp_path),
+        catalog=ModelCatalog((quantile_only,)),
+        providers=ProviderRegistry([providers.StubProvider(models=(quantile_only,))]),
+    )
+
+    with pytest.raises(DataError, match="cannot produce a point forecast"):
+        engine.forecast(PRETRAINED, frame(), horizon=2)
+
+    answered = engine.forecast(
+        PRETRAINED, frame(), horizon=2, output=of.OutputSpec.quantiles([0.1, 0.9])
+    )
+    assert answered.quantile_levels == (0.1, 0.9)
+
+
+def test_a_pretrained_model_forecasts_one_vintage_of_point_in_time_data(
+    zero_shot: Engine,
+) -> None:
+    """Step 23.6: OpenForecast owns the vintage and the model receives one origin."""
+    dataset = artifacts.dataset()
+    origin = dataset.origins[-1]
+
+    forecast = zero_shot.forecast(PRETRAINED, dataset.at_origin(origin), horizon=2)
+
+    assert forecast.origin_time == origin
 
 
 # -- probabilistic output ---------------------------------------------------

@@ -45,7 +45,9 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > and the probabilistic normalization of Step 20: one `Forecast` for point
 > forecasts, quantiles and sample paths, `of.PinballLoss`, `of.Coverage` and
 > `of.IntervalWidth` over them, and `nixtla/autoarima`'s prediction intervals
-> answering `of.OutputSpec.quantiles([...])`.
+> answering `of.OutputSpec.quantiles([...])` — and the first zero-shot foundation
+> model of Step 23: `amazon/chronos-2`, in `integrations/chronos`, which
+> forecasts from its own reference without ever being fitted.
 > `of.fit` and `of.forecast` work end to end today with `builtin/seasonal-naive`,
 > both Nixtla models, all three Darts models, both sktime models and the
 > scikit-learn estimator, in this process or over the subprocess protocol — the
@@ -54,7 +56,8 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > Switching a point-in-time fit between `nixtla/nhits`, `darts/tide`,
 > `sktime/pooled-trees` and `sklearn/hist-gradient-boosting` changes the model
 > reference and nothing else, which is what
-> `tests/e2e/test_v1_experience.py` runs against all four at once.
+> `tests/e2e/test_v1_experience.py` runs against all four at once — and
+> `amazon/chronos-2` joins the same backtest without being fitted at all.
 > See [PLAN.md](PLAN.md) for the 17-step roadmap and
 > [PLAN_2.md](PLAN_2.md) for what comes after it.
 
@@ -301,6 +304,68 @@ have.
 `of.models.list()` holds what the installed providers advertise: the built-in
 reference provider, and whichever integrations have been installed into their
 own environments.
+
+## Zero-shot foundation models
+
+There are two model lifecycles, and a descriptor says which one it is:
+
+```text
+trainable     of.fit(...) -> local/de-price@01K... -> of.forecast(...)
+pretrained    of.forecast(model="amazon/chronos-2", ...)
+```
+
+```python
+forecast = of.forecast(
+    model="amazon/chronos-2",
+    data=pit_dataset.at_origin(historical_ref_time),
+    horizon=72,
+)
+```
+
+No fit, no artifact, no second call. Fitting one is refused rather than quietly
+accepted:
+
+```python
+of.fit(model="amazon/chronos-2", data=data)
+# ModelDoesNotSupportFit: amazon/chronos-2 cannot be fitted; it is used
+# zero-shot, so forecast with the reference directly
+```
+
+Every error carries `error.code` — here `MODEL_DOES_NOT_SUPPORT_FIT` — so a
+caller branches on the failure rather than on its prose.
+
+There is no foundation-model data primitive. A pretrained model consumes the
+`ForecastContext` a fitted one does, materialized by the same `ViewPlanner` into
+the same `ForecastView`, so point-in-time semantics hold without the integration
+knowing they exist: OpenForecast owns the information vintage and Chronos
+receives the context that vintage implies. What is different is only what is
+absent — no horizon bound, no fitted schema, no transforms — and because there
+was never a fit to check the declaration against, the capabilities are checked
+against the forecast view instead, at the one moment the model is handed data.
+
+That is what puts both lifecycles on one leaderboard:
+
+```python
+result = of.backtest(
+    models=[
+        "sklearn/hist-gradient-boosting",
+        "nixtla/nhits",
+        "amazon/chronos-2",
+    ],
+    data=pit_dataset,
+    validation=of.ForecastOriginValidation(origins=of.AllOrigins(stride=24), horizon=72),
+    metrics=[of.MAE(), of.Bias()],
+)
+```
+
+The first two are fitted per fold; the third forecasts as it stands. Its rows
+report a null `fit_seconds` and an `origin_fidelity` of `pretrained`, because
+there were no training origins at all — which is a different thing from a frozen
+artifact that may have seen data postdating the early ones.
+
+Chronos-2 can be fine-tuned and this integration does not expose it. Doing so
+would mean a training contract, a published artifact and both lifecycles behind
+one reference; the lifecycle it declares is the one it has.
 
 ## Recipes, plans and tasks
 
@@ -625,7 +690,8 @@ for explicitly, later, and not something a request quietly triggers.
 
 Nixtla wants one version of `torch`, Darts wants another, sktime wants
 scikit-learn and statsmodels, the scikit-learn integration wants only
-scikit-learn, and OpenForecast wants none of it. So an integration is not installed into the OpenForecast
+scikit-learn, the Chronos integration wants `torch` and `transformers`, and
+OpenForecast wants none of it. So an integration is not installed into the OpenForecast
 environment at all: it gets its own, built with `uv`, and it is reached over a
 subprocess protocol.
 
@@ -1083,6 +1149,7 @@ src/openforecast/
     client.py    the user-facing client
 
 integrations/    provider distributions, each independently versioned
+                 nixtla, darts, sktime, sklearn, chronos (the `amazon` provider)
 tests/           unit, contract, conformance and e2e suites
 spec/            protocol, Arrow and OpenAPI specifications
 ```

@@ -61,9 +61,9 @@ DARTS_NHITS = ModelDescriptor(
 def test_a_descriptor_explains_how_to_materialize_data_for_the_model() -> None:
     """Everything the planner needs, without a round trip to the provider."""
     assert NHITS.ref == ModelRef.parse("nixtla/nhits")
-    assert NHITS.training.view is ViewKind.SEQUENCES
-    assert NHITS.training.context_required
-    assert NHITS.training.learns_across_origins
+    assert NHITS.required_training.view is ViewKind.SEQUENCES
+    assert NHITS.required_training.context_required
+    assert NHITS.required_training.learns_across_origins
     assert NHITS.capabilities.requires_missing_value_transform
     assert NHITS.lifecycle.requires_fit
     assert str(NHITS) == "nixtla/nhits"
@@ -142,6 +142,72 @@ def test_a_parameter_schema_must_be_a_json_schema_object() -> None:
 
 def test_declaring_no_parameters_is_allowed() -> None:
     assert AUTOARIMA.parameters_schema == {}
+
+
+# -- the training contract, and when there is none ---------------------------
+
+
+def test_a_pretrained_model_declares_no_training_contract() -> None:
+    """Step 23: there is no training unit, so there is nothing to describe."""
+    descriptor = ModelDescriptor(
+        ref=ModelRef.parse("amazon/chronos-2"),
+        provider="amazon",
+        display_name="Chronos-2",
+        lifecycle=ModelLifecycle.pretrained(),
+    )
+
+    assert descriptor.training is None
+    assert not descriptor.is_fittable
+    assert descriptor.lifecycle.is_zero_shot
+
+
+def test_a_model_that_can_be_fitted_must_say_what_it_learns_from() -> None:
+    """A fit is planned from the contract, so there would be nothing to materialize."""
+    with pytest.raises(SchemaError, match="declares no training contract"):
+        ModelDescriptor(
+            ref=ModelRef.parse("nixtla/nhits"),
+            provider="nixtla",
+            display_name="NHiTS",
+            lifecycle=ModelLifecycle.trainable(),
+        )
+
+
+def test_a_model_that_cannot_be_fitted_may_not_invent_a_training_contract() -> None:
+    """Nothing would ever read it, so nothing would ever find out it was wrong."""
+    with pytest.raises(SchemaError, match="declare training=None"):
+        ModelDescriptor(
+            ref=ModelRef.parse("amazon/chronos-2"),
+            provider="amazon",
+            display_name="Chronos-2",
+            lifecycle=ModelLifecycle.pretrained(),
+            training=TrainingContract.sequences(),
+        )
+
+
+def test_a_pretrained_model_that_can_be_tuned_still_needs_one() -> None:
+    """``supports_fit`` is what the contract follows from, not ``requires_fit``."""
+    tunable = ModelDescriptor(
+        ref=ModelRef.parse("amazon/chronos-2-tunable"),
+        provider="amazon",
+        display_name="Chronos-2 (tunable)",
+        lifecycle=ModelLifecycle.pretrained(supports_fit=True),
+        training=TrainingContract.sequences(),
+    )
+
+    assert tunable.is_fittable
+    assert tunable.required_training.view is ViewKind.SEQUENCES
+
+
+def test_asking_a_pretrained_model_for_its_contract_says_where_to_go_instead() -> None:
+    descriptor = ModelDescriptor(
+        ref=ModelRef.parse("amazon/chronos-2"),
+        provider="amazon",
+        display_name="Chronos-2",
+        lifecycle=ModelLifecycle.pretrained(),
+    )
+
+    with pytest.raises(SchemaError, match="used zero-shot"):
+        _ = descriptor.required_training
 
 
 # -- the catalog ------------------------------------------------------------

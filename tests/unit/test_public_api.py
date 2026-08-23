@@ -56,6 +56,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "Metric",
     "MissingIndicator",
     "Model",
+    "ModelDoesNotSupportFit",
     "ModelError",
     "ModelRefError",
     "ModelRequiresFit",
@@ -531,6 +532,32 @@ def test_importing_openforecast_does_not_import_a_web_framework() -> None:
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     )
     assert answer.stdout.strip() == "[]"
+
+
+def test_every_error_carries_a_code_a_caller_can_branch_on() -> None:
+    """Derived from the class name, so the two cannot disagree.
+
+    Step 27 is where the rest of the envelope lands. What has to be true already
+    is that an agent can recover on ``error.code`` rather than by string-matching
+    prose, and that the code and the ``except`` clause name the same thing.
+    """
+    assert of.ModelDoesNotSupportFit("x").code == "MODEL_DOES_NOT_SUPPORT_FIT"
+    assert of.ModelRequiresFit("x").code == "MODEL_REQUIRES_FIT"
+    assert of.UnknownModelError("x").code == "UNKNOWN_MODEL_ERROR"
+    assert of.OpenForecastError("x").code == "OPEN_FORECAST_ERROR"
+
+
+def test_every_exported_error_has_a_distinct_code() -> None:
+    errors = [
+        candidate
+        for name in of.__all__
+        if isinstance(candidate := getattr(of, name), type)
+        and issubclass(candidate, of.OpenForecastError)
+    ]
+    codes = [candidate("").code for candidate in errors]
+
+    assert len(codes) == len(set(codes))
+    assert all(code.isupper() for code in codes)
 
 
 def test_the_cli_exposes_a_parser_and_an_entry_point() -> None:

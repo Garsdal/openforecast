@@ -88,7 +88,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        integration: [nixtla, darts, sklearn, sktime]
+        integration: [nixtla, darts, sklearn, sktime, chronos]
         python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
@@ -104,6 +104,28 @@ jobs:
       - name: Test ${{ matrix.integration }}
         working-directory: integrations/${{ matrix.integration }}
         run: uv run pytest
+
+  # The Chronos integration's ordinary run answers a stand-in pipeline, because
+  # a checkpoint is a download and none of the generated conformance assertions
+  # are about the numbers. This job is the one that runs the real weights, so
+  # that a change to the library's own API — a renamed keyword, a different
+  # tensor layout — fails here rather than in a user's environment.
+  chronos-weights:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync chronos
+        working-directory: integrations/chronos
+        run: uv sync
+
+      - name: Forecast with the real checkpoint
+        working-directory: integrations/chronos
+        run: uv run pytest -m weights
 
   # The job above tests each integration beside its own library. This one is the
   # opposite: an OpenForecast install that has never heard of any of them,
@@ -130,6 +152,7 @@ jobs:
           uv run openforecast providers install darts
           uv run openforecast providers install sklearn
           uv run openforecast providers install sktime
+          uv run openforecast providers install amazon
           uv run openforecast providers list
 
       # OPENFORECAST_E2E turns a missing provider from a skip into a failure:
