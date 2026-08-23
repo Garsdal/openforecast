@@ -18,10 +18,15 @@ aliases               local/de-price follows the latest fit; @01K... does not
 terminology           nothing a provider calls its own reaches a public object
 ```
 
-The fits are deliberately tiny — two optimization steps, one epoch, five
-boosting iterations. What is being asserted is that the same request means the
-same thing to every provider, not how well a neural network fits a six-step
-window.
+The fits are deliberately tiny — one optimization step, one epoch, five boosting
+iterations, over two zones and four origins. What is being asserted is that the
+same request means the same thing to every provider, not how well a neural
+network fits a three-step window, and a network wide enough to be worth timing
+would say nothing extra about what it was handed.
+
+That leaves importing PyTorch as the dominant cost, so the provider processes
+are started once and reused for the whole session, which is also what an
+ordinary install does; see the ``running`` fixture.
 
 Running this needs the integrations installed as provider environments, which
 is what ``openforecast providers install nixtla`` does. Nothing is installed
@@ -68,17 +73,32 @@ POOLED_TREES = "sktime/pooled-trees"
 
 #: The shape of the golden point-in-time datasets below, which is the shape the
 #: conformance suite uses: origin ``k`` sits at event step ``context - 1 + k``.
+#: Two instances rather than three, because what is asserted is that a panel
+#: stays a panel across the boundary, and two of something is a panel.
+INSTANCES = 2
 CONTEXT = 3
 HORIZON = 3
-ORIGINS = 6
+ORIGINS = 4
+#: One training sample per instance per historical origin, which is the claim.
+SAMPLES = INSTANCES * ORIGINS
 #: The freshest origin the vintages carry, and the step it sits at.
 LATEST_ORIGIN_STEP = CONTEXT - 1 + ORIGINS - 1
 LATEST_ORIGIN = datasets.at(LATEST_ORIGIN_STEP)
 
-#: Enough optimization to prove the request arrived; see the module docstring.
+#: Enough optimization to prove the request arrived, and no more — see the
+#: module docstring. TiDE's widths are here for the same reason the step counts
+#: are: a network wide enough to be worth timing says nothing extra about what
+#: it was handed. Every one of these is a parameter the model advertises, so
+#: none of it can turn a capability on for the duration of the suite.
 FAST: Mapping[str, Mapping[str, Any]] = {
-    NHITS: {"max_steps": 2},
-    TIDE: {"n_epochs": 1},
+    NHITS: {"max_steps": 1, "num_lr_decays": 0},
+    TIDE: {
+        "n_epochs": 1,
+        "hidden_size": 8,
+        "num_encoder_layers": 1,
+        "num_decoder_layers": 1,
+        "temporal_decoder_hidden": 8,
+    },
     POOLED_TREES: {"max_iter": 5},
 }
 
@@ -91,13 +111,13 @@ BuildClient = Callable[..., of.OpenForecast]
 def windows() -> of.ForecastDataset:
     """Real vintages, each carrying the window around its own origin.
 
-    What every global model here is fitted on: three zones, six historical
+    What every global model here is fitted on: two zones, four historical
     origins, one target and a known feature whose values name the origin that
     published them, so a vintage leaking into another is identifiable rather
     than merely suspicious.
     """
     return datasets.point_in_time(
-        instances=3, origins=ORIGINS, context=CONTEXT, horizon=HORIZON, static=True
+        instances=INSTANCES, origins=ORIGINS, context=CONTEXT, horizon=HORIZON, static=True
     )
 
 
@@ -112,7 +132,7 @@ def complete_series() -> of.ForecastDataset:
     test knows about ARIMA.
     """
     return datasets.point_in_time(
-        instances=3, origins=ORIGINS, context=CONTEXT, horizon=HORIZON, cumulative=True
+        instances=INSTANCES, origins=ORIGINS, context=CONTEXT, horizon=HORIZON, cumulative=True
     )
 
 
@@ -136,14 +156,38 @@ def installed() -> Mapping[str, ProviderEnvironment]:
     return {environment.name: environment for environment in environments.list()}
 
 
+@pytest.fixture(scope="session")
+def running() -> Iterator[dict[str, SubprocessProvider]]:
+    """One provider process per integration, started on demand and reused.
+
+    Importing PyTorch costs several seconds, and a fresh process pays it again
+    every time — which would make this module's cost the libraries' import time
+    rather than anything it asserts. Reuse is also the faithful arrangement:
+    ``install_default_providers()`` builds one client per installed environment
+    and every ``of.fit`` in a session goes through it. A provider keeps nothing
+    between requests — a fit writes into the directory it is handed and a
+    forecast reads from the one it is given — so a shared process cannot make a
+    second client see anything the first one left in memory.
+    """
+    started: dict[str, SubprocessProvider] = {}
+    yield started
+    for provider in started.values():
+        provider.close()
+
+
 @pytest.fixture
-def build(tmp_path: Path, installed: Mapping[str, ProviderEnvironment]) -> Iterator[BuildClient]:
+def build(
+    tmp_path: Path,
+    installed: Mapping[str, ProviderEnvironment],
+    running: dict[str, SubprocessProvider],
+) -> BuildClient:
     """A client over the named providers, or a skip saying how to get them.
 
     Called twice with the same ``store`` it hands back two clients sharing only
-    a directory on disk, which is what reloading an artifact has to survive.
+    a directory on disk — which is what reloading an artifact has to survive,
+    since a client is the engine, the catalog and the store, and an artifact
+    that only works for the client that fitted it is not an artifact.
     """
-    opened: list[SubprocessProvider] = []
 
     def make(*names: str, store: str = "store") -> of.OpenForecast:
         missing = [name for name in names if name not in installed]
@@ -155,18 +199,14 @@ def build(tmp_path: Path, installed: Mapping[str, ProviderEnvironment]) -> Itera
             pytest.skip(message)
         clients: list[ProviderClient] = [BUILTIN_PROVIDER]
         for name in names:
-            client = installed[name].client()
-            opened.append(client)
-            clients.append(client)
+            clients.append(running.setdefault(name, installed[name].client()))
         catalog = ModelCatalog()
         register_descriptors(clients, catalog)
         return of.OpenForecast(
             store=tmp_path / store, catalog=catalog, providers=ProviderRegistry(clients)
         )
 
-    yield make
-    for provider in opened:
-        provider.close()
+    return make
 
 
 # -- discovery ---------------------------------------------------------------
@@ -224,20 +264,16 @@ def test_a_series_model_fits_one_vintage_reloads_and_forecasts(build: BuildClien
     assert handle.training.origin_fidelity == "observed"
     assert forecast.model == str(handle.ref)
     assert forecast.origin_time == LATEST_ORIGIN
-    assert forecast.num_rows == 3 * HORIZON
+    assert forecast.num_rows == INSTANCES * HORIZON
     assert all(value == value for value in values(forecast)), "the answer holds NaNs"
 
 
 @pytest.mark.parametrize(
-    ("ref", "provider", "samples"),
-    [
-        (NHITS, "nixtla", 3 * ORIGINS),
-        (TIDE, "darts", 3 * ORIGINS),
-        (POOLED_TREES, "sktime", 3 * ORIGINS),
-    ],
+    ("ref", "provider"),
+    [(NHITS, "nixtla"), (TIDE, "darts"), (POOLED_TREES, "sktime")],
 )
 def test_a_global_model_learns_from_every_historical_origin(
-    build: BuildClient, ref: str, provider: str, samples: int
+    build: BuildClient, ref: str, provider: str
 ) -> None:
     """The Step 15 claim, three times: only the reference changed.
 
@@ -259,7 +295,7 @@ def test_a_global_model_learns_from_every_historical_origin(
     assert handle.training.source == "forecast_dataset"
     assert handle.training.origin_fidelity == "observed"
     assert handle.training.context == CONTEXT
-    assert handle.training.samples == samples
+    assert handle.training.samples == SAMPLES
     assert forecast.origin_time == LATEST_ORIGIN
     assert forecast.event_times == tuple(
         datasets.at(LATEST_ORIGIN_STEP + step) for step in range(1, HORIZON + 1)
@@ -326,7 +362,7 @@ def test_a_pipeline_and_an_ensemble_span_two_libraries(build: BuildClient) -> No
     assert handle.is_composite
     assert handle.manifest.provider == "openforecast"
     assert len(handle.training_records) == 2
-    assert forecast.num_rows == 3 * HORIZON
+    assert forecast.num_rows == INSTANCES * HORIZON
 
 
 def test_a_horizon_the_reduction_never_bound_is_still_servable(build: BuildClient) -> None:
@@ -350,7 +386,7 @@ def test_a_horizon_the_reduction_never_bound_is_still_servable(build: BuildClien
     forecast = client.forecast(handle, data.at_origin(LATEST_ORIGIN), horizon=HORIZON + 2)
 
     assert handle.serves_horizon(HORIZON + 2)
-    assert forecast.num_rows == 3 * (HORIZON + 2)
+    assert forecast.num_rows == INSTANCES * (HORIZON + 2)
 
 
 def test_a_horizon_a_global_model_bound_at_fit_is_refused(build: BuildClient) -> None:
