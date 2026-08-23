@@ -1,0 +1,76 @@
+# OpenForecast
+
+> The unified interface for forecasting. Point-in-time forecasting is first-class: real
+> historical forecast vintages are trained on directly, and an artifact
+> records whether its origins were observed or simulated.
+
+One name per intent — `fit`, `forecast`, `backtest`, `eligible_models` — over
+any provider, any transport and both semantic data sources. Every page below
+is served as Markdown at the address shown, and every Python example on one is
+executed by the test suite.
+
+## Overview
+
+- [Home](https://garsdal.github.io/openforecast/index.md): The unified interface for forecasting.
+
+## Getting started
+
+- [Installation](https://garsdal.github.io/openforecast/getting-started/installation.md): OpenForecast needs Python 3.11 or newer.
+- [Quickstart](https://garsdal.github.io/openforecast/getting-started/quickstart.md): The whole workflow, on one page, against the model every install ships with.
+- [Concepts in five minutes](https://garsdal.github.io/openforecast/getting-started/concepts.md): Five ideas carry the whole library.
+- [Executable examples](https://garsdal.github.io/openforecast/getting-started/examples.md): Seven scripts live in [`examples/`](https://github.com/Garsdal/openforecast/tree/main/examples) in the repository.
+
+## Guides
+
+- [Event-time data](https://garsdal.github.io/openforecast/guides/event-time.md): `TimeSeriesFrame` is ordinary `instance × event_time × variable` data: what happened, once per event time.
+- [Point-in-time data](https://garsdal.github.io/openforecast/guides/point-in-time.md): A `ForecastDataset` is what production pipelines already emit: every forecast vintage as it was issued, paired with the outcome it was trying to predict.
+- [Fitting](https://garsdal.github.io/openforecast/guides/fitting.md): A fit takes what to fit, the data, and — when the model needs more than the defaults — how to fit it.
+- [Forecasting](https://garsdal.github.io/openforecast/guides/forecasting.md): Three things are the same argument: the handle a fit returned, a pinned revision, and the alias that follows the latest one.
+- [Backtesting](https://garsdal.github.io/openforecast/guides/backtesting.md): The same models, over the same origins, scored the same way — and it is a loop over `fit` and `forecast` rather than any provider's backtester.
+- [Probabilistic forecasts](https://garsdal.github.io/openforecast/guides/probabilistic.md): What kind of answer to produce is a request; what a model can answer is a declaration.
+- [Pipelines and ensembles](https://garsdal.github.io/openforecast/guides/ensembles.md): Three things stay separate: what to fit, how to fit it, and what to predict.
+- [The command line](https://garsdal.github.io/openforecast/guides/cli.md): Everything OpenForecast does is reachable from a shell, and the CLI is deliberately uncreative: a group and a verb at most, `--json` on everything that produces information, stdout for the answer and stderr for everything else.
+
+## For agents
+
+- [Overview](https://garsdal.github.io/openforecast/agents/overview.md): This section is for a reader that arrives with a fetch tool and a task, not with an afternoon.
+- [Choosing a model](https://garsdal.github.io/openforecast/agents/choosing-a-model.md): Do not try models until one works.
+- [Point-in-time rules](https://garsdal.github.io/openforecast/agents/point-in-time.md): This is the one part of the library where a request that looks right can be wrong, so it is stated as rules.
+- [The structured CLI](https://garsdal.github.io/openforecast/agents/structured-cli.md): No Python signature to reverse-engineer, no doc page to trust, and no schema pinned to a version other than the one installed.
+- [Recovering from errors](https://garsdal.github.io/openforecast/agents/errors.md): Every failure, at every boundary, carries the same three fields.
+
+## Concepts
+
+- [The data model](https://garsdal.github.io/openforecast/concepts/data-model.md): `TimeSeriesFrame` holds `instance × event_time × variable`: what happened.
+- [Point-in-time semantics](https://garsdal.github.io/openforecast/concepts/point-in-time.md): Nothing deduplicates on event time, forward-fills across origins, or replaces an early vintage with a later revision.
+- [Execution views](https://garsdal.github.io/openforecast/concepts/execution-views.md): A provider never sees a semantic dataset.
+- [Model lifecycles](https://garsdal.github.io/openforecast/concepts/model-lifecycle.md): Whether anything has been fitted is a question for the registry, not for the string.
+- [Providers](https://garsdal.github.io/openforecast/concepts/providers.md): Nixtla wants one version of `torch`, Darts wants another, sktime wants scikit-learn and statsmodels, the Chronos integration wants `torch` and `transformers`, and OpenForecast wants none of it.
+
+## Integrations
+
+- [Nixtla](https://garsdal.github.io/openforecast/integrations/nixtla.md): `integrations/nixtla`, published as `openforecast-nixtla`, wrapping `statsforecast` and `neuralforecast`.
+- [Darts](https://garsdal.github.io/openforecast/integrations/darts.md): `integrations/darts`, published as `openforecast-darts`.
+- [sktime](https://garsdal.github.io/openforecast/integrations/sktime.md): `integrations/sktime`, published as `openforecast-sktime`.
+- [scikit-learn](https://garsdal.github.io/openforecast/integrations/sklearn.md): `integrations/sklearn`, published as `openforecast-sklearn`.
+- [Chronos](https://garsdal.github.io/openforecast/integrations/chronos.md): `integrations/chronos`, published as `openforecast-chronos`, providing the `amazon` namespace.
+
+## Reference
+
+- [Overview](https://garsdal.github.io/openforecast/reference/generated/index.md): OpenForecast 0.1.0. `openforecast.__all__` is the whole public surface of the library and is asserted exactly, so this table is that assertion rendered: a name that is not here is not public.
+- [Client and operations](https://garsdal.github.io/openforecast/reference/generated/client.md): The four operations, and the client every one of them is a method on.
+- [Semantic data](https://garsdal.github.io/openforecast/reference/generated/data.md): What you hand OpenForecast: ordinary event-time data, real forecast vintages, and one inference origin cut out of them.
+- [Models and descriptors](https://garsdal.github.io/openforecast/reference/generated/models.md): A model reference, and what one resolves to.
+- [Recipes](https://garsdal.github.io/openforecast/reference/generated/recipes.md): What to fit: models, pipelines, ensembles, reductions and transforms.
+- [Plans, tasks and outputs](https://garsdal.github.io/openforecast/reference/generated/tasks.md): How to fit it, what to predict, and what kind of answer to produce.
+- [Forecasts](https://garsdal.github.io/openforecast/reference/generated/forecasts.md): What a forecast is: one long table, and the projections of it.
+- [Backtesting and metrics](https://garsdal.github.io/openforecast/reference/generated/evaluation.md): Comparing models over origins, and scoring what comes back.
+- [Transports](https://garsdal.github.io/openforecast/reference/generated/transports.md): Where a client executes, which is the only thing a transport decides.
+- [Errors](https://garsdal.github.io/openforecast/reference/generated/errors.md): Every failure OpenForecast raises deliberately, with the `error.code` a caller branches on instead of on the prose.
+
+## Optional
+
+- [Everything above, in one file](https://garsdal.github.io/openforecast/llms-full.txt): the whole corpus concatenated, for a single fetch.
+- [Repository](https://github.com/Garsdal/openforecast): the library, the integrations, the executable examples under `examples/`, and the seven architecture rules.
+- [OpenAPI document](https://github.com/Garsdal/openforecast/blob/main/spec/openapi/openapi.json): the HTTP projection, generated from the request models.
+- [JSON Schemas](https://github.com/Garsdal/openforecast/tree/main/spec/schemas): what each request has to look like, generated from the models that validate it.
