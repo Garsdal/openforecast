@@ -43,13 +43,13 @@ own small dataset, so none of them needs anything downloaded:
 uv run examples/01_quickstart.py
 ```
 
-## One model, or several from different libraries at once
+## Any model, in one call
 
 ```bash
 openforecast providers install nixtla     # and darts, sktime, sklearn, amazon
 ```
 
-<!-- docs-exec: skip — needs the nixtla, sklearn and amazon provider environments -->
+<!-- docs-exec: skip — needs the nixtla provider environment installed -->
 
 ```python
 import openforecast as of
@@ -64,19 +64,13 @@ which are the targets. That is the one thing you have to say about your data, an
 the [quickstart](https://garsdal.github.io/openforecast/getting-started/quickstart/)
 says it in a handful of lines; every call below takes the same object.
 
-Because one model is one reference, several are a list — combined into an
-ensemble, or raced against each other:
+## An ensemble across two libraries
 
-<!-- docs-exec: skip — needs the nixtla, sklearn and amazon provider environments -->
+Because one model is one reference, several are a list:
+
+<!-- docs-exec: skip — needs the nixtla and sklearn provider environments -->
 
 ```python
-# One ensemble across two libraries with two different training units. The
-# neural model declares a sequence contract and is handed context -> horizon
-# windows; the gradient booster declares a tabular one and is handed one
-# supervised row per origin and lead of the same data. Neither provider learns
-# that an ensemble exists, and neither has to agree with the other about `torch`:
-# each integration lives in its own environment, reached over a subprocess
-# protocol.
 model = of.fit(
     of.Ensemble(
         models=[
@@ -90,9 +84,29 @@ model = of.fit(
     name="de-price",
 )
 
+forecast = of.forecast(model, data=data, horizon=24)
+```
+
+Those two members do not consume the same thing. The neural model declares a
+sequence contract and is handed context → horizon windows; the gradient booster
+declares a tabular one and is handed one supervised row per origin and lead of the
+*same* data. OpenForecast materializes both, fits each into its own directory
+inside the one artifact, and combines the answers — neither provider learns that
+an ensemble exists, and neither has to agree with the other about `torch`, since
+each integration lives in its own environment behind a subprocess protocol.
+
+That is also what makes the ensemble ordinary: it is a fitted model like any
+other, with one reference, and `of.Ensemble` holds *recipes*, so an ensemble of
+pipelines needs no new vocabulary.
+
+## Everything on one leaderboard
+
+<!-- docs-exec: skip — needs the nixtla, sklearn and amazon provider environments -->
+
+```python
 # The ensemble, its two members, and a zero-shot foundation model that is never
-# fitted at all — four candidates from three libraries and two lifecycles, on one
-# leaderboard, scored the same way over the same origins.
+# fitted at all — four candidates from three libraries and two lifecycles,
+# scored the same way over the same origins.
 result = of.backtest(
     models=[
         model.ref,                          # the pinned fit above: scored, not refitted
