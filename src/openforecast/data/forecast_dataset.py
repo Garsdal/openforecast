@@ -39,10 +39,11 @@ from openforecast.data._arrow import (
 )
 from openforecast.data.features import FeatureSpec
 from openforecast.data.forecast_context import ForecastContext
-from openforecast.data.frame import TimeSeriesFrame, extract_static
+from openforecast.data.frame import TimeSeriesFrame, extract_static, static_for
 from openforecast.data.frequency import Frequency
 from openforecast.data.point_in_time import (
     PointInTimeFrame,
+    parse_moment,
     point_in_time_schema,
     resolve_origin,
 )
@@ -154,6 +155,60 @@ class ForecastDataset:
                 schema=schema,
                 future=future if future.num_rows else None,
                 static=self._truth.static,
+            ),
+        )
+
+    def up_to(self, moment: str | datetime) -> ForecastDataset:
+        """Every vintage issued at or before ``moment``, and the truth known by then.
+
+        What :meth:`at_origin` is for one inference origin, this is for
+        training: the dataset as it stood at ``moment``, so that a model
+        evaluated there learned only from vintages that had been issued and
+        outcomes that had already happened.
+
+        Both axes are cut, and they are cut for different reasons. A later
+        *origin* is information that did not exist yet. A later *event time* in
+        the truth is an outcome nobody had observed yet — so a training sample
+        whose forecast window reaches past ``moment`` loses its labels and stops
+        being a sample, which is the honest answer rather than a shorter window.
+
+        ``moment`` need not be one of the origins: it is a point in time, not a
+        vintage. Where it has to be exact is :meth:`at_origin`, which answers
+        *from* a vintage rather than about a moment.
+        """
+        when = parse_moment(moment, "moment")
+        information_schema = self._information.schema
+        truth_schema = self._truth.schema
+
+        origins: list[datetime] = column_values(
+            self._information.table, information_schema.origin_time
+        )
+        issued = [origin <= when for origin in origins]
+        if not any(issued):
+            raise DataError(
+                f"no vintage was issued at or before {when.isoformat()}; the earliest "
+                f"origin is {min(origins).isoformat()}"
+            )
+
+        events: list[datetime] = column_values(self._truth.history, truth_schema.time)
+        happened = [event <= when for event in events]
+        if not any(happened):
+            raise DataError(
+                f"nothing had happened by {when.isoformat()}; the truth begins at "
+                f"{min(events).isoformat()}"
+            )
+        history = self._truth.history.filter(pa.array(happened))
+        instances = set(key_rows(history, truth_schema.instance_keys))
+        return ForecastDataset(
+            information=PointInTimeFrame(
+                self._information.table.filter(pa.array(issued)), information_schema
+            ),
+            truth=TimeSeriesFrame(
+                history=history,
+                schema=truth_schema,
+                static=None
+                if self._truth.static is None
+                else static_for(self._truth.static, truth_schema, instances),
             ),
         )
 

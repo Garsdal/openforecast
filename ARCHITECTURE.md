@@ -59,7 +59,7 @@ layer above it, never one below.
                         ↓
       runtime/  registry/  artifacts/  providers/
                         ↓
-        client.py  commands/  server/
+   client.py  commands/  server/  evaluation/
 ```
 
 `protocol/` is the innermost layer and knows nothing about any provider.
@@ -114,8 +114,8 @@ somebody else's transitive dependency.
 
 The forbidden-terminology scan of rule 6 is the one check that reads objects
 rather than source, because what it has to constrain is what a public object
-*serializes*. `openforecast.server` is in its list for exactly that reason: an
-HTTP body is a public object, and a caller reading one should no more have to
+*serializes*. `openforecast.server` and `openforecast.evaluation` are in its list
+for exactly that reason: an HTTP body and a benchmark result are public objects, and a caller reading one should no more have to
 know which library executed the model than a caller reading a manifest does. It imports every public module, walks the JSON Schema of every
 exported model plus the members of every exported enum and the canonical
 forecast columns, and fails if any field name, enum value or column is spelled
@@ -534,3 +534,74 @@ what a transport abstraction is worth in the first place.
 `openforecast serve` is the CLI half of it, and it binds to loopback by default.
 A forecasting service has no authentication yet, so the default has to be the
 one that does not publish an unauthenticated service to a network by accident.
+
+## Benchmarking and point-in-time evaluation
+
+`evaluation/` is where the abstraction stops being a way to call other people's
+libraries and starts being worth something on its own. Its defining property is
+negative: **there is no benchmarking implementation in it.** No Nixtla
+backtester, no Darts `historical_forecasts`, no sktime evaluation harness — and
+not because they were reimplemented, but because there is nothing left for them
+to do. Every question a benchmark asks was already answered by a layer above:
+
+```text
+which origins exist        the validation strategy, over the source data
+what was knowable at one    up_to / at_origin, on the data itself
+what to materialize         the ViewPlanner, from each model's contract
+what happened               the truth frame
+```
+
+So it lives in the outermost layer and imports `client.py`. That is the one
+inward edge into the client, and it is the honest direction: benchmarking is a
+*user* of `of.fit` and `of.forecast`, which is why no provider — and nothing in
+the engine — knows it is being benchmarked, and why a benchmark against
+`HttpTransport` runs on the service without a line of its own.
+
+**A historical origin is an object, not an offset.** The leakage guarantee is
+carried by the data rather than by the loop:
+
+```python
+TimeSeriesFrame.up_to(moment)    # simulated origins: the history, truncated
+ForecastDataset.up_to(moment)    # observed origins: the vintages issued by then
+```
+
+A fold holds the *result* of one of those, so a later vintage is not merely
+unused — it is absent from the object the model is handed, and there is nothing
+for a bug in `evaluation/` to reach for. `up_to` on an event-time frame moves the
+known features of the discarded rows into the future table, because a known
+feature's later values are knowable in advance by definition; observed features
+and targets do not move, and the future table refuses to carry either.
+
+That pairing is also what makes the two validation strategies distinct rather
+than two spellings of one thing: `RollingOrigin` folds a `TimeSeriesFrame` and
+`ForecastOriginValidation` folds a `ForecastDataset`, and each refuses the other
+source rather than inventing a vintage or an origin that never existed.
+
+**Every row says what would make it incomparable.** `origin_fidelity`,
+`provider` and `artifact` are read off the artifact the fold actually published,
+never declared by the benchmark, and `pairs` says how many outcomes a value was
+computed over — so a fold scored on a third of its horizon is visible in the
+result rather than only in the metric. `origin_fidelity` is the one that changes
+conclusions, and carrying it per row is what turns "simulated availability versus
+true point-in-time availability" into a comparison a caller can run rather than a
+caveat they have to remember.
+
+One knob is deliberately a template rather than a literal. A benchmark's `plan=`
+has to reach candidates that do not share a contract, and a `WindowPlan` is a
+field only a sequence model binds — `of.fit` refuses one handed to ARIMA, and
+correctly, since somebody wrote it expecting an effect. So `plan_for` drops the
+window for a candidate that binds none and nothing else is adapted, which is both
+documented and the only way one plan can compare model families at all. A
+candidate that needs something else states it with `of.Candidate(model, plan=...)`.
+
+`of.eligible_models` is the screening half of `openforecast/auto`, and
+eligibility means exactly one thing: **the fit would not be refused.** It
+materializes the view the model's contract asks for and checks it against the
+capabilities the model declared — the same two functions `fit()` runs — so
+"AutoARIMA cannot learn across vintages" and "this model cannot consume missing
+values" fall out as the sentences the fit would have failed with rather than
+being written down a second time as heuristics. `openforecast/auto` itself is not
+registered: a descriptor for it would have to name a view and a horizon before
+the data has been seen, and the honest version is a policy over these pieces —
+benchmark, rank, fit the winner — rather than a model reference standing in front
+of nothing.

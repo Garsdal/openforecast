@@ -27,6 +27,7 @@ import pyarrow as pa
 
 from openforecast.data._arrow import (
     InstanceKey,
+    build_table,
     canonical_value,
     canonicalize,
     column_type,
@@ -46,6 +47,7 @@ from openforecast.data._arrow import (
 )
 from openforecast.data.features import FeatureSpec
 from openforecast.data.frequency import Frequency
+from openforecast.data.point_in_time import parse_moment
 from openforecast.data.schema import TimeSeriesSchema
 from openforecast.errors import DataError
 
@@ -115,6 +117,77 @@ class TimeSeriesFrame:
     def instances(self) -> tuple[InstanceKey, ...]:
         """The distinct instance keys present in ``history``, in first-seen order."""
         return tuple(dict.fromkeys(key_rows(self._history, self._schema.instance_keys)))
+
+    # -- one moment --------------------------------------------------------
+
+    def up_to(self, moment: str | datetime) -> TimeSeriesFrame:
+        """This frame as it would have looked at ``moment``.
+
+        The history is truncated to the event times at or before it, which is
+        what makes a historical origin usable as a fit: a model evaluated at
+        ``moment`` must not have been trained on what happened afterwards.
+
+        Known features are not discarded with it. A known feature is one whose
+        future values are knowable in advance — that is the role's whole
+        meaning — so the values the truncated rows held for later event times
+        move into the future table, where a forecast at ``moment`` can condition
+        on them. Observed features and targets do not move: neither was knowable
+        then, and the future table refuses to carry either.
+
+        Origins here are therefore *simulated*, in the sense
+        :class:`~openforecast.views.provenance.OriginFidelity` means: the values
+        are today's, cut back to the shape the past had. Real vintages are what
+        :meth:`~openforecast.data.forecast_dataset.ForecastDataset.up_to` is for.
+        """
+        when = parse_moment(moment, "moment")
+        times: list[datetime] = column_values(self._history, self._schema.time)
+        kept = [event <= when for event in times]
+        if not any(kept):
+            raise DataError(
+                f"nothing in this frame is at or before {when.isoformat()}; its history "
+                f"begins at {min(times).isoformat()}"
+            )
+        history = self._history.filter(pa.array(kept))
+        instances = set(key_rows(history, self._schema.instance_keys))
+        static = self._static
+        return TimeSeriesFrame(
+            history=history,
+            schema=self._schema,
+            future=self._knowable_after(when, instances),
+            static=None if static is None else static_for(static, self._schema, instances),
+        )
+
+    def _knowable_after(self, moment: datetime, instances: set[InstanceKey]) -> pa.Table | None:
+        """The known-feature values for event times after ``moment``.
+
+        Gathered from the discarded history rows and from the future table
+        alike, since the two are the same statement about the same feature; a
+        cell held by both takes the history's value, which is the frame's own
+        record of it.
+        """
+        schema = self._schema
+        if not schema.has_known_features:
+            return None
+        columns = schema.future_columns
+        values: dict[str, list[Any]] = {name: [] for name in columns}
+        seen: set[tuple[InstanceKey, datetime]] = set()
+        for table in (self._history, self._future):
+            if table is None:
+                continue
+            keys = key_rows(table, schema.instance_keys)
+            times: list[datetime] = column_values(table, schema.time)
+            available = {name: column_values(table, name) for name in columns}
+            for index, cell in enumerate(zip(keys, times, strict=True)):
+                if cell[1] <= moment or cell in seen or cell[0] not in instances:
+                    continue
+                seen.add(cell)
+                for name in columns:
+                    values[name].append(available[name][index])
+        if not seen:
+            return None
+        return build_table(
+            {name: (values[name], column_type(self._history, name)) for name in columns}
+        )
 
     # -- construction ------------------------------------------------------
 
@@ -341,6 +414,17 @@ def _validate_static_rows(
     extra = sorted(set(keys) - instances, key=repr)
     if extra:
         raise DataError(f"static holds rows for instances absent from history: {summarize(extra)}")
+
+
+def static_for(static: pa.Table, schema: TimeSeriesSchema, instances: set[InstanceKey]) -> pa.Table:
+    """The static rows of ``instances`` and no others.
+
+    A static table holds exactly one row per instance in the history, so
+    truncating a frame past the whole of some instance's history has to drop its
+    static row with it rather than leave one describing nothing.
+    """
+    keys = key_rows(static, schema.instance_keys)
+    return static.filter(pa.array([key in instances for key in keys]))
 
 
 def extract_static(history: pa.Table, schema: TimeSeriesSchema) -> pa.Table:

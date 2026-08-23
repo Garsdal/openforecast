@@ -47,6 +47,26 @@ architecture. The request and response models it projects to live in
 :mod:`openforecast.server`; the service that answers them is
 ``openforecast serve``, behind the ``openforecast[server]`` extra.
 
+Since Step 17 the same vocabulary also compares models rather than only running
+them:
+
+```python
+result = of.benchmark(
+    models=["builtin/seasonal-naive", "nixtla/autoarima", "nixtla/nhits"],
+    data=dataset,
+    validation=of.ForecastOriginValidation(origins=of.AllOrigins(stride=24), horizon=72),
+    metrics=[of.MAE(), of.Bias()],
+)
+
+result.leaderboard("mae")
+```
+
+Which is a loop over ``of.fit`` and ``of.forecast`` and nothing else — no
+provider knows it is being benchmarked, and for a ``ForecastDataset`` each origin
+is evaluated on the vintage that actually existed. That is what
+:mod:`openforecast.evaluation` is, along with ``of.eligible_models``, which
+answers which models this data could fit at all.
+
 The execution views of Step 4 are deliberately not re-exported here either: they
 are a provider-facing boundary, imported from :mod:`openforecast.views`, not
 something a user of the library needs to name.
@@ -84,6 +104,21 @@ from openforecast.errors import (
     SchemaError,
     UnknownModelError,
     UnsupportedPlanError,
+)
+from openforecast.evaluation import (
+    MAE,
+    MAPE,
+    RMSE,
+    BenchmarkResult,
+    Bias,
+    Candidate,
+    Eligibility,
+    ForecastOriginValidation,
+    Metric,
+    RollingOrigin,
+    Validation,
+    benchmark,
+    eligible_models,
 )
 from openforecast.recipes import (
     ColumnSet,
@@ -126,9 +161,13 @@ __all__ = [
     "AllOrigins",
     "ArtifactError",
     "AtOrigin",
+    "BenchmarkResult",
+    "Bias",
+    "Candidate",
     "ColumnSet",
     "DataError",
     "DuplicateModelError",
+    "Eligibility",
     "Ensemble",
     "FeatureAvailability",
     "FeatureKind",
@@ -137,6 +176,7 @@ __all__ = [
     "Forecast",
     "ForecastContext",
     "ForecastDataset",
+    "ForecastOriginValidation",
     "ForecastTask",
     "Frequency",
     "FrequencyError",
@@ -149,7 +189,10 @@ __all__ = [
     "LatestOrigin",
     "LeadTimeFeature",
     "LocalTransport",
+    "MAE",
+    "MAPE",
     "Mean",
+    "Metric",
     "MissingIndicator",
     "Model",
     "ModelError",
@@ -167,11 +210,13 @@ __all__ = [
     "PointInTimeFrame",
     "PointInTimeSchema",
     "ProviderError",
+    "RMSE",
     "Recipe",
     "RecipeError",
     "Reduction",
     "ReductionStrategy",
     "Resources",
+    "RollingOrigin",
     "SchemaError",
     "StandardScaler",
     "TimeSeriesFrame",
@@ -179,9 +224,12 @@ __all__ = [
     "Transport",
     "UnknownModelError",
     "UnsupportedPlanError",
+    "Validation",
     "WeightedMean",
     "WindowPlan",
     "__version__",
+    "benchmark",
+    "eligible_models",
     "fit",
     "forecast",
     "models",

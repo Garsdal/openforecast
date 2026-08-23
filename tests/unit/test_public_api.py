@@ -9,8 +9,10 @@ import pytest
 import openforecast as of
 
 # The semantic data layer of Steps 2 and 3, the ``of.models`` namespace of
-# Step 5, the recipes, plans and tasks of Step 6, and the engine of Step 8 —
-# ``of.fit``, ``of.forecast``, the client behind them and what they hand back.
+# Step 5, the recipes, plans and tasks of Step 6, the engine of Step 8 —
+# ``of.fit``, ``of.forecast``, the client behind them and what they hand back —
+# and the benchmarking of Step 17, which is built on those two calls and adds
+# the vocabulary for comparing what comes out of them.
 # Asserted exactly so that nothing reaches the public surface by accident. The
 # execution views are not here on purpose: they are a provider boundary,
 # imported from ``openforecast.views``.
@@ -19,9 +21,13 @@ EXPECTED_PUBLIC_SURFACE = {
     "AllOrigins",
     "ArtifactError",
     "AtOrigin",
+    "BenchmarkResult",
+    "Bias",
+    "Candidate",
     "ColumnSet",
     "DataError",
     "DuplicateModelError",
+    "Eligibility",
     "Ensemble",
     "FeatureAvailability",
     "FeatureKind",
@@ -30,6 +36,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "Forecast",
     "ForecastContext",
     "ForecastDataset",
+    "ForecastOriginValidation",
     "ForecastTask",
     "Frequency",
     "FrequencyError",
@@ -42,7 +49,10 @@ EXPECTED_PUBLIC_SURFACE = {
     "LatestOrigin",
     "LeadTimeFeature",
     "LocalTransport",
+    "MAE",
+    "MAPE",
     "Mean",
+    "Metric",
     "MissingIndicator",
     "Model",
     "ModelError",
@@ -60,11 +70,13 @@ EXPECTED_PUBLIC_SURFACE = {
     "PointInTimeFrame",
     "PointInTimeSchema",
     "ProviderError",
+    "RMSE",
     "Recipe",
     "RecipeError",
     "Reduction",
     "ReductionStrategy",
     "Resources",
+    "RollingOrigin",
     "SchemaError",
     "StandardScaler",
     "TimeSeriesFrame",
@@ -72,9 +84,12 @@ EXPECTED_PUBLIC_SURFACE = {
     "Transport",
     "UnknownModelError",
     "UnsupportedPlanError",
+    "Validation",
     "WeightedMean",
     "WindowPlan",
     "__version__",
+    "benchmark",
+    "eligible_models",
     "fit",
     "forecast",
     "models",
@@ -446,6 +461,47 @@ def test_the_step_sixteen_surface_is_exactly_what_is_defined() -> None:
 
     assert set(server.__all__) == EXPECTED_SERVER_SURFACE
     assert builtins.list(server.__all__) == sorted(server.__all__)
+
+
+# Benchmarking and point-in-time evaluation, Step 17. ``Fold``, ``plan_for`` and
+# the result-table vocabulary are reachable here but not from the top level: they
+# are how a benchmark is built rather than what a caller writes.
+EXPECTED_EVALUATION_SURFACE = {
+    "BENCHMARK_COLUMNS",
+    "BenchmarkColumn",
+    "BenchmarkResult",
+    "Bias",
+    "Candidate",
+    "Eligibility",
+    "Fold",
+    "ForecastOriginValidation",
+    "MAE",
+    "MAPE",
+    "Metric",
+    "MetricKind",
+    "RMSE",
+    "RollingOrigin",
+    "Validation",
+    "ValidationMode",
+    "benchmark",
+    "eligible_models",
+    "plan_for",
+}
+
+
+def test_the_step_seventeen_surface_is_exactly_what_is_defined() -> None:
+    from openforecast import evaluation
+
+    assert set(evaluation.__all__) == EXPECTED_EVALUATION_SURFACE
+    assert builtins.list(evaluation.__all__) == sorted(evaluation.__all__)
+
+
+def test_benchmarking_adds_no_dependency_and_no_provider_vocabulary() -> None:
+    """It is a loop over the public API, so it needs nothing the API does not."""
+    import openforecast.evaluation as evaluation
+
+    assert evaluation.benchmark is of.benchmark
+    assert evaluation.eligible_models is of.eligible_models
 
 
 def test_importing_openforecast_does_not_import_a_web_framework() -> None:
