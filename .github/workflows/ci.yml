@@ -48,11 +48,42 @@ jobs:
           uv run generate-openapi
           git diff --exit-code spec/openapi/openapi.json
 
+      # Step 25's version of the same rule, for the reference documentation: the
+      # pages under docs/reference/generated are generated from the public
+      # surface, committed, and diffed here, so a renamed parameter or a
+      # rewritten docstring is a diff rather than documentation that quietly
+      # disagrees with the library. The examples beside them are executed by the
+      # test step above.
+      - name: Assert the committed reference documentation is the generated one
+        run: |
+          uv run generate-reference
+          git diff --exit-code docs/reference/generated
+
       - name: Assert no forecasting framework in the dependency tree
         run: |
           uv tree --no-dev > tree.txt
           cat tree.txt
           ! grep -Eiq '(neural|stats|ml|hierarchical)forecast|darts|sktime|scikit-learn|torch|jax|tensorflow|lightgbm|xgboost' tree.txt
+
+  # The site itself. `--strict` turns an unresolved link, an unknown nav entry
+  # and a page missing from the nav into failures, so the documentation build is
+  # a check rather than an artifact. The executed examples and the structural
+  # assertions run in the job above, which needs no static-site generator: this
+  # one is the only place the docs group is installed.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync with the docs group
+        run: uv sync --group docs
+
+      - name: Build the site
+        run: uv run mkdocs build --strict
 
   # The core install is `pydantic`, `pyarrow` and `platformdirs`, and the HTTP
   # projection does not change that: serving needs `openforecast[server]`, and

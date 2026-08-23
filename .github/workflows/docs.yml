@@ -1,0 +1,71 @@
+# Publishing the documentation, one version at a time.
+#
+# Step 25.3: an agent or a person using `openforecast==0.1` should be able to
+# retrieve the documentation that shipped with it, so a release publishes its own
+# copy rather than overwriting one. `mike` keeps the versions side by side on the
+# `gh-pages` branch and owns the selector the theme renders:
+#
+#   dev      follows main
+#   0.1, 0.2, …   one per released minor version
+#   latest   an alias for the newest release, and the default
+#
+# Building is a *check* and runs in ci.yml on every pull request; this workflow
+# only deploys, and only from this repository's own main branch or a tag.
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+# One deployment at a time: two `mike` runs pushing to gh-pages would race.
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `mike` rewrites the gh-pages branch, so it needs the history of it.
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync with the docs group
+        run: uv sync --group docs
+
+      # The committed reference is what gets published, so a stale one must not
+      # be. The same diff runs in ci.yml; repeating it here means a deployment
+      # cannot be the thing that ships documentation the code disagrees with.
+      - name: Assert the committed reference documentation is the generated one
+        run: |
+          uv run generate-reference
+          git diff --exit-code docs/reference/generated
+
+      - name: Configure git for the deployment commit
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+      # A tag names a release, so it publishes the minor version and moves
+      # `latest`; anything else on main is `dev`. The version comes from the tag
+      # rather than from the package, so a mistagged release fails visibly here.
+      - name: Publish
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+            minor="${version%.*}"
+            uv run mike deploy --push --update-aliases "${minor}" latest
+            uv run mike set-default --push latest
+          else
+            uv run mike deploy --push dev
+          fi
