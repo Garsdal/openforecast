@@ -904,6 +904,62 @@ pip install openforecast                # to call one
 `HttpTransport` is `urllib`, so the core install stays `pydantic`, `pyarrow` and
 `platformdirs`, and a remote-only user never installs a web framework.
 
+## The same semantics, from a shell
+
+The whole library is reachable from a terminal, a script, a CI job or a coding
+agent, and the CLI is intentionally uncreative:
+
+```bash
+openforecast models list
+openforecast models get builtin/seasonal-naive
+
+openforecast fit --model builtin/seasonal-naive --data ./dataset --name de-load
+openforecast forecast --model local/de-load --data ./dataset --horizon 24 --json
+openforecast backtest --config backtest.json --json
+
+openforecast doctor
+```
+
+`fit`, `forecast` and `backtest` are `client.fit`, `client.forecast` and
+`client.backtest` — the same three names, calling the same SDK, writing to the
+same artifact store — so a fit from a shell can be forecast with from Python and
+the other way round. Data crosses as a written dataset, because a command line
+cannot hand over a frame: `--data ./dataset` is the directory
+`frame.write("./dataset")` produced, and which of the three datasets it holds is
+read off what is in it.
+
+Anything with structure in it is a JSON file rather than a wall of flags, and the
+file is the arguments of `of.fit` written down — each nested field deserializing
+into the same Pydantic type the library uses, with an unrecognized key refused by
+name:
+
+```bash
+openforecast fit --config fit.json
+```
+
+```json
+{
+  "model": "builtin/seasonal-naive",
+  "data": "./dataset",
+  "horizon": 24,
+  "name": "de-load",
+  "plan": {"window": {"context": 168}, "seed": 7}
+}
+```
+
+```text
+stdout    the requested output, and nothing else
+stderr    logs, progress, warnings, and the message when something fails
+0         the command did what it was asked
+non-zero  it did not
+```
+
+So `openforecast models list --json | jq` is reliable, and a failure is a sentence
+on stderr with a non-zero exit code rather than prose on stdout that a script
+would have to interpret. `openforecast doctor` answers "is this installation able
+to forecast" the same way — as an exit code, for a container health check or an
+agent's first call.
+
 ## Backtesting and point-in-time evaluation
 
 The same models, over the same origins, scored the same way:
@@ -1262,7 +1318,7 @@ src/openforecast/
     providers/   the provider SDK — the client contract, the serving harness —
                  and the built-in reference provider
     protocol/    the provider wire protocol: messages, errors, versions
-    commands/    the CLI, including `openforecast serve`
+    commands/    the CLI: models, providers, fit, forecast, backtest, doctor, serve
     server/      the HTTP projection: wire models, transports, the FastAPI app
     evaluation/  backtesting, PIT validation strategies, metrics, results
     docs/        the reference-documentation generator

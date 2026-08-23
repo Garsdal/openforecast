@@ -123,14 +123,14 @@ of.Candidate("nixtla/nhits", plan=of.FitPlan(window=of.WindowPlan(context=336)))
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from openforecast.artifacts.handle import ModelHandle
 from openforecast.artifacts.manifest import LOCAL_NAMESPACE
@@ -204,6 +204,26 @@ class Candidate(BaseModel):
                 raise RecipeError("model was given both positionally and by keyword")
             data["model"] = normalize_recipe(_as_reference(model))
         super().__init__(**data)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_a_reference(cls, value: object) -> object:
+        """Let ``{"model": "nixtla/nhits"}`` mean what ``Candidate("nixtla/nhits")`` does.
+
+        Deserialization goes through the core schema rather than through
+        ``__init__``, so without this a candidate written down — in a CLI config
+        file, in a saved experiment — would be the one place in OpenForecast
+        where the short spelling of a model is not accepted. It is the same
+        normalization :meth:`__init__` performs, and the same accommodation
+        :class:`~openforecast.models.ref.ModelRef` makes for a plain string.
+        """
+        if not isinstance(value, Mapping):
+            return value
+        written = cast(Mapping[str, Any], value)
+        reference = written.get("model")
+        if isinstance(reference, str):
+            return {**written, "model": normalize_recipe(reference)}
+        return written
 
     @property
     def label(self) -> str:

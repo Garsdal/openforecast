@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 from typing import IO, Any
 
+from openforecast.commands.exit_codes import EXIT_OK
 from openforecast.errors import OpenForecastError
 from openforecast.server.transport import DEFAULT_PORT, LocalTransport
 
@@ -66,7 +67,7 @@ def run(args: argparse.Namespace, out: IO[str]) -> int:
     app = _application(LocalTransport(store=args.store))
     print(f"openforecast serving on http://{args.host}:{args.port}/v1", file=out)
     _uvicorn().run(app, host=args.host, port=args.port, log_level="info")
-    return 0
+    return EXIT_OK
 
 
 def _application(transport: LocalTransport) -> Any:

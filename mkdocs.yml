@@ -58,6 +58,7 @@ nav:
       - Backtesting: guides/backtesting.md
       - Probabilistic forecasts: guides/probabilistic.md
       - Pipelines and ensembles: guides/ensembles.md
+      - The command line: guides/cli.md
   - Concepts:
       - The data model: concepts/data-model.md
       - Point-in-time semantics: concepts/point-in-time.md

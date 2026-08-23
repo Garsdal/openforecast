@@ -14,18 +14,20 @@ handshake produced. That is deliberate — a CLI that computed something the
 Python API did not would be a second implementation of the same idea.
 
 Human output goes to stdout as aligned columns; ``--json`` prints the same facts
-as one JSON document, for anything that has to parse them. Errors go to stderr
-and exit non-zero. A provider is not a thing to be silently absent: asking to
-inspect one that is not installed is a failure, not an empty table.
+as one JSON document, for anything that has to parse them — through
+:mod:`openforecast.commands.output`, which is where every command's two
+renderings live so that they stay two projections of one answer. Errors go to
+stderr and exit non-zero. A provider is not a thing to be silently absent:
+asking to inspect one that is not installed is a failure, not an empty table.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-from collections.abc import Sequence
 from typing import IO, Any
 
+from openforecast.commands import output
+from openforecast.commands.exit_codes import EXIT_OK
 from openforecast.runtime.environments import ProviderEnvironment, ProviderEnvironments
 
 __all__ = ["add_parser", "run"]
@@ -84,39 +86,39 @@ def run(args: argparse.Namespace, out: IO[str]) -> int:
         return _describe(environments.get(args.name), out, as_json=args.json, verb="installed")
     removed = environments.remove(args.name)
     print(f"removed {args.name} ({removed})", file=out)
-    return 0
+    return EXIT_OK
 
 
 def _list(environments: ProviderEnvironments, out: IO[str], *, as_json: bool) -> int:
     found = environments.list()
     if as_json:
-        _dump(
+        output.dump(
             {
                 "root": str(environments.root),
                 "providers": [_summary(environment) for environment in found],
             },
             out,
         )
-        return 0
+        return EXIT_OK
     if not found:
         print(
             f"no providers are installed in {environments.root}\n"
             f"install one with: openforecast providers install nixtla",
             file=out,
         )
-        return 0
+        return EXIT_OK
     rows = [
         (environment.name, environment.version, str(len(environment.record.models)))
         for environment in found
     ]
-    _table(("PROVIDER", "VERSION", "MODELS"), rows, out)
-    return 0
+    output.table(("PROVIDER", "VERSION", "MODELS"), rows, out)
+    return EXIT_OK
 
 
 def _describe(environment: ProviderEnvironment, out: IO[str], *, as_json: bool, verb: str) -> int:
     if as_json:
-        _dump(_summary(environment), out)
-        return 0
+        output.dump(_summary(environment), out)
+        return EXIT_OK
     record = environment.record
     print(f"{record.provider} {record.provider_version} ({verb})", file=out)
     print(f"  source     {record.source}", file=out)
@@ -129,7 +131,7 @@ def _describe(environment: ProviderEnvironment, out: IO[str], *, as_json: bool, 
         # borrowing the spelling of one it does not have.
         view = "zero-shot" if descriptor.training is None else str(descriptor.training.view)
         print(f"    {descriptor.ref}  view={view}", file=out)
-    return 0
+    return EXIT_OK
 
 
 def _summary(environment: ProviderEnvironment) -> dict[str, Any]:
@@ -138,14 +140,3 @@ def _summary(environment: ProviderEnvironment) -> dict[str, Any]:
         "path": str(environment.path),
         "command": list(environment.command),
     }
-
-
-def _dump(payload: object, out: IO[str]) -> None:
-    print(json.dumps(payload, indent=2), file=out)
-
-
-def _table(header: Sequence[str], rows: Sequence[Sequence[str]], out: IO[str]) -> None:
-    widths = [max(len(row[index]) for row in (header, *rows)) for index in range(len(header))]
-    for row in (header, *rows):
-        cells = (cell.ljust(width) for cell, width in zip(row, widths, strict=True))
-        print("  ".join(cells).rstrip(), file=out)
