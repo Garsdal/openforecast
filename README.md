@@ -62,6 +62,10 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > client and on the package, and a test that fails if a second one appears — and
 > Step 25 put the documentation under the same discipline: `docs/`, with a
 > generated reference diffed in CI and every example executed by the test suite.
+> Step 28 added the seven executable examples in [examples/](examples/) — one
+> complete script per thing worth knowing, each generating its own tiny
+> deterministic data, and every one of them run as a script by
+> `tests/examples/test_examples.py` on every CI run.
 > See [PLAN.md](PLAN.md) for the 17-step roadmap and
 > [PLAN_2.md](PLAN_2.md) for what comes after it.
 

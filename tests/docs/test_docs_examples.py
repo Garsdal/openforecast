@@ -31,6 +31,10 @@ PAGES = pages_under()
 #: executing anything has to be added here deliberately.
 NOTHING_TO_EXECUTE = {
     Path("docs/index.md"),
+    # Step 28: the executable examples are the scripts under `examples/`, run as
+    # scripts by `tests/examples/test_examples.py`. This page is the index to
+    # them, and copying one onto it is the duplication 28.4 is about.
+    Path("docs/getting-started/examples.md"),
     Path("docs/concepts/data-model.md"),
     Path("docs/concepts/point-in-time.md"),
     Path("docs/concepts/providers.md"),
