@@ -29,9 +29,8 @@ answered with numbers that quietly forecast the wrong steps.
 is another :class:`DartsLocalAdapter` beside it, which is the point of the
 parameters being declared as data.
 
-``darts`` is imported inside the calls that need it rather than at module scope,
-for the same reason the global adapter does it: a handshake asks what this
-integration advertises, and it should not pay for a library import to answer.
+The catalog discovers Darts' local classes once and injects the selected class
+into this adapter. Fit and forecast contain no model-name dispatch.
 """
 
 from __future__ import annotations
@@ -85,12 +84,16 @@ class DartsLocalAdapter:
         model_type: Callable[[], Any],
         parameters: Sequence[Parameter],
         compile_params: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+        missing_values: MissingValueSupport = MissingValueSupport.UNSUPPORTED,
+        seeded: bool = False,
     ) -> None:
         self._name = name
         self._display_name = display_name
         self._model_type = model_type
         self._parameters = named(parameters)
         self._compile = compile_params
+        self._missing_values = missing_values
+        self._seeded = seeded
 
     @property
     def name(self) -> str:
@@ -118,7 +121,7 @@ class DartsLocalAdapter:
                 targets=TargetCapabilities(univariate=True, multivariate=False),
                 features=FeatureCapabilities(observed=False, known=False, static=False),
                 outputs=OutputCapabilities(point=True),
-                missing_values=MissingValueSupport.UNSUPPORTED,
+                missing_values=self._missing_values,
             ),
             parameters_schema=schema_of(self._parameters),
         )
@@ -129,7 +132,6 @@ class DartsLocalAdapter:
         self, view: FitView, params: Mapping[str, Any], into: Path, *, seed: int | None
     ) -> None:
         """Fit one native model per series, and persist each with what labels it."""
-        del seed  # the models exposed here are deterministic
         if not isinstance(view, SeriesView):
             raise ProviderError(
                 f"{self._name} trains on one complete time series, so it cannot be fitted "
@@ -138,7 +140,7 @@ class DartsLocalAdapter:
         prepared = conversion.training_series(view)
         entries: list[dict[str, Any]] = []
         for index, (series_id, series) in enumerate(prepared.series.items()):
-            model = self._instantiate(params)
+            model = self._instantiate(params, seed=seed)
             try:
                 model.fit(series)
             except Exception as error:
@@ -227,10 +229,12 @@ class DartsLocalAdapter:
 
     # -- the native model ---------------------------------------------------
 
-    def _instantiate(self, params: Mapping[str, Any]) -> Any:
+    def _instantiate(self, params: Mapping[str, Any], *, seed: int | None) -> Any:
         """The native model the caller's parameters describe."""
         settings = checked(params, self._parameters, self._name)
         compiled = dict(self._compile(settings)) if self._compile is not None else settings
+        if self._seeded:
+            compiled["random_state"] = seed
         try:
             return self._model_type()(**compiled)
         except (TypeError, ValueError) as error:

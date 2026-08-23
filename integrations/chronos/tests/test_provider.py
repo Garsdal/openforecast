@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 from openforecast_chronos import PROVIDER_NAME, PROVIDER_VERSION, ChronosProvider, catalog
-from openforecast_chronos.adapter import CHRONOS_2
+from openforecast_chronos.adapter import CHECKPOINTS, CHRONOS_2
 
 from openforecast.errors import ModelDoesNotSupportFit, UnknownModelError
 from openforecast.models import ModelDescriptor
@@ -66,6 +66,12 @@ def test_the_provider_is_namespaced_after_the_models_it_advertises() -> None:
 def test_the_reference_is_the_published_checkpoint() -> None:
     """A user should not have to translate a name they already know."""
     assert CHRONOS_2.checkpoint == "amazon/chronos-2"
+
+
+def test_checkpoint_specs_generate_the_catalog_through_one_adapter_protocol() -> None:
+    assert [spec.name for spec in CHECKPOINTS] == list(catalog.model_names())
+    adapters = [catalog.adapter_for(f"amazon/{spec.name}", "amazon") for spec in CHECKPOINTS]
+    assert all(type(adapter).__name__ == "ChronosAdapter" for adapter in adapters)
 
 
 def test_an_unknown_model_is_refused_naming_what_there_is() -> None:

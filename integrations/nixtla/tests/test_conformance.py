@@ -1,11 +1,11 @@
 """The OpenForecast conformance suite, applied to this provider.
 
-Nothing here is written per model. The parameters are generated from the
-descriptors :class:`NixtlaProvider` advertises, so every capability it declares
-becomes a fit that must succeed — over an event-time frame *and* over real
-forecast vintages — and everything it withholds becomes a request that must be
-refused before the provider is started. Advertising a second model exercises it
-here the moment it appears in the catalog.
+Nothing here is written per model. Certified descriptors exercise every
+capability of the shared StatsForecast and NeuralForecast protocol adapters —
+over an event-time frame *and* over real forecast vintages — and everything
+they withhold becomes a request that must be refused before the provider is
+started. Reflected models inherit those adapters; discovery tests separately
+verify their native family, capabilities and constructor schemas.
 
 The suite ships with the OpenForecast repository rather than with the
 distribution, so a run without the checkout beside it skips this module instead
@@ -27,7 +27,6 @@ suite = pytest.importorskip(
 )
 
 PROVIDER = NixtlaProvider()
-DESCRIPTORS = PROVIDER.descriptors()
 
 #: What the suite must not be made to pay for. A neural model's default is a
 #: thousand optimization steps, and none of them say anything about whether it
@@ -35,8 +34,13 @@ DESCRIPTORS = PROVIDER.descriptors()
 #: cases assert. Only parameters the descriptor already advertises are accepted
 #: here, so this cannot quietly change what is being conformance-tested.
 PARAMETERS: dict[str, dict[str, object]] = {
+    "autoarima": {},
     "nhits": {"max_steps": 2},
 }
+
+DESCRIPTORS = tuple(
+    descriptor for descriptor in PROVIDER.descriptors() if descriptor.ref.name in PARAMETERS
+)
 
 CASES = [
     pytest.param(descriptor, case, id=f"{descriptor.ref.name}-{case.name}")
@@ -71,7 +75,7 @@ def test_everything_it_declares_it_cannot_do_is_refused(
 
 
 def test_each_model_is_fitted_from_both_semantic_sources() -> None:
-    """The claim the view boundary exists to make, per advertised model.
+    """The claim the view boundary exists to make, per certified model.
 
     A ``SeriesView`` from an event-time frame and a ``SeriesView`` from real
     vintages at a selected origin are the same thing to this integration, and

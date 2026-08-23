@@ -42,10 +42,8 @@ the declaration is ``NATIVE`` and no imputation happens anywhere on this path.
 That is the one capability that makes this estimator, rather than a ridge
 regression, the honest first one to expose.
 
-``sklearn`` is imported inside the calls that need it rather than at module
-scope, for the same reason the other integrations do it: a handshake asks what
-this integration advertises, and it should not pay for a library import to
-answer.
+The catalog discovers sklearn once and injects the selected estimator class
+into this protocol adapter. Fit and forecast contain no model-name dispatch.
 """
 
 from __future__ import annotations

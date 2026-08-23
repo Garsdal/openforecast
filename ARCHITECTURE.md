@@ -169,11 +169,11 @@ handed, which holds the whole path a caller actually takes — a planner change
 reaching one vintage past the origin fails there rather than surfacing as a
 slightly different metric.
 
-`suite.py` is the part integrations inherit. A descriptor states which view its
-model trains on, which shapes and feature roles it accepts, which output kinds it
-produces, whether it learns across origins and what it does about missing values;
-the suite turns each of those statements into fits that must succeed and requests
-that must be refused.
+`suite.py` is the part integrations inherit. A certified descriptor states which
+view its model trains on, which shapes and feature roles it accepts, which output
+kinds it produces, whether it learns across origins and what it does about
+missing values; the suite turns each of those statements into fits that must
+succeed and requests that must be refused.
 A model declaring `view=sequences` is therefore fitted from an event-time frame
 and from real forecast vintages without either being written down, and in both
 cases the provider is asserted to have received a `SequenceView` and nothing
@@ -197,8 +197,13 @@ anywhere else — passing one as a provider parameter raises an error naming the
 OpenForecast field to use instead. Nothing constructs them, and no public object
 serializes them.
 
-Each integration runs the suite beside its own library, which is the arrangement
-that keeps a provider's environment isolated. `tests/e2e/test_v1_experience.py`
+Each integration runs the suite against its certified protocol representatives
+beside its own library, which is the arrangement that keeps a provider's
+environment isolated. Reflected models inherit that already-tested execution
+path and receive catalog tests for discovery, parameter reflection and
+capability mapping; promoting one to certified means adding its expensive or
+exceptional cases to the same conformance matrix, not writing another adapter.
+`tests/e2e/test_v1_experience.py`
 is the opposite one and the only place the three meet: an OpenForecast install
 that has never heard of any of them, reaching all three over the subprocess
 protocol. It is where "provider-independent" stops being a property of each
@@ -275,6 +280,12 @@ the engine as well as in the providers: `fit()` reads a descriptor, asks the
 `ViewPlanner` for the view it names, and hands that over — there is no place for
 `if provider == "nixtla"` because there is nothing left for it to decide.
 
+"No provider is started" here means *during planning*. Installing or refreshing
+an integration starts its isolated provider once for a handshake. That handshake
+may inspect the installed framework and records the resulting descriptors;
+ordinary fit and forecast planning reads the recorded catalog without importing
+the framework into OpenForecast's process.
+
 Contract invariants are enforced where the contract is declared rather than
 where a user first trips over them. A `SeriesView` is one complete time series,
 so a series model cannot claim to learn across origins, to bind a horizon at fit
@@ -294,6 +305,47 @@ described. `Engine.forecast` is one branch wide because of it — an artifact
 resolves to its recipe and its fitted state, a descriptor resolves to one
 provider call — and everything after that branch is shared, so nothing
 downstream can tell which lifecycle produced a number.
+
+## Native protocols and reflected catalogs
+
+An integration adapts a native **protocol**, not each class that implements it.
+The current protocol families are:
+
+| Native protocol | OpenForecast execution contract |
+| --- | --- |
+| sklearn regressor `fit(X, y)` / `predict(X)` | `TabularView` |
+| StatsForecast local model | `SeriesView` |
+| NeuralForecast global model | `SequenceView` |
+| Darts local/global forecasting model | `SeriesView` / `SequenceView` |
+| sktime forecaster | `SeriesView`, with a specialized pooled-sequence override |
+| Chronos-compatible pretrained checkpoint | zero-shot `ForecastView` |
+
+Each provider builds its catalog from the upstream registry, public class list
+or lightweight checkpoint manifest. A discovered class becomes a native model
+specification — class locator, stable model name, reflected constructor schema,
+conservative capabilities and one protocol-family adapter. Dispatch therefore
+does not grow another `if model == ...` branch when the framework adds a class.
+
+Constructor reflection is deliberately narrower than arbitrary Python
+passthrough. A recipe and the wire carry JSON, so callbacks, estimator objects,
+loss instances and other opaque values are not advertised. Unknown parameters
+are still refused. Parameters that restate an OpenForecast concept are reserved
+and compiled from the semantic request instead:
+
+```text
+random_state / random_seed              <- FitPlan.seed
+input_size / input_chunk_length         <- WindowPlan.context
+h / output_chunk_length                 <- ForecastTask.horizon
+past / future / exogenous declarations  <- FeatureSpec roles
+```
+
+Reflection never guesses a stronger semantic promise. When an upstream registry
+does not reliably declare exogenous, probabilistic or missing-value support, the
+generic model receives the conservative contract. A small certified override
+may strengthen that descriptor and provide clearer parameter descriptions; it
+still executes through the same family adapter. This gives new convention-
+conforming models immediate baseline support while keeping capability claims
+falsifiable and point-in-time behavior owned by OpenForecast.
 
 ## Recipes, plans and tasks
 

@@ -156,9 +156,9 @@ them in. `darts/tide` is the model the point-in-time cases run against.
 src/openforecast_darts/
     __main__.py     the serving harness, two lines
     provider.py     the three provider calls, dispatched
-    catalog.py      which models exist, and which adapter runs each
+    catalog.py      discovers and classifies Darts forecasting classes
     conversion.py   the views <-> Darts' TimeSeries objects
-    parameters.py   a native parameter, as both a schema and a check
+    parameters.py   re-exports shared signature reflection and validation
     state.py        what an adapter remembers beside the native model
     adapters/
         local_models.py     fitted per series          -> SeriesView
@@ -177,9 +177,11 @@ predictions come back as a list in the same order — so where the Nixtla
 integration maintains a `unique_id` mapping, this one maintains a position
 mapping. Same bookkeeping problem, same place, different spelling.
 
-No adapter imports `darts` at module scope. A handshake — which is what
-installing a provider and listing models does — only asks what this integration
-advertises, and `darts` pulls in PyTorch and Lightning.
+The installation handshake inspects Darts' `LocalForecastingModel` and
+`GlobalForecastingModel` hierarchy, maps runtime `supports_*` properties to
+feature capabilities, and caches the resulting catalog. Compatible classes then
+share the two adapters above. Pretrained Darts wrappers are deliberately left to
+the zero-shot provider lifecycle instead of being mislabeled as trainable.
 
 ## Development
 

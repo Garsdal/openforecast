@@ -35,10 +35,9 @@ def descriptor_for(name: str) -> ModelDescriptor:
 def test_the_provider_is_the_namespace_of_the_models_it_advertises() -> None:
     assert PROVIDER.name == PROVIDER_NAME == "sktime"
     assert PROVIDER.version == PROVIDER_VERSION
-    assert {str(descriptor.ref) for descriptor in PROVIDER.descriptors()} == {
-        "sktime/theta",
-        "sktime/pooled-trees",
-    }
+    refs = {str(descriptor.ref) for descriptor in PROVIDER.descriptors()}
+    assert {"sktime/theta", "sktime/pooled-trees"} <= refs
+    assert len(refs) > 2
     assert all(descriptor.provider == "sktime" for descriptor in PROVIDER.descriptors())
 
 
@@ -135,21 +134,14 @@ def test_the_declared_parameters_are_the_ones_that_are_accepted() -> None:
 
 def test_a_model_this_provider_does_not_have_is_named_as_such() -> None:
     with pytest.raises(UnknownModelError, match=r"sktime/theta"):
-        catalog.adapter_for("sktime/autoets", "sktime")
+        catalog.adapter_for("sktime/not-a-model", "sktime")
 
     with pytest.raises(UnknownModelError, match=r"not a model of the 'sktime' provider"):
         catalog.adapter_for("darts/theta", "sktime")
 
 
-def test_the_handshake_imports_no_forecasting_library() -> None:
-    """Discovery is a question about descriptors, and it should stay cheap.
-
-    In a fresh interpreter, because by the time the rest of this suite has run
-    the libraries are loaded and the question would answer itself. Importing
-    ``sktime`` pulls in its registry, scikit-learn and pandas, and paying that to
-    list two model names would make every ``openforecast providers list`` feel
-    broken.
-    """
+def test_the_handshake_discovers_from_the_installed_forecasting_library() -> None:
+    """The installed sktime registry, rather than a copied class list, is authoritative."""
     probe = (
         "import sys\n"
         "from openforecast_sktime import SktimeProvider\n"
@@ -160,7 +152,7 @@ def test_the_handshake_imports_no_forecasting_library() -> None:
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     )
 
-    assert completed.stdout.strip() == "[]", "answering a handshake imported a library"
+    assert "sktime" in completed.stdout
 
 
 @pytest.mark.parametrize(
@@ -198,4 +190,6 @@ def test_the_adapter_says_which_model_it_is() -> None:
     assert "theta" in repr(THETA)
     assert POOLED_TREES.name == "pooled-trees"
     assert "pooled-trees" in repr(POOLED_TREES)
-    assert repr(PROVIDER) == f"SktimeProvider(version={PROVIDER_VERSION}, models=2)"
+    assert repr(PROVIDER) == (
+        f"SktimeProvider(version={PROVIDER_VERSION}, models={len(catalog.model_names())})"
+    )

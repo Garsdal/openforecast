@@ -35,11 +35,8 @@ def descriptor_for(name: str) -> ModelDescriptor:
 def test_the_provider_is_the_namespace_of_the_models_it_advertises() -> None:
     assert PROVIDER.name == PROVIDER_NAME == "darts"
     assert PROVIDER.version == PROVIDER_VERSION
-    assert {str(descriptor.ref) for descriptor in PROVIDER.descriptors()} == {
-        "darts/theta",
-        "darts/tide",
-        "darts/nhits",
-    }
+    refs = {str(descriptor.ref) for descriptor in PROVIDER.descriptors()}
+    assert {"darts/theta", "darts/tide", "darts/nhits", "darts/fft"} <= refs
     assert all(descriptor.provider == "darts" for descriptor in PROVIDER.descriptors())
 
 
@@ -150,20 +147,14 @@ def test_the_declared_parameters_are_the_ones_that_are_accepted() -> None:
 
 def test_a_model_this_provider_does_not_have_is_named_as_such() -> None:
     with pytest.raises(UnknownModelError, match=r"darts/tide"):
-        catalog.adapter_for("darts/tft", "darts")
+        catalog.adapter_for("darts/not-a-model", "darts")
 
     with pytest.raises(UnknownModelError, match=r"not a model of the 'darts' provider"):
         catalog.adapter_for("nixtla/nhits", "darts")
 
 
-def test_the_handshake_imports_no_forecasting_library() -> None:
-    """Discovery is a question about descriptors, and it should stay cheap.
-
-    In a fresh interpreter, because by the time the rest of this suite has run
-    the libraries are loaded and the question would answer itself. ``darts``
-    pulls in PyTorch and Lightning, and paying seconds of import to list three
-    model names would make every ``openforecast providers list`` feel broken.
-    """
+def test_the_handshake_discovers_from_the_installed_forecasting_library() -> None:
+    """The installed Darts hierarchy, rather than a copied class list, is authoritative."""
     probe = (
         "import sys\n"
         "from openforecast_darts import DartsProvider\n"
@@ -175,7 +166,7 @@ def test_the_handshake_imports_no_forecasting_library() -> None:
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     )
 
-    assert completed.stdout.strip() == "[]", "answering a handshake imported a library"
+    assert "darts" in completed.stdout
 
 
 @pytest.mark.parametrize(
@@ -203,4 +194,16 @@ def test_the_adapter_says_which_model_it_is() -> None:
     assert TIDE.name == "tide"
     assert "tide" in repr(TIDE)
     assert NHITS.name == "nhits"
-    assert repr(PROVIDER) == f"DartsProvider(version={PROVIDER_VERSION}, models=3)"
+    assert repr(PROVIDER) == (
+        f"DartsProvider(version={PROVIDER_VERSION}, models={len(catalog.model_names())})"
+    )
+
+
+def test_discovered_models_use_native_protocols_and_constructor_parameters() -> None:
+    fft = descriptor_for("fft")
+    global_naive = descriptor_for("global-naive-aggregate")
+
+    assert fft.training.view is ViewKind.SERIES
+    assert "nr_freqs_to_keep" in fft.parameters_schema["properties"]
+    assert "agg_fn" in global_naive.parameters_schema["properties"]
+    assert "n_epochs" not in global_naive.parameters_schema["properties"]

@@ -47,9 +47,9 @@ the parameters are untouched, only the windows the forecast rolls from are new.
 The answer therefore also covers the training samples, and the rows of the
 instances actually asked about are selected by label rather than assumed.
 
-``sktime`` is imported inside the calls that need it rather than at module scope,
-for the same reason the local adapter does it: a handshake asks what this
-integration advertises, and it should not pay for a library import to answer.
+This specialized pooled protocol remains beside the reflected local forecaster
+driver. The catalog selects it as an override; fit and forecast contain no
+model-name dispatch.
 """
 
 from __future__ import annotations

@@ -55,6 +55,7 @@ is seconds, and ``openforecast providers list`` reads a recorded handshake.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -75,12 +76,21 @@ from openforecast.models import (
 from openforecast.views import ForecastView
 from openforecast_chronos import conversion
 
-__all__ = ["CHRONOS_2", "ChronosAdapter"]
+__all__ = ["CHECKPOINTS", "CHRONOS_2", "CheckpointSpec", "ChronosAdapter"]
 
 #: The level a point forecast is read at. Chronos-2 answers quantiles, so a
 #: point forecast is a reading of the distribution rather than a separate
 #: prediction, and this is which reading.
 MEDIAN = 0.5
+
+
+@dataclass(frozen=True)
+class CheckpointSpec:
+    """One published checkpoint compatible with the Chronos-2 pipeline protocol."""
+
+    name: str
+    display_name: str
+    checkpoint: str
 
 
 class ChronosAdapter:
@@ -91,6 +101,10 @@ class ChronosAdapter:
         self._display_name = display_name
         self._checkpoint = checkpoint
         self._pipeline: Any | None = None
+
+    @classmethod
+    def from_spec(cls, spec: CheckpointSpec) -> ChronosAdapter:
+        return cls(name=spec.name, display_name=spec.display_name, checkpoint=spec.checkpoint)
 
     @property
     def name(self) -> str:
@@ -241,8 +255,15 @@ def _one_variate(tensor: Any, model: str) -> list[list[float]]:
 #: ``amazon/chronos-2``: the pretrained checkpoint published as
 #: ``amazon/chronos-2`` on the Hugging Face Hub, which is deliberately the same
 #: string. A reference a user already knows should not have to be translated.
-CHRONOS_2 = ChronosAdapter(
+CHRONOS_2_SPEC = CheckpointSpec(
     name="chronos-2",
     display_name="Chronos-2",
     checkpoint="amazon/chronos-2",
 )
+
+#: The lightweight checkpoint manifest. Adding another checkpoint that obeys
+#: the same pipeline protocol is one data row, not another adapter.
+CHECKPOINTS = (CHRONOS_2_SPEC,)
+
+#: Backwards-compatible named adapter used by focused Chronos-2 tests.
+CHRONOS_2 = ChronosAdapter.from_spec(CHRONOS_2_SPEC)

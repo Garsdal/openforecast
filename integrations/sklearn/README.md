@@ -53,12 +53,18 @@ reduces nothing. It receives rows.
 ## What it provides
 
 ```text
-sklearn/hist-gradient-boosting   HistGradientBoostingRegressor on supervised rows
+sklearn/hist-gradient-boosting   certified native-NaN path
+sklearn/random-forest            discovered RandomForestRegressor
+sklearn/ridge                    discovered Ridge
+...                              every compatible installed regressor
 ```
 
-One estimator, deliberately. Adding `sklearn/random-forest`, `sklearn/ridge` or
-`sklearn/extra-trees` should be a table row and a parameter list; if it ever
-needs more than that, the `TabularView` is doing less work than it claims to.
+The catalog comes from `sklearn.utils.all_estimators(type_filter="regressor")`.
+Estimator tags select ordinary two-dimensional, single-output regressors;
+constructor reflection publishes their JSON-representable parameters. All of
+them execute through the same `SklearnAdapter`. The histogram booster remains a
+certified override with stronger descriptions and native missing-value support,
+not a separate implementation.
 
 `HistGradientBoostingRegressor` is the honest first one because of a single
 capability: it routes `NaN` down a learned default branch rather than refusing
@@ -161,10 +167,10 @@ invented before it is needed would be a leak dressed up as a feature.
 src/openforecast_sklearn/
     __main__.py     the serving harness, two lines
     provider.py     the three provider calls, dispatched
-    catalog.py      which models exist, and which adapter runs each
+    catalog.py      discovers regressors and maps them to the shared adapter
     adapter.py      the estimator: descriptor, fit(X, y), predict(X)
     conversion.py   views <-> numpy, and the answer's labels
-    parameters.py   a native parameter, as both a schema and a check
+    parameters.py   re-exports shared signature reflection and validation
     state.py        estimator.pkl and metadata.json
 ```
 
