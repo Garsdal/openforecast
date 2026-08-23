@@ -795,3 +795,43 @@ registered: a descriptor for it would have to name a view and a horizon before
 the data has been seen, and the honest version is a policy over these pieces —
 backtest, rank, fit the winner — rather than a model reference standing in front
 of nothing.
+
+## Documentation as code
+
+Rule 7 says OpenAPI is a projection of the semantics rather than their source.
+The documentation is the same claim about prose, and it is enforced the same way.
+
+```text
+docs/reference/generated/   generated from the code, committed, diffed in CI
+docs/{getting-started,guides,concepts,integrations}/   written by hand
+```
+
+`uv run generate-reference` reads `openforecast.__all__` and
+`openforecast.models.__all__` and renders signatures, Pydantic fields, enum
+members, defaults, descriptions, error codes and the methods each class defines.
+CI regenerates and runs `git diff --exit-code docs/reference/generated`, so a
+renamed parameter or a rewritten docstring is a diff in the documentation rather
+than documentation that quietly disagrees with the library. The generator is a
+pure function of the *types*: it never lists a model catalog, because a catalog
+holds whatever providers a machine has installed and a page built from one could
+not be diffed. A test makes `ModelCatalog.list` raise and generates anyway.
+
+The hand-written pages answer what the code cannot — "how do I do X?", "why does
+it work this way?" — and never restate a signature; a test fails on a `def` or a
+`class` in an example. Every Python block in them is executed by
+`tests/docs/test_docs_examples.py`, page by page, in one namespace per page, so a
+stale example is a failing test rather than a bad afternoon. A block that cannot
+run in that environment carries a marker in the page source naming the reason,
+the ratio of executed to skipped is asserted, and a page that stops executing
+anything has to be added to a list by hand.
+
+`mkdocs build --strict` in CI is the third check: an unresolved link, an unknown
+nav entry or a page missing from the nav is a failure. The structural half of
+that is also a test, so it runs without the docs dependency group — which stays
+out of `uv sync` precisely because the reference and the examples are checked by
+`uv run pytest` alone.
+
+Publishing is versioned. A release deploys its own copy of the site and moves
+`latest`; `main` deploys `dev`. An agent pinned to `openforecast==0.1` can
+therefore fetch the documentation that shipped with it rather than the
+documentation of a surface it does not have.

@@ -1,0 +1,83 @@
+# The documentation site. Built with `--strict` in CI, so an unresolved link or
+# a page missing from the nav is a failure rather than a warning.
+#
+# `reference/generated/` is written by `uv run generate-reference` and committed;
+# CI regenerates it and diffs, which is how a signature in the docs cannot drift
+# from the code. Everything else on this list is written by hand and never
+# retypes one.
+site_name: OpenForecast
+site_description: The unified interface for forecasting
+site_url: https://garsdal.github.io/openforecast/
+repo_url: https://github.com/Garsdal/openforecast
+repo_name: Garsdal/openforecast
+edit_uri: edit/main/docs/
+
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+
+# One published site per released version, so `openforecast==0.1` can be read
+# against the documentation that shipped with it. `mike` owns the selector.
+extra:
+  version:
+    provider: mike
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+      - Concepts in five minutes: getting-started/concepts.md
+  - Guides:
+      - Event-time data: guides/event-time.md
+      - Point-in-time data: guides/point-in-time.md
+      - Fitting: guides/fitting.md
+      - Forecasting: guides/forecasting.md
+      - Backtesting: guides/backtesting.md
+      - Probabilistic forecasts: guides/probabilistic.md
+      - Pipelines and ensembles: guides/ensembles.md
+  - Concepts:
+      - The data model: concepts/data-model.md
+      - Point-in-time semantics: concepts/point-in-time.md
+      - Execution views: concepts/execution-views.md
+      - Model lifecycles: concepts/model-lifecycle.md
+      - Providers: concepts/providers.md
+  - Integrations:
+      - Nixtla: integrations/nixtla.md
+      - Darts: integrations/darts.md
+      - sktime: integrations/sktime.md
+      - scikit-learn: integrations/sklearn.md
+      - Chronos: integrations/chronos.md
+  - Reference:
+      - Overview: reference/generated/index.md
+      - Client and operations: reference/generated/client.md
+      - Semantic data: reference/generated/data.md
+      - Models and descriptors: reference/generated/models.md
+      - Recipes: reference/generated/recipes.md
+      - Plans, tasks and outputs: reference/generated/tasks.md
+      - Forecasts: reference/generated/forecasts.md
+      - Backtesting and metrics: reference/generated/evaluation.md
+      - Transports: reference/generated/transports.md
+      - Errors: reference/generated/errors.md

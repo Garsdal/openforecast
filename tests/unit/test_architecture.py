@@ -88,6 +88,10 @@ LAYERS: tuple[tuple[str, ...], ...] = (
     (
         "openforecast.client",
         "openforecast.commands",
+        # The reference-documentation generator reads the whole public surface,
+        # so it is as far out as a module can be: it imports the package rather
+        # than being imported by any part of it.
+        "openforecast.docs",
         "openforecast.evaluation",
         "openforecast.server",
     ),

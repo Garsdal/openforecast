@@ -17,6 +17,10 @@ venv/
 coverage.xml
 htmlcov/
 
+# Documentation
+# The built site; the sources under docs/ are what is committed.
+site/
+
 # Editors / OS
 .DS_Store
 .idea/

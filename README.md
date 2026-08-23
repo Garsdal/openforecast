@@ -59,7 +59,9 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > `tests/e2e/test_v1_experience.py` runs against all four at once — and
 > `amazon/chronos-2` joins the same backtest without being fitted at all.
 > Step 24 froze that surface: one canonical call per intent, mirrored on a
-> client and on the package, and a test that fails if a second one appears.
+> client and on the package, and a test that fails if a second one appears — and
+> Step 25 put the documentation under the same discipline: `docs/`, with a
+> generated reference diffed in CI and every example executed by the test suite.
 > See [PLAN.md](PLAN.md) for the 17-step roadmap and
 > [PLAN_2.md](PLAN_2.md) for what comes after it.
 
@@ -1154,6 +1156,44 @@ openforecast providers install nixtla    # and darts, and sktime, and sklearn
 uv run pytest tests/e2e/test_v1_experience.py
 ```
 
+## Documentation
+
+The documentation lives in `docs/` and is checked the way the code is:
+
+```text
+docs/
+    getting-started/   install it, run the workflow once, the five ideas
+    guides/            "how do I do X?" — one task per page
+    concepts/          "why does OpenForecast work this way?"
+    integrations/      what each provider distribution ships
+    reference/generated/   signatures and types, generated from the code
+```
+
+```bash
+uv run generate-reference
+git diff --exit-code docs/reference/generated
+```
+
+Rule 7's arrangement, applied to prose. The reference pages are rendered from
+`openforecast.__all__` and `openforecast.models.__all__` — signatures, Pydantic
+fields, enum members, defaults, docstrings, error codes — committed, and diffed in
+CI, so a renamed parameter is a diff in the documentation rather than
+documentation that disagrees with the library. Nothing hand-written restates a
+signature, and a test fails on a `def` or a `class` in an example.
+
+The examples are executed. `tests/docs/test_docs_examples.py` runs every Python
+block, page by page in one namespace, so a page reads top to bottom and a stale
+example is a failing test. A block that needs a provider environment carries a
+marker in the page source naming the reason; the ratio of executed to skipped is
+asserted, and a page that stops executing anything has to be added to a list by
+hand. `mkdocs build --strict` in CI is the third check — an unresolved link or a
+page missing from the nav fails — and the structural half of it is also a test, so
+it runs without the docs dependency group installed.
+
+Publishing is versioned: a release deploys its own copy of the site and moves
+`latest`, `main` deploys `dev`, so `openforecast==0.1` can be read against the
+documentation that shipped with it.
+
 ## Layering
 
 Imports flow in one direction only:
@@ -1193,8 +1233,15 @@ uv run pytest           # test
 ```
 
 ```bash
-uv sync --extra server  # add FastAPI and uvicorn, for `openforecast serve`
-uv run generate-openapi # regenerate spec/openapi/openapi.json
+uv sync --extra server    # add FastAPI and uvicorn, for `openforecast serve`
+uv run generate-openapi   # regenerate spec/openapi/openapi.json
+uv run generate-reference # regenerate docs/reference/generated
+```
+
+```bash
+uv sync --group docs      # mkdocs, the theme and mike
+uv run mkdocs serve       # the documentation site, locally
+uv run mkdocs build --strict
 ```
 
 Arrow is the canonical data-plane representation, so anything crossing a
@@ -1218,12 +1265,14 @@ src/openforecast/
     commands/    the CLI, including `openforecast serve`
     server/      the HTTP projection: wire models, transports, the FastAPI app
     evaluation/  backtesting, PIT validation strategies, metrics, results
+    docs/        the reference-documentation generator
     client.py    the user-facing client
 
 integrations/    provider distributions, each independently versioned
                  nixtla, darts, sktime, sklearn, chronos (the `amazon` provider)
-tests/           unit, contract, conformance and e2e suites
+tests/           unit, contract, conformance, docs and e2e suites
 spec/            protocol, Arrow and OpenAPI specifications
+docs/            the documentation site, built with mkdocs
 ```
 
 Every package exists with a docstring naming the step that fills it. Nothing is

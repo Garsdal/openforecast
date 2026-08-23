@@ -22,6 +22,7 @@ server = [
 [project.scripts]
 openforecast = "openforecast.commands:main"
 generate-openapi = "openforecast.server.openapi:main"
+generate-reference = "openforecast.docs.reference:main"
 
 [project.urls]
 Homepage = "https://github.com/Garsdal/openforecast"
@@ -51,6 +52,17 @@ dev = [
     # installed the extra.
     "fastapi>=0.115",
     "uvicorn>=0.30",
+]
+
+# Building the site is a separate concern from running the tests: the generated
+# reference and the executed examples are checked by `uv run pytest`, which needs
+# none of this, so a static-site generator stays out of the ordinary dev sync.
+docs = [
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.5",
+    # One published site per released version, which is what makes
+    # `openforecast==0.1` readable against the docs that shipped with it.
+    "mike>=2.1",
 ]
 
 [tool.ruff]
