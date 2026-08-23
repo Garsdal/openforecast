@@ -70,6 +70,28 @@ def test_the_four_purposes_each_have_pages() -> None:
     assert (GENERATED_ROOT / "index.md").is_file()
 
 
+def test_the_agent_section_answers_its_four_questions() -> None:
+    """Step 29.3: discover, choose, construct, recover — and nothing narrative.
+
+    Listed as pages rather than checked as prose, because the section's value is
+    that a reader with a task lands on one page rather than reading five.
+    """
+    section = DOCS_ROOT / "agents"
+    expected = {
+        "overview.md",
+        "choosing-a-model.md",
+        "point-in-time.md",
+        "structured-cli.md",
+        "errors.md",
+    }
+
+    assert {path.name for path in section.glob("*.md")} == expected
+
+    overview = (section / "overview.md").read_text(encoding="utf-8")
+    for question in ("discover", "choose", "construct", "recover"):
+        assert question in overview, f"the overview does not say how to {question}"
+
+
 @pytest.mark.parametrize("page", all_pages(), ids=lambda path: str(path.relative_to(REPO_ROOT)))
 def test_every_relative_link_resolves(page: Path) -> None:
     """Link checking, without the network: only links into the repository."""

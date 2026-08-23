@@ -41,6 +41,7 @@ states all seven rules and how each is enforced.
 | --- | --- |
 | [Getting started](getting-started/installation.md) | Install it, run the whole workflow once, learn the five ideas. |
 | [Guides](guides/event-time.md) | "How do I do X?" — one task per page, with code that runs. |
+| [For agents](agents/overview.md) | Discover, choose, construct, recover — for a reader with a fetch tool and a task. |
 | [Concepts](concepts/data-model.md) | "Why does OpenForecast work this way?" |
 | [Integrations](integrations/nixtla.md) | What each provider distribution ships and how to install it. |
 | [Reference](reference/generated/index.md) | Exact signatures and types, generated from the code. |
@@ -50,6 +51,17 @@ CI, so a signature cannot drift from the library. The pages beside it are writte
 by hand and never retype one. Every Python example in these docs is executed by
 the test suite; the few that cannot be — because they need a provider
 environment installed — say so in the source of the page.
+
+## Reading this without a browser
+
+Every page here is also served as Markdown at the same address with `.md`
+appended — [`guides/fitting.md`](https://garsdal.github.io/openforecast/guides/fitting.md),
+say. [`/llms.txt`](https://garsdal.github.io/openforecast/llms.txt) is the map of
+the whole site, one line per page, and
+[`/llms-full.txt`](https://garsdal.github.io/openforecast/llms-full.txt) is the
+whole corpus in a single fetch. All three are generated from the navigation, so
+they cannot name a page that no longer exists. [For agents](agents/overview.md)
+is the short path through the rest.
 
 ## Versions
 

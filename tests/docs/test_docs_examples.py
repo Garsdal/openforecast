@@ -24,13 +24,20 @@ import pytest
 
 from tests.docs.blocks import REPO_ROOT, Block, blocks_in, pages_under
 
-PAGES = pages_under()
+#: The hand-written pages, plus the README: a Python example in the README is as
+#: public as one in a guide, and the same rule applies to it — it runs here, or it
+#: says in the source of the page why it cannot.
+PAGES = (*pages_under(), REPO_ROOT / "README.md")
 
 #: Pages that are entirely prose, or entirely about code that needs a provider
 #: environment. Listed rather than inferred, so that a page which *stops*
 #: executing anything has to be added here deliberately.
 NOTHING_TO_EXECUTE = {
     Path("docs/index.md"),
+    # The README's one example is the cross-provider, cross-lifecycle backtest,
+    # which needs three provider environments. The executable version of it is
+    # `examples/06_ensemble.py`, against the built-in model.
+    Path("README.md"),
     # Step 28: the executable examples are the scripts under `examples/`, run as
     # scripts by `tests/examples/test_examples.py`. This page is the index to
     # them, and copying one onto it is the duplication 28.4 is about.

@@ -24,6 +24,7 @@ openforecast = "openforecast.commands:main"
 generate-openapi = "openforecast.server.openapi:main"
 generate-reference = "openforecast.docs.reference:main"
 generate-schemas = "openforecast.docs.schemas:main"
+generate-llms = "openforecast.docs.llms:main"
 
 [project.urls]
 Homepage = "https://github.com/Garsdal/openforecast"
@@ -87,7 +88,7 @@ select = [
 ban-relative-imports = "all"
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "docs_hooks.py"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
 venvPath = "."
