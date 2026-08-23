@@ -32,6 +32,13 @@ theme:
         icon: material/weather-sunny
         name: Switch to light mode
 
+# Step 29: after the HTML, `llms-full.txt` and the Markdown source of every page,
+# so a reader with a fetch tool never has to parse a themed page. `docs/llms.txt`
+# is committed and copied out of `docs/` like any other static file. The work is
+# in `openforecast.docs.llms`, which the tests reach without mkdocs installed.
+hooks:
+  - docs_hooks.py
+
 markdown_extensions:
   - admonition
   - toc:
@@ -60,6 +67,12 @@ nav:
       - Probabilistic forecasts: guides/probabilistic.md
       - Pipelines and ensembles: guides/ensembles.md
       - The command line: guides/cli.md
+  - For agents:
+      - Overview: agents/overview.md
+      - Choosing a model: agents/choosing-a-model.md
+      - Point-in-time rules: agents/point-in-time.md
+      - The structured CLI: agents/structured-cli.md
+      - Recovering from errors: agents/errors.md
   - Concepts:
       - The data model: concepts/data-model.md
       - Point-in-time semantics: concepts/point-in-time.md

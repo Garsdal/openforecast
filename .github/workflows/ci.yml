@@ -77,6 +77,15 @@ jobs:
           uv run generate-schemas
           git diff --exit-code spec/schemas
 
+      # Step 29.2: `docs/llms.txt` is the site's map, generated from the mkdocs
+      # nav and the first sentence of each page. A page that is added, moved or
+      # retitled is a diff here, which is what keeps an index an agent fetches
+      # first from pointing at pages that no longer exist.
+      - name: Assert the committed llms.txt is the generated one
+        run: |
+          uv run generate-llms
+          git diff --exit-code docs/llms.txt
+
       - name: Assert no forecasting framework in the dependency tree
         run: |
           uv tree --no-dev > tree.txt
@@ -102,6 +111,18 @@ jobs:
 
       - name: Build the site
         run: uv run mkdocs build --strict
+
+      # Step 29.1 and 29.2, in the built site rather than in the sources: the
+      # `hooks:` entry in mkdocs.yml adds the single-fetch corpus and the
+      # Markdown source of every page. A hook that silently stopped running
+      # would leave a published `llms.txt` pointing at addresses that 404.
+      - name: Assert the site serves Markdown and the corpus
+        run: |
+          test -s site/llms.txt
+          test -s site/llms-full.txt
+          test -s site/guides/fitting.md
+          test -s site/agents/overview.md
+          test -s site/reference/generated/errors.md
 
   # The core install is `pydantic`, `pyarrow` and `platformdirs`, and the HTTP
   # projection does not change that: serving needs `openforecast[server]`, and
