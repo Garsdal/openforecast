@@ -1,0 +1,54 @@
+[project]
+name = "openforecast-sklearn"
+description = "scikit-learn estimators for OpenForecast, in their own environment"
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["version"]
+dependencies = [
+    # The integration depends on OpenForecast; OpenForecast never depends on it.
+    "openforecast",
+    "scikit-learn>=1.4",
+    # What a fitted estimator is handed. scikit-learn brings numpy anyway; it is
+    # declared because this distribution imports it directly rather than
+    # inheriting it by accident.
+    "numpy>=1.24",
+]
+
+[project.urls]
+Homepage = "https://github.com/Garsdal/openforecast"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+# One source of truth: the provider version an artifact records is the version
+# of the distribution that fitted it.
+path = "src/openforecast_sklearn/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openforecast_sklearn"]
+
+[tool.uv.sources]
+# A checkout builds against the OpenForecast beside it. A published install
+# resolves the published distribution instead.
+openforecast = { path = "../..", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.8",
+    # The conformance suite of the OpenForecast checkout is what an integration
+    # inherits, and it builds its golden datasets with pandas. This integration
+    # itself never imports pandas: a design matrix is a numpy array, so there is
+    # no DataFrame anywhere on the execution path.
+    "pandas>=2,<3",
+]
+
+# Lint and format are the repository's, not this distribution's: the root
+# `ruff check .` covers `integrations/`, and one style across the boundary is
+# the point. Nothing here overrides it.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"

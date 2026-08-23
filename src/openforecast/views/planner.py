@@ -432,6 +432,24 @@ def _tabular_view(source: Source, request: ViewRequest) -> TabularView:
     statics = list(source.static_features)
     features = tuple((*known, *statics))
 
+    if not features:
+        # Every other view has the target's own history to learn from; a
+        # supervised row does not, because it *is* one event time. So a tabular
+        # view with no feature columns is not a small view, it is an empty design
+        # matrix, and the row-alignment error it would fail with downstream says
+        # nothing about what is missing.
+        dropped = [feature.name for feature in source.features if feature.is_observed]
+        raise DataError(
+            "a supervised row is built from what was knowable at its origin, and this data "
+            "declares no known or static feature to put in one"
+            + (
+                f"; the observed features {dropped} have no value at an event time after "
+                f"the origin, so carry what they hold as a known feature instead"
+                if dropped
+                else ""
+            )
+        )
+
     x: dict[str, list[Any]] = {feature.name: [] for feature in features}
     y: dict[str, list[Any]] = {target: [] for target in source.targets}
     keys: dict[str, list[Any]] = {

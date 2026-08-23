@@ -218,9 +218,15 @@ class Reduction(RecipeNode):
     one row per instance, origin and horizon step, and the estimator never learns
     that some of those rows came from different vintages of the same event time.
 
-    The protocol is defined here; execution arrives in Step 14. A recipe that
+    The protocol is defined here; execution is still to come. A recipe that
     cannot be executed yet is still worth being able to write down and store,
     which is why constructing one is not an error.
+
+    What a reduction adds is the ``lags``: generating supervised features from an
+    ordinary event-time series. A ``ForecastDataset`` already carries the
+    features a supervised row needs — that is what a forecast vintage *is* — so a
+    tabular model is fitted on one directly, without a ``Reduction`` anywhere in
+    the recipe.
     """
 
     kind: Literal[RecipeKind.REDUCTION] = RecipeKind.REDUCTION

@@ -4,16 +4,17 @@
 
 The other end-to-end modules prove that a mechanism works. This one proves that
 the *experience* does: everything below goes through ``of.fit``, ``of.forecast``
-and ``of.models``, over models executed by three different forecasting libraries
-in three different interpreters, and nothing in it names a library.
+and ``of.models``, over models executed by four different libraries in four
+different interpreters, and nothing in it names a library.
 
 ```text
-discover              nixtla, darts and sktime models in one catalog
+discover              nixtla, darts, sklearn and sktime models in one catalog
 fit AutoARIMA         one vintage of a point-in-time dataset
 reload and forecast   through a second client, sharing only a directory
 fit NHiTS             across every historical origin
 fit darts/tide        the same dataset, the same plan, one string changed
 fit sktime            the reduction, whose horizon is not bound at fit
+fit sklearn           supervised rows, straight out of the vintages
 aliases               local/de-price follows the latest fit; @01K... does not
 terminology           nothing a provider calls its own reaches a public object
 ```
@@ -70,6 +71,7 @@ AUTOARIMA = "nixtla/autoarima"
 NHITS = "nixtla/nhits"
 TIDE = "darts/tide"
 POOLED_TREES = "sktime/pooled-trees"
+HIST_GRADIENT_BOOSTING = "sklearn/hist-gradient-boosting"
 
 #: The shape of the golden point-in-time datasets below, which is the shape the
 #: conformance suite uses: origin ``k`` sits at event step ``context - 1 + k``.
@@ -100,6 +102,7 @@ FAST: Mapping[str, Mapping[str, Any]] = {
         "temporal_decoder_hidden": 8,
     },
     POOLED_TREES: {"max_iter": 5},
+    HIST_GRADIENT_BOOSTING: {"max_iter": 5},
 }
 
 BuildClient = Callable[..., of.OpenForecast]
@@ -214,10 +217,16 @@ def build(
 
 def test_every_installed_model_is_discoverable_by_reference_alone(build: BuildClient) -> None:
     """``of.models`` over three libraries, and nothing in the answer names one."""
-    models = build("nixtla", "darts", "sktime").models
+    models = build("nixtla", "darts", "sklearn", "sktime").models
 
-    assert {str(ref) for ref in models.refs()} >= {AUTOARIMA, NHITS, TIDE, POOLED_TREES}
-    assert models.providers() == ("builtin", "darts", "nixtla", "sktime")
+    assert {str(ref) for ref in models.refs()} >= {
+        AUTOARIMA,
+        NHITS,
+        TIDE,
+        POOLED_TREES,
+        HIST_GRADIENT_BOOSTING,
+    }
+    assert models.providers() == ("builtin", "darts", "nixtla", "sklearn", "sktime")
     # A listing is for the references; the fields are what ``get`` is for.
     assert repr(models.get(NHITS)) == f"ModelDescriptor({NHITS})"
 
@@ -229,6 +238,7 @@ def test_every_installed_model_is_discoverable_by_reference_alone(build: BuildCl
         (NHITS, "nixtla", "sequences", True),
         (TIDE, "darts", "sequences", True),
         (POOLED_TREES, "sktime", "sequences", False),
+        (HIST_GRADIENT_BOOSTING, "sklearn", "tabular", False),
     ],
 )
 def test_a_descriptor_answers_what_a_model_needs_before_it_is_fitted(
@@ -300,6 +310,43 @@ def test_a_global_model_learns_from_every_historical_origin(
     assert forecast.event_times == tuple(
         datasets.at(LATEST_ORIGIN_STEP + step) for step in range(1, HORIZON + 1)
     )
+    assert all(value == value for value in values(forecast)), "the answer holds NaNs"
+
+
+def test_a_tabular_model_learns_one_row_per_origin_and_lead(build: BuildClient) -> None:
+    """The third view, executed by a library that is not a forecasting framework.
+
+    Same dataset, same two calls, one string changed — and no ``WindowPlan``,
+    because a supervised row is not a window. scikit-learn is handed a design
+    matrix and a label vector, and everything that made them a *forecasting*
+    problem happened in the ``ViewPlanner``: one row per instance, origin and
+    lead, carrying the values that existed at that origin.
+
+    The horizon is not bound at fit for a third reason again — one row is one
+    lead, and the lead is not a feature — so a longer forecast simply works.
+    """
+    data = windows()
+
+    handle = build("sklearn").fit(
+        HIST_GRADIENT_BOOSTING,
+        data,
+        horizon=HORIZON,
+        params=dict(FAST[HIST_GRADIENT_BOOSTING]),
+        name="de-price",
+    )
+    forecast = build("sklearn").forecast(
+        "local/de-price", data.at_origin(LATEST_ORIGIN), horizon=HORIZON
+    )
+
+    assert handle.training.view == "tabular"
+    assert handle.training.origin_fidelity == "observed"
+    # One row per instance, origin and lead, where a sequence model got one
+    # sample per instance and origin.
+    assert handle.training.samples == SAMPLES * HORIZON
+    assert handle.training.context is None
+    assert handle.serves_horizon(HORIZON + 2)
+    assert forecast.origin_time == LATEST_ORIGIN
+    assert forecast.num_rows == INSTANCES * HORIZON
     assert all(value == value for value in values(forecast)), "the answer holds NaNs"
 
 
@@ -442,11 +489,11 @@ def test_no_provider_spelling_escapes_into_a_public_object(build: BuildClient) -
     """Rule 6 against the real integrations, which is where the spellings live.
 
     ``tests/unit/test_architecture.py`` checks the shape of the public types.
-    This checks the values that actually travel: the descriptors three
+    This checks the values that actually travel: the descriptors four
     integrations advertise — including the parameter schemas they publish, which
     OpenForecast never looks inside — and the manifest a fit writes down.
     """
-    client = build("nixtla", "darts", "sktime")
+    client = build("nixtla", "darts", "sklearn", "sktime")
     handle = client.fit(
         POOLED_TREES,
         windows(),

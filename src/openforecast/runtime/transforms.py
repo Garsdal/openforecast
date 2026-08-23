@@ -312,15 +312,17 @@ def _unscale(value: Any, stats: ColumnStats | None) -> float | None:
 def _values_table(view: FitView) -> pa.Table:
     """The table a transform acts on, and the reason a tabular one cannot yet.
 
-    A ``TabularView``'s values are split across ``X`` and ``y``, which is a
-    different transformation to write and nothing executes one today — the
-    reduction models that consume tabular rows arrive in Step 14.
+    A ``TabularView``'s values are split across ``X`` and ``y``, and a transform
+    fitted on one has to be inverted on the other side of an estimator that was
+    handed a design matrix rather than a time axis. That is a different
+    transformation to write, and nothing executes one today: a tabular model is
+    fitted on the features the data already carries.
     """
     if isinstance(view, SeriesView | SequenceView):
         return view.temporal
     raise UnsupportedPlanError(
-        "transforms on a tabular view are not executable yet; the reduction models "
-        "that consume one arrive with their execution path"
+        "transforms on a tabular view are not executable yet; fit the tabular model on "
+        "the columns as they are, or scale them before they reach OpenForecast"
     )
 
 

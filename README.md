@@ -36,17 +36,23 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > Step 14: `sktime/theta` and `sktime/pooled-trees`, in `integrations/sktime` —
 > and the public V1 surface of Step 15, which is the one below and no longer
 > moves — the HTTP/OpenAPI projection of Step 16: `openforecast serve`,
-> `HttpTransport`, and a generated `spec/openapi/openapi.json` — and the
+> `HttpTransport`, and a generated `spec/openapi/openapi.json` — the
 > benchmarking and point-in-time evaluation of Step 17: `of.benchmark`,
-> `of.RollingOrigin`, `of.ForecastOriginValidation` and `of.eligible_models`.
+> `of.RollingOrigin`, `of.ForecastOriginValidation` and `of.eligible_models` —
+> and the native `TabularView` execution of Step 18:
+> `sklearn/hist-gradient-boosting`, in `integrations/sklearn`, which fits
+> `estimator.fit(X, y)` on the supervised rows OpenForecast materializes itself.
 > `of.fit` and `of.forecast` work end to end today with `builtin/seasonal-naive`,
-> both Nixtla models, all three Darts models and both sktime models, in this
-> process or over the subprocess protocol — the global ones trained on real
-> point-in-time vintages, one training sample per historical forecast origin.
-> Switching a point-in-time fit between `nixtla/nhits`, `darts/tide` and
-> `sktime/pooled-trees` changes the model reference and nothing else, which is
-> what `tests/e2e/test_v1_experience.py` runs against all three at once.
-> See [PLAN.md](PLAN.md) for the full 17-step roadmap.
+> both Nixtla models, all three Darts models, both sktime models and the
+> scikit-learn estimator, in this process or over the subprocess protocol — the
+> global ones trained on real point-in-time vintages, one training sample per
+> historical forecast origin, or one supervised row per origin and lead.
+> Switching a point-in-time fit between `nixtla/nhits`, `darts/tide`,
+> `sktime/pooled-trees` and `sklearn/hist-gradient-boosting` changes the model
+> reference and nothing else, which is what
+> `tests/e2e/test_v1_experience.py` runs against all four at once.
+> See [PLAN.md](PLAN.md) for the 17-step roadmap and
+> [PLAN_2.md](PLAN_2.md) for what comes after it.
 
 ## The event-time semantic model
 
@@ -156,7 +162,7 @@ named after the training unit it holds rather than after a model family:
 | -------------- | --------------------------------- | --------------------------- |
 | `SeriesView`   | one complete time series          | ARIMA, ETS, Theta           |
 | `SequenceView` | many context → horizon sequences  | NHiTS, TFT, PatchTST        |
-| `TabularView`  | individual supervised target rows | LightGBM, XGBoost, CatBoost |
+| `TabularView`  | individual supervised target rows | HistGradientBoosting, LightGBM, XGBoost |
 
 `ForecastView` is the inference counterpart of all three: one origin, one
 horizon.
@@ -204,6 +210,40 @@ view = planner.forecast_view(
 Its `future` table names exactly the event times being asked about, so a
 provider never derives them from a horizon count and a frequency.
 
+### Supervised rows
+
+A `TabularView` is the third training unit and the one that carries the most
+semantics, because it holds no time axis to recover them from. One row is one
+`instance × origin × lead`, in three row-aligned tables:
+
+```text
+X      the features knowable at the origin
+y      what that event time turned out to be
+keys   row_id, instance keys, origin_time, event_time, horizon_step
+```
+
+The keys are deliberately *not* in `X`. That is what stops an estimator from
+being handed a timestamp or a zone as a feature by accident — and it is what
+makes a fitted artifact able to forecast an instance it never saw.
+
+Two vintages of the same event time are two rows, and their shared outcome is
+repeated rather than reconciled:
+
+```text
+X                     y
+wind_fc  load_fc      price
+NaN      54           80     <- 08:00 forecasting 12:00, wind not published yet
+NaN      53           76     <- 08:00 forecasting 13:00
+11       55           80     <- 09:00 forecasting 12:00, now it is
+12       54           76     <- 09:00 forecasting 13:00
+```
+
+Four distinct forecasting examples, because their information vintages differ.
+Nothing is deduplicated on `target_time`, and nothing is filled in.
+`integrations/sklearn` is what consumes this: `estimator.fit(X, y)`, and
+`estimator.predict(X)` at inference, with the reduction — origin, lead, vintage,
+truth alignment — already done on OpenForecast's side of the boundary.
+
 ## Models
 
 A model is named by a string:
@@ -215,6 +255,7 @@ nixtla/nhits
 nixtla/autoarima
 darts/nhits
 sktime/pooled-trees
+sklearn/hist-gradient-boosting
 local/de-price
 local/de-price@01K5Z6QK3M9TQK1W2E3R4T5Y6U
 ```
@@ -285,8 +326,11 @@ That separation is what lets one recipe be fitted at a single origin and across
 every origin, or asked for a different horizon, without being rewritten.
 Recipes compose: `of.Ensemble` and `of.Pipeline` hold recipes rather than
 models, so an ensemble of pipelines needs no new vocabulary, and
-`of.Reduction(estimator="lightgbm/regressor", strategy="direct", lags=[1, 24, 168])`
-expresses the tabular reduction that point-in-time LightGBM setups use.
+`of.Reduction(estimator="sklearn/hist-gradient-boosting", strategy="direct", lags=[1, 24, 168])`
+expresses generating a tabular problem out of an ordinary event-time series.
+A `ForecastDataset` needs none of that: it already carries the features a
+supervised row is built from, so `of.fit("sklearn/hist-gradient-boosting",
+data=dataset, horizon=72)` is the whole request.
 
 **OpenForecast owns what it can own.** A context length is stated once, as
 `WindowPlan(context=168)`, and compiled into `input_size` for Nixtla,
@@ -497,7 +541,8 @@ number from the one the model would have produced.
 ## Providers in their own environments
 
 Nixtla wants one version of `torch`, Darts wants another, sktime wants
-scikit-learn and statsmodels, and OpenForecast wants none of it. So an integration is not installed into the OpenForecast
+scikit-learn and statsmodels, the scikit-learn integration wants only
+scikit-learn, and OpenForecast wants none of it. So an integration is not installed into the OpenForecast
 environment at all: it gets its own, built with `uv`, and it is reached over a
 subprocess protocol.
 
@@ -736,8 +781,8 @@ would have failed with.
 Two things follow from this, and they shape the whole repository:
 
 **The core never depends on a forecasting framework.** No Nixtla, Darts,
-sktime, PyTorch, JAX or LightGBM — the core install is `pydantic`, `pyarrow`
-and `platformdirs`. Integrations depend on OpenForecast, never the reverse, and
+sktime, scikit-learn, PyTorch, JAX or LightGBM — the core install is `pydantic`,
+`pyarrow` and `platformdirs`. Integrations depend on OpenForecast, never the reverse, and
 each lives in its own distribution under `integrations/` with its own lockfile
 and virtual environment, so providers with incompatible dependency graphs
 (Torch vs. JAX, say) can coexist without ever meeting.
@@ -784,15 +829,18 @@ Declaring `view=sequences` therefore buys tests against an event-time frame and
 against real forecast vintages, with the provider asserted to have received a
 `SequenceView` in both — which is the view boundary, checked rather than assumed.
 The built-in reference provider passes every capability it declares, and so do
-all three integrations — `integrations/nixtla`, `integrations/darts` and
-`integrations/sktime` run this suite against their own descriptors, so
-`nixtla/autoarima` is fitted from an event-time frame and from real vintages at a
-selected origin, and `nixtla/nhits`, `darts/tide` and `sktime/pooled-trees` from
-an event-time frame and from every vintage at once, without any of it being
-written down. That the second one costs nothing to hold to the first one's
-contract is what Step 13 was for; that the third one does too, from a library
-whose panel and pooling semantics are explicit and whose horizon is not bound at
-fit, is what Step 14 was for.
+all four integrations — `integrations/nixtla`, `integrations/darts`,
+`integrations/sktime` and `integrations/sklearn` run this suite against their own
+descriptors, so `nixtla/autoarima` is fitted from an event-time frame and from
+real vintages at a selected origin, and `nixtla/nhits`, `darts/tide`,
+`sktime/pooled-trees` and `sklearn/hist-gradient-boosting` from an event-time
+frame and from every vintage at once, without any of it being written down. That
+the second one costs nothing to hold to the first one's contract is what Step 13
+was for; that the third one does too, from a library whose panel and pooling
+semantics are explicit and whose horizon is not bound at fit, is what Step 14 was
+for; and that the fourth one does too, from a library that is not a forecasting
+framework at all and consumes the third view, is what Step 18 was for — with no
+case in the suite written for it.
 
 `cases_for` takes optional parameters, which reach every generated fit and may
 only name parameters the descriptor already advertises. It is for models whose
@@ -801,17 +849,18 @@ steps say nothing about whether it consumes a panel.
 
 Each integration runs that suite beside its own library.
 `tests/e2e/test_v1_experience.py` is the opposite arrangement and the only place
-the three meet: an OpenForecast install that has never heard of any of them,
-reaching all three over the subprocess protocol, the way a user's does. It
+the four meet: an OpenForecast install that has never heard of any of them,
+reaching all four over the subprocess protocol, the way a user's does. It
 discovers their models in one catalog, fits `nixtla/autoarima` at one vintage,
 fits `nixtla/nhits`, `darts/tide` and `sktime/pooled-trees` across every
-historical origin of the same dataset with the same plan, ensembles a Nixtla
-model with a Darts one, and checks that nothing any of them calls its own
-reaches a descriptor, a manifest or a forecast. It needs the environments
-installed, so it skips without them:
+historical origin of the same dataset with the same plan, fits
+`sklearn/hist-gradient-boosting` on one supervised row per origin and lead of it,
+ensembles a Nixtla model with a Darts one, and checks that nothing any of them
+calls its own reaches a descriptor, a manifest or a forecast. It needs the
+environments installed, so it skips without them:
 
 ```bash
-openforecast providers install nixtla    # and darts, and sktime
+openforecast providers install nixtla    # and darts, and sktime, and sklearn
 uv run pytest tests/e2e/test_v1_experience.py
 ```
 

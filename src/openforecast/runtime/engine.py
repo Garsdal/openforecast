@@ -413,9 +413,11 @@ def leaves(recipe: Recipe, transforms: Sequence[Transform] = ()) -> tuple[Leaf, 
     if isinstance(recipe, Ensemble):
         return tuple(leaf for member in recipe.models for leaf in leaves(member, transforms))
     raise UnsupportedPlanError(
-        "of.Reduction is part of the recipe protocol but is not executable yet; a "
-        "reduction materializes a TabularView, and the estimators that consume one "
-        "arrive with their integration"
+        "of.Reduction is part of the recipe protocol but is not executable yet. What it "
+        "adds is generating lagged features from an ordinary event-time series; a "
+        "ForecastDataset already carries the features a supervised row needs, so a tabular "
+        "model is fitted on one directly: of.fit('sklearn/hist-gradient-boosting', "
+        "data=dataset, horizon=...)"
     )
 
 
