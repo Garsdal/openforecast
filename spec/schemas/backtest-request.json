@@ -1,0 +1,1117 @@
+{
+  "$defs": {
+    "Accelerator": {
+      "enum": [
+        "auto",
+        "cpu",
+        "gpu"
+      ],
+      "title": "Accelerator",
+      "type": "string"
+    },
+    "AllOrigins": {
+      "additionalProperties": false,
+      "description": "Every origin the data holds, optionally thinned by ``stride``.\n\nA stride of 12 on hourly vintages trains on two origins a day. It thins the\nsamples rather than the horizon each sample covers, so the sequences stay\nexactly as long \u2014 this is a way to spend less compute on highly overlapping\norigins, not a way to change what a sample means.",
+      "properties": {
+        "mode": {
+          "const": "all",
+          "default": "all",
+          "title": "Mode",
+          "type": "string"
+        },
+        "stride": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Stride",
+          "type": "integer"
+        }
+      },
+      "title": "AllOrigins",
+      "type": "object"
+    },
+    "AtOrigin": {
+      "additionalProperties": false,
+      "description": "Exactly one named origin.\n\nMatched exactly rather than approximately. Answering for 10:00 when 11:00\nwas asked for would train the model on a vintage the caller never named.",
+      "properties": {
+        "mode": {
+          "const": "at",
+          "default": "at",
+          "title": "Mode",
+          "type": "string"
+        },
+        "origin": {
+          "format": "date-time",
+          "title": "Origin",
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin"
+      ],
+      "title": "AtOrigin",
+      "type": "object"
+    },
+    "Bias": {
+      "additionalProperties": false,
+      "description": "Mean signed error: positive means the model forecast too high.\n\nNot an accuracy metric and not ranked as one. Zero is the best value a bias\ncan have, so :meth:`rank` compares magnitudes \u2014 a model biased by -3 and one\nbiased by +3 are equally biased, and a leaderboard that put one above the\nother would be reporting the sign as a virtue.",
+      "properties": {
+        "metric": {
+          "const": "bias",
+          "default": "bias",
+          "title": "Metric",
+          "type": "string"
+        }
+      },
+      "title": "Bias",
+      "type": "object"
+    },
+    "Candidate": {
+      "additionalProperties": false,
+      "description": "One entry of a backtest, when the model reference alone is not enough.\n\n```python\nof.Candidate(\"nixtla/nhits\", plan=of.FitPlan(window=of.WindowPlan(context=336)))\nof.Candidate(recipe, name=\"scaled-ensemble\")\n```\n\nOnly ever needed for the two things a bare reference cannot say: the plan\nthis model in particular should be fitted with, and what to call it in the\nresult. Parameters belong on the ``of.Model`` inside, where every other part\nof OpenForecast reads them from.",
+      "properties": {
+        "model": {
+          "discriminator": {
+            "mapping": {
+              "ensemble": "#/$defs/Ensemble",
+              "model": "#/$defs/Model",
+              "pipeline": "#/$defs/Pipeline",
+              "reduction": "#/$defs/Reduction"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Model"
+            },
+            {
+              "$ref": "#/$defs/Pipeline"
+            },
+            {
+              "$ref": "#/$defs/Ensemble"
+            },
+            {
+              "$ref": "#/$defs/Reduction"
+            }
+          ],
+          "title": "Model"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FitPlan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "Candidate",
+      "type": "object"
+    },
+    "ColumnSet": {
+      "description": "A role, rather than a list of names.\n\n``columns=\"targets\"`` keeps a recipe portable across datasets: the same\npipeline can be fitted on German prices and on Danish load without being\nrewritten, because the role is resolved against whatever schema it meets.",
+      "enum": [
+        "targets",
+        "features"
+      ],
+      "title": "ColumnSet",
+      "type": "string"
+    },
+    "Coverage": {
+      "additionalProperties": false,
+      "description": "How often the outcome fell inside the interval, as a fraction.\n\n```python\nof.Coverage()        # of the 0.1 to 0.9 interval\nof.Coverage(0.5)     # of the 0.25 to 0.75 interval\n```\n\nThe calibration question, and the one a point metric cannot ask: an 80%\ninterval that contains the outcome 55% of the time is overconfident, and one\nthat contains it 99% of the time is useless in the other direction. So the\nbest value is the nominal level rather than the highest, and :meth:`rank`\ncompares the distance to it \u2014 a leaderboard that ranked coverage upwards\nwould be ranking width.",
+      "properties": {
+        "level": {
+          "default": 0.8,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Level",
+          "type": "number"
+        },
+        "metric": {
+          "const": "coverage",
+          "default": "coverage",
+          "title": "Metric",
+          "type": "string"
+        }
+      },
+      "title": "Coverage",
+      "type": "object"
+    },
+    "Ensemble": {
+      "additionalProperties": false,
+      "description": "Several recipes, averaged into one forecast.\n\n```python\nof.Ensemble(models=[of.Model(\"nixtla/nhits\"), of.Model(\"sklearn/hist-gradient-boosting\")])\n\nof.Ensemble(models=[...], weights=[0.7, 0.3])\n```\n\nMembers are recipes rather than models, so an ensemble of pipelines \u2014 or of\nensembles \u2014 needs no extra vocabulary. Whether a given combination can\nactually be fitted on the data at hand is a question about the members'\ntraining contracts, and the engine answers it before the first of them is\ntrained; a member's contract is not knowable here, where nothing has been\nresolved yet.\n\nCombination is a weighted mean and nothing else. ``weights`` left out is an\nequal average, which is what an ensemble means when nobody said otherwise;\ngiven, the weights are relative and normalized by their sum, so ``[7, 3]``\nmeans the same thing as ``[0.7, 0.3]``. Every weight must be positive \u2014 a\nzero-weighted member is fitted and then ignored, which is better said by\nleaving it out. Weights are fixed rather than learned: a weight fitted on\ndata is a second model, and stacking is not what this node is.",
+      "properties": {
+        "kind": {
+          "const": "ensemble",
+          "default": "ensemble",
+          "title": "Kind",
+          "type": "string"
+        },
+        "models": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "ensemble": "#/$defs/Ensemble",
+                "model": "#/$defs/Model",
+                "pipeline": "#/$defs/Pipeline",
+                "reduction": "#/$defs/Reduction"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/Model"
+              },
+              {
+                "$ref": "#/$defs/Pipeline"
+              },
+              {
+                "$ref": "#/$defs/Ensemble"
+              },
+              {
+                "$ref": "#/$defs/Reduction"
+              }
+            ]
+          },
+          "title": "Models",
+          "type": "array"
+        },
+        "weights": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Weights"
+        }
+      },
+      "required": [
+        "models"
+      ],
+      "title": "Ensemble",
+      "type": "object"
+    },
+    "FitPlan": {
+      "additionalProperties": false,
+      "description": "How to fit: which origins, how much context, how reproducibly, on what.\n\nNot *what* to fit \u2014 that is the recipe \u2014 and not *what to predict*, which is\nthe forecast task. Keeping the three apart is what lets the same recipe be\nfitted at one origin and at every origin without being rewritten.",
+      "properties": {
+        "origins": {
+          "default": {
+            "mode": "all",
+            "stride": 1
+          },
+          "discriminator": {
+            "mapping": {
+              "all": "#/$defs/AllOrigins",
+              "at": "#/$defs/AtOrigin",
+              "between": "#/$defs/OriginsBetween",
+              "latest": "#/$defs/LatestOrigin"
+            },
+            "propertyName": "mode"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AllOrigins"
+            },
+            {
+              "$ref": "#/$defs/LatestOrigin"
+            },
+            {
+              "$ref": "#/$defs/AtOrigin"
+            },
+            {
+              "$ref": "#/$defs/OriginsBetween"
+            }
+          ],
+          "title": "Origins"
+        },
+        "resources": {
+          "$ref": "#/$defs/Resources",
+          "default": {
+            "accelerator": "auto",
+            "devices": null
+          }
+        },
+        "search": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SearchPlan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        },
+        "window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WindowPlan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "FitPlan",
+      "type": "object"
+    },
+    "ForecastOriginValidation": {
+      "additionalProperties": false,
+      "description": "The origins a point-in-time dataset actually holds, as evaluation origins.\n\nThis is the strategy the semantic model exists for. At each selected vintage\nthe model is fitted on\n:meth:`~openforecast.data.forecast_dataset.ForecastDataset.up_to` that\norigin, forecast from\n:meth:`~openforecast.data.forecast_dataset.ForecastDataset.at_origin` it, and\nscored against the truth frame \u2014 so what it is given is what was on the wire\nthat day, revisions included, and the artifact records\n``origin_fidelity: observed`` to say so.\n\nOnly a ``ForecastDataset``: an event-time frame has no vintages to select,\nand :class:`RollingOrigin` is how its origins are simulated instead.",
+      "properties": {
+        "horizon": {
+          "minimum": 1,
+          "title": "Horizon",
+          "type": "integer"
+        },
+        "mode": {
+          "const": "origins",
+          "default": "origins",
+          "title": "Mode",
+          "type": "string"
+        },
+        "origins": {
+          "default": {
+            "mode": "all",
+            "stride": 1
+          },
+          "discriminator": {
+            "mapping": {
+              "all": "#/$defs/AllOrigins",
+              "at": "#/$defs/AtOrigin",
+              "between": "#/$defs/OriginsBetween",
+              "latest": "#/$defs/LatestOrigin"
+            },
+            "propertyName": "mode"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AllOrigins"
+            },
+            {
+              "$ref": "#/$defs/LatestOrigin"
+            },
+            {
+              "$ref": "#/$defs/AtOrigin"
+            },
+            {
+              "$ref": "#/$defs/OriginsBetween"
+            }
+          ],
+          "title": "Origins"
+        }
+      },
+      "required": [
+        "horizon"
+      ],
+      "title": "ForecastOriginValidation",
+      "type": "object"
+    },
+    "FrequencyUnit": {
+      "enum": [
+        "second",
+        "minute",
+        "hour",
+        "day",
+        "week",
+        "month"
+      ],
+      "title": "FrequencyUnit",
+      "type": "string"
+    },
+    "Impute": {
+      "additionalProperties": false,
+      "description": "Fill missing values with a stated statistic.\n\n``method`` has no default on purpose. Which fill is right depends on what\nthe column means, and a default would be OpenForecast quietly choosing for\nevery dataset that forgot to say.\n\nThe statistic is computed on the fitted data and recorded in the artifact,\nso inference fills the same way training did rather than leaking the context\nit happens to be given.",
+      "properties": {
+        "columns": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ColumnSet"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ],
+          "title": "Columns"
+        },
+        "kind": {
+          "const": "impute",
+          "default": "impute",
+          "title": "Kind",
+          "type": "string"
+        },
+        "method": {
+          "$ref": "#/$defs/ImputeMethod"
+        }
+      },
+      "required": [
+        "columns",
+        "method"
+      ],
+      "title": "Impute",
+      "type": "object"
+    },
+    "ImputeMethod": {
+      "enum": [
+        "mean",
+        "median",
+        "zero"
+      ],
+      "title": "ImputeMethod",
+      "type": "string"
+    },
+    "IntervalWidth": {
+      "additionalProperties": false,
+      "description": "How wide the interval was, in the units of the target.\n\n```python\nof.IntervalWidth()   # mean width of the 0.1 to 0.9 interval\n```\n\nSharpness, and only half a question on its own: the narrowest interval any\nmodel can produce is a degenerate one, which scores perfectly here and fails\na :class:`Coverage` completely. Ranked lower-is-better anyway, because that\nis what it means among models whose coverage is comparable \u2014 reading it\nwithout one beside it is the mistake, and no ranking rule prevents that.",
+      "properties": {
+        "level": {
+          "default": 0.8,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Level",
+          "type": "number"
+        },
+        "metric": {
+          "const": "interval_width",
+          "default": "interval_width",
+          "title": "Metric",
+          "type": "string"
+        }
+      },
+      "title": "IntervalWidth",
+      "type": "object"
+    },
+    "LatestOrigin": {
+      "additionalProperties": false,
+      "description": "Only the freshest origin \u2014 the one production inference would run at.",
+      "properties": {
+        "mode": {
+          "const": "latest",
+          "default": "latest",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "title": "LatestOrigin",
+      "type": "object"
+    },
+    "LeadTimeFeature": {
+      "additionalProperties": false,
+      "description": "``event_time - origin_time``, as a feature the model can condition on.\n\nGenuinely useful on point-in-time data: a wind forecast issued six hours\nahead is not the same quality of information as one issued sixty, and a\nmodel given the lead time can learn that. Derived rather than stored, which\nis why asking for it is a recipe step instead of a column in the source data.",
+      "properties": {
+        "kind": {
+          "const": "lead_time_feature",
+          "default": "lead_time_feature",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "default": "lead_time",
+          "title": "Name",
+          "type": "string"
+        },
+        "unit": {
+          "$ref": "#/$defs/FrequencyUnit",
+          "default": "hour"
+        }
+      },
+      "title": "LeadTimeFeature",
+      "type": "object"
+    },
+    "MAE": {
+      "additionalProperties": false,
+      "description": "Mean absolute error. The default choice, and the hardest to misread.",
+      "properties": {
+        "metric": {
+          "const": "mae",
+          "default": "mae",
+          "title": "Metric",
+          "type": "string"
+        }
+      },
+      "title": "MAE",
+      "type": "object"
+    },
+    "MAPE": {
+      "additionalProperties": false,
+      "description": "Mean absolute percentage error, in percent.\n\nRefused rather than approximated where an outcome is zero: the percentage\nerror of a zero outcome is not a large number, it is not a number. Skipping\nthose rows would silently score a different subset of the horizon for one\nmodel than for another, which is exactly the comparison a backtest exists to\nmake sound.",
+      "properties": {
+        "metric": {
+          "const": "mape",
+          "default": "mape",
+          "title": "Metric",
+          "type": "string"
+        }
+      },
+      "title": "MAPE",
+      "type": "object"
+    },
+    "MissingIndicator": {
+      "additionalProperties": false,
+      "description": "Add a boolean column recording where a value was missing.\n\nPut it *before* an imputation, never after: an indicator computed on imputed\ndata is constant, and the fact that a feature was not published at an origin\nis exactly what would have been lost.",
+      "properties": {
+        "columns": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ColumnSet"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ],
+          "title": "Columns"
+        },
+        "kind": {
+          "const": "missing_indicator",
+          "default": "missing_indicator",
+          "title": "Kind",
+          "type": "string"
+        },
+        "suffix": {
+          "default": "_is_missing",
+          "title": "Suffix",
+          "type": "string"
+        }
+      },
+      "required": [
+        "columns"
+      ],
+      "title": "MissingIndicator",
+      "type": "object"
+    },
+    "Model": {
+      "additionalProperties": false,
+      "description": "One model, by reference, with the parameters only its provider understands.\n\n```python\nof.Model(\"nixtla/nhits\", params={\"max_steps\": 500})\n```\n\n``params`` is opaque to OpenForecast and reaches the provider unchanged \u2014\nwhich is exactly why it may not carry anything OpenForecast owns. A context\nlength passed as ``input_size`` would be a second copy of\n``WindowPlan(context=...)``, invisible to the planner that has to materialize\nthe samples, so it is rejected with the field to use instead.",
+      "properties": {
+        "kind": {
+          "const": "model",
+          "default": "model",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": true,
+          "default": {},
+          "title": "Params",
+          "type": "object"
+        },
+        "ref": {
+          "$ref": "#/$defs/ModelRef"
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "title": "Model",
+      "type": "object"
+    },
+    "ModelRef": {
+      "additionalProperties": false,
+      "description": "A parsed model reference.\n\nFrozen and hashable, so it can key a catalog: two references that print the\nsame are the same reference.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "namespace": {
+          "title": "Namespace",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        }
+      },
+      "required": [
+        "namespace",
+        "name"
+      ],
+      "title": "ModelRef",
+      "type": "object"
+    },
+    "OriginCalendarFeatures": {
+      "additionalProperties": false,
+      "description": "Calendar features of the *origin*, not of the event time.\n\nThe distinction matters on real vintages: a forecast issued at 06:00 for\ntomorrow noon is built from a different information set than one issued at\n18:00 for the same noon, and when a model is learning across origins that is\na systematic effect rather than noise.",
+      "properties": {
+        "hour": {
+          "default": false,
+          "title": "Hour",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "origin_calendar_features",
+          "default": "origin_calendar_features",
+          "title": "Kind",
+          "type": "string"
+        },
+        "month": {
+          "default": false,
+          "title": "Month",
+          "type": "boolean"
+        },
+        "prefix": {
+          "default": "origin",
+          "title": "Prefix",
+          "type": "string"
+        },
+        "weekday": {
+          "default": false,
+          "title": "Weekday",
+          "type": "boolean"
+        }
+      },
+      "title": "OriginCalendarFeatures",
+      "type": "object"
+    },
+    "OriginsBetween": {
+      "additionalProperties": false,
+      "description": "Every origin in a closed interval, optionally thinned by ``stride``.\n\nThe bounds are inclusive, and an interval the data does not cover is an\nerror rather than an empty fit: it almost always means the caller is\nreasoning about a different dataset than the one they passed.",
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "mode": {
+          "const": "between",
+          "default": "between",
+          "title": "Mode",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "stride": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Stride",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "OriginsBetween",
+      "type": "object"
+    },
+    "OutputKind": {
+      "enum": [
+        "point",
+        "quantiles",
+        "samples"
+      ],
+      "title": "OutputKind",
+      "type": "string"
+    },
+    "OutputSpec": {
+      "additionalProperties": false,
+      "description": "What kind of forecast to produce.\n\nThe fields are ``levels`` and ``draws`` rather than ``quantiles`` and\n``samples`` because the constructors own those two names \u2014 and the\nconstructors are the interface:\n\n```python\nof.OutputSpec.quantiles([0.1, 0.5, 0.9])   # spec.levels\nof.OutputSpec.samples(100)                 # spec.draws\n```",
+      "properties": {
+        "draws": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Draws"
+        },
+        "kind": {
+          "$ref": "#/$defs/OutputKind",
+          "default": "point"
+        },
+        "levels": {
+          "default": [],
+          "items": {
+            "type": "number"
+          },
+          "title": "Levels",
+          "type": "array"
+        }
+      },
+      "title": "OutputSpec",
+      "type": "object"
+    },
+    "PinballLoss": {
+      "additionalProperties": false,
+      "description": "The loss a quantile forecast is the optimal answer to.\n\n```python\nof.PinballLoss(0.9)\n```\n\n```text\noutcome above the forecast    (outcome - forecast) * level\noutcome below the forecast    (forecast - outcome) * (1 - level)\n```\n\nAsymmetric on purpose, and that asymmetry is the whole content of the metric:\na 0.9 quantile is meant to be exceeded one time in ten, so being under the\noutcome is charged nine times what being over it is. Minimized in expectation\nby exactly the quantile it names, which is what makes it the metric that says\nwhether a *quantile* was any good rather than whether a number was close.\n\nOne level per metric, because one loss is one level. Scoring three levels is\nthree metrics, and their sum is not a thing this returns: which levels to\nweight and how is a decision about the result, and\n:attr:`~openforecast.evaluation.result.BacktestResult.metrics` holds them all\nseparately so it can be made there.",
+      "properties": {
+        "level": {
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Level",
+          "type": "number"
+        },
+        "metric": {
+          "const": "pinball",
+          "default": "pinball",
+          "title": "Metric",
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "title": "PinballLoss",
+      "type": "object"
+    },
+    "Pipeline": {
+      "additionalProperties": false,
+      "description": "Transforms, then exactly one estimator, in order.\n\n```python\nof.Pipeline(steps=[\n    of.MissingIndicator(columns=\"features\"),\n    of.Impute(columns=\"features\", method=\"median\"),\n    of.Model(\"nixtla/nhits\"),\n])\n```\n\nThe estimator has to come last, and there has to be exactly one: a pipeline\nis a recipe for a forecast, and steps after the thing that forecasts have\nnothing to act on. Transform order is otherwise the caller's, with one\nexception \u2014 an imputation before a missing indicator over the same columns\nwould make the indicator constant, silently discarding the very fact it was\nadded to record.\n\nPipelines do not nest. Flattening one would change nothing about what it\nmeans, so a nested one is a recipe written two ways.",
+      "properties": {
+        "kind": {
+          "const": "pipeline",
+          "default": "pipeline",
+          "title": "Kind",
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "ensemble": "#/$defs/Ensemble",
+                "impute": "#/$defs/Impute",
+                "lead_time_feature": "#/$defs/LeadTimeFeature",
+                "missing_indicator": "#/$defs/MissingIndicator",
+                "model": "#/$defs/Model",
+                "origin_calendar_features": "#/$defs/OriginCalendarFeatures",
+                "reduction": "#/$defs/Reduction",
+                "standard_scaler": "#/$defs/StandardScaler"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/StandardScaler"
+              },
+              {
+                "$ref": "#/$defs/MissingIndicator"
+              },
+              {
+                "$ref": "#/$defs/Impute"
+              },
+              {
+                "$ref": "#/$defs/LeadTimeFeature"
+              },
+              {
+                "$ref": "#/$defs/OriginCalendarFeatures"
+              },
+              {
+                "$ref": "#/$defs/Model"
+              },
+              {
+                "$ref": "#/$defs/Ensemble"
+              },
+              {
+                "$ref": "#/$defs/Reduction"
+              }
+            ]
+          },
+          "title": "Steps",
+          "type": "array"
+        }
+      },
+      "required": [
+        "steps"
+      ],
+      "title": "Pipeline",
+      "type": "object"
+    },
+    "RMSE": {
+      "additionalProperties": false,
+      "description": "Root mean squared error \u2014 the same units as the target, weighted to the tails.",
+      "properties": {
+        "metric": {
+          "const": "rmse",
+          "default": "rmse",
+          "title": "Metric",
+          "type": "string"
+        }
+      },
+      "title": "RMSE",
+      "type": "object"
+    },
+    "Reduction": {
+      "additionalProperties": false,
+      "description": "Forecasting reduced to tabular regression.\n\n```python\nof.Reduction(estimator=\"lightgbm/regressor\", strategy=\"direct\", lags=[1, 24, 168])\n```\n\nThis is the recipe behind the point-in-time LightGBM setups that motivated\nthe whole design: the ``ViewPlanner`` materializes a ``TabularView`` holding\none row per instance, origin and horizon step, and the estimator never learns\nthat some of those rows came from different vintages of the same event time.\n\nThe protocol is defined here; execution is still to come. A recipe that\ncannot be executed yet is still worth being able to write down and store,\nwhich is why constructing one is not an error.\n\nWhat a reduction adds is the ``lags``: generating supervised features from an\nordinary event-time series. A ``ForecastDataset`` already carries the\nfeatures a supervised row needs \u2014 that is what a forecast vintage *is* \u2014 so a\ntabular model is fitted on one directly, without a ``Reduction`` anywhere in\nthe recipe.",
+      "properties": {
+        "estimator": {
+          "$ref": "#/$defs/ModelRef"
+        },
+        "kind": {
+          "const": "reduction",
+          "default": "reduction",
+          "title": "Kind",
+          "type": "string"
+        },
+        "lags": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Lags",
+          "type": "array"
+        },
+        "strategy": {
+          "$ref": "#/$defs/ReductionStrategy"
+        }
+      },
+      "required": [
+        "estimator",
+        "strategy",
+        "lags"
+      ],
+      "title": "Reduction",
+      "type": "object"
+    },
+    "ReductionStrategy": {
+      "description": "How a horizon is turned into supervised regression problems.",
+      "enum": [
+        "recursive",
+        "direct",
+        "multioutput"
+      ],
+      "title": "ReductionStrategy",
+      "type": "string"
+    },
+    "Resources": {
+      "additionalProperties": false,
+      "description": "What hardware a fit may use.\n\nDeliberately thin. A provider knows how to talk to its own accelerators; the\npoint of naming them here is that the *request* is OpenForecast's, so two\nproviders do not need two different spellings of \"use the GPU\".",
+      "properties": {
+        "accelerator": {
+          "$ref": "#/$defs/Accelerator",
+          "default": "auto"
+        },
+        "devices": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Devices"
+        }
+      },
+      "title": "Resources",
+      "type": "object"
+    },
+    "RollingOrigin": {
+      "additionalProperties": false,
+      "description": "``windows`` origins stepping back from the end of an event-time history.\n\nThe last fold's forecast window ends at the last event time the data holds,\nand each earlier fold steps back by ``stride`` \u2014 the horizon by default,\nwhich makes the windows consecutive and non-overlapping. A shorter stride\nevaluates more often over the same history and is honest about the folds\nthen sharing outcomes.\n\nOnly a ``TimeSeriesFrame``. Point-in-time data has origins of its own and\n:class:`ForecastOriginValidation` is how they are used; choosing one vintage\nper rolling origin here would be this module inventing the very thing the\ndata already records.",
+      "properties": {
+        "horizon": {
+          "minimum": 1,
+          "title": "Horizon",
+          "type": "integer"
+        },
+        "mode": {
+          "const": "rolling",
+          "default": "rolling",
+          "title": "Mode",
+          "type": "string"
+        },
+        "stride": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stride"
+        },
+        "windows": {
+          "minimum": 1,
+          "title": "Windows",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "horizon",
+        "windows"
+      ],
+      "title": "RollingOrigin",
+      "type": "object"
+    },
+    "SearchPlan": {
+      "additionalProperties": false,
+      "description": "Hyperparameter search \u2014 reserved, not yet executable.\n\nThe shape is fixed now so that the plan that reaches a provider does not\nhave to change when search lands. Attaching one to a ``FitPlan`` raises\n:class:`~openforecast.errors.UnsupportedPlanError` today, because the\nalternative \u2014 accepting it and fitting once with the first candidate \u2014 would\nlook exactly like a search that ran.",
+      "properties": {
+        "space": {
+          "additionalProperties": {
+            "items": {},
+            "type": "array"
+          },
+          "title": "Space",
+          "type": "object"
+        },
+        "strategy": {
+          "$ref": "#/$defs/SearchStrategy"
+        },
+        "trials": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trials"
+        }
+      },
+      "required": [
+        "strategy",
+        "space"
+      ],
+      "title": "SearchPlan",
+      "type": "object"
+    },
+    "SearchStrategy": {
+      "enum": [
+        "grid",
+        "random"
+      ],
+      "title": "SearchStrategy",
+      "type": "string"
+    },
+    "StandardScaler": {
+      "additionalProperties": false,
+      "description": "Center and scale columns, undoing it on the way back out.\n\n``per_instance`` scales every series by its own history, which is what makes\na panel of a 40 GW zone and a 2 GW zone learnable by one global model. Turn\nit off when the levels are comparable and the differences between them are\nthe signal.",
+      "properties": {
+        "columns": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ColumnSet"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ],
+          "title": "Columns"
+        },
+        "kind": {
+          "const": "standard_scaler",
+          "default": "standard_scaler",
+          "title": "Kind",
+          "type": "string"
+        },
+        "per_instance": {
+          "default": true,
+          "title": "Per Instance",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "columns"
+      ],
+      "title": "StandardScaler",
+      "type": "object"
+    },
+    "WindowPlan": {
+      "additionalProperties": false,
+      "description": "How much history one training sample conditions on.\n\nSteps of the data's frequency, not a duration: 168 on hourly data is a week,\nand the same number on daily data is half a year. The frequency lives on the\ndata, so saying it again here would let the two disagree.",
+      "properties": {
+        "context": {
+          "minimum": 1,
+          "title": "Context",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "context"
+      ],
+      "title": "WindowPlan",
+      "type": "object"
+    }
+  },
+  "$id": "backtest-request.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The arguments of `of.backtest`: the models to compare, the validation strategy that selects the origins, and the metrics to score.",
+  "properties": {
+    "data": {
+      "format": "path",
+      "title": "Data",
+      "type": "string"
+    },
+    "metrics": {
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "bias": "#/$defs/Bias",
+            "coverage": "#/$defs/Coverage",
+            "interval_width": "#/$defs/IntervalWidth",
+            "mae": "#/$defs/MAE",
+            "mape": "#/$defs/MAPE",
+            "pinball": "#/$defs/PinballLoss",
+            "rmse": "#/$defs/RMSE"
+          },
+          "propertyName": "metric"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/MAE"
+          },
+          {
+            "$ref": "#/$defs/RMSE"
+          },
+          {
+            "$ref": "#/$defs/MAPE"
+          },
+          {
+            "$ref": "#/$defs/Bias"
+          },
+          {
+            "$ref": "#/$defs/PinballLoss"
+          },
+          {
+            "$ref": "#/$defs/Coverage"
+          },
+          {
+            "$ref": "#/$defs/IntervalWidth"
+          }
+        ]
+      },
+      "minItems": 1,
+      "title": "Metrics",
+      "type": "array"
+    },
+    "models": {
+      "items": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "$ref": "#/$defs/Candidate"
+          }
+        ]
+      },
+      "minItems": 1,
+      "title": "Models",
+      "type": "array"
+    },
+    "output": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OutputSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "plan": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FitPlan"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "validation": {
+      "discriminator": {
+        "mapping": {
+          "origins": "#/$defs/ForecastOriginValidation",
+          "rolling": "#/$defs/RollingOrigin"
+        },
+        "propertyName": "mode"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/RollingOrigin"
+        },
+        {
+          "$ref": "#/$defs/ForecastOriginValidation"
+        }
+      ],
+      "title": "Validation"
+    }
+  },
+  "required": [
+    "data",
+    "models",
+    "validation",
+    "metrics"
+  ],
+  "title": "Backtest request",
+  "type": "object"
+}

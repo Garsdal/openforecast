@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from openforecast.errors import ProviderError, UnknownModelError
+from openforecast.errors import ProviderError, ProviderNotInstalled
 from openforecast.models.catalog import ModelCatalog
 from openforecast.runtime.environments import (
     ENVIRONMENT_FILENAME,
@@ -180,7 +180,7 @@ def test_nothing_installed_is_an_empty_listing_and_a_named_miss_is_an_error(
     assert environments.list() == ()
     assert "nixtla" not in environments
 
-    with pytest.raises(UnknownModelError, match=r"nothing is installed yet"):
+    with pytest.raises(ProviderNotInstalled, match=r"nothing is installed yet"):
         environments.get("nixtla")
 
 
@@ -239,7 +239,7 @@ def test_removing_a_provider_removes_every_version_of_it(
 def test_removing_something_that_is_not_installed_is_an_error(
     environments: ProviderEnvironments,
 ) -> None:
-    with pytest.raises(UnknownModelError, match=r"no provider named 'nixtla'"):
+    with pytest.raises(ProviderNotInstalled, match=r"no provider named 'nixtla'"):
         environments.remove("nixtla")
 
 

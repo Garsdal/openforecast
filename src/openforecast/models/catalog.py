@@ -64,7 +64,7 @@ class ModelCatalog:
                 f"{parsed} names a fitted revision; the model catalog holds model "
                 f"descriptors, so ask for {parsed.unpinned} instead"
             )
-        raise UnknownModelError(f"no model named {parsed}{self._known()}")
+        raise UnknownModelError(f"no model named {parsed}{self._known()}", model=str(parsed))
 
     def list(self, *, provider: str | None = None) -> tuple[ModelDescriptor, ...]:
         """Every registered descriptor, in reference order."""

@@ -42,6 +42,7 @@ assertion rendered: a name that is not here is not public.
 | `InconsistentTruthError` | Exception | [Errors](errors.md) |
 | `InstanceCapabilities` | Pydantic model | [Models and descriptors](models.md) |
 | `IntervalWidth` | Pydantic model | [Backtesting and metrics](evaluation.md) |
+| `InvalidModelParameters` | Exception | [Errors](errors.md) |
 | `LatestOrigin` | Pydantic model | [Plans, tasks and outputs](tasks.md) |
 | `LeadTimeFeature` | Pydantic model | [Recipes](recipes.md) |
 | `LocalTransport` | Class | [Transports](transports.md) |
@@ -75,6 +76,7 @@ assertion rendered: a name that is not here is not public.
 | `PointInTimeFrame` | Class | [Semantic data](data.md) |
 | `PointInTimeSchema` | Pydantic model | [Semantic data](data.md) |
 | `ProviderError` | Exception | [Errors](errors.md) |
+| `ProviderNotInstalled` | Exception | [Errors](errors.md) |
 | `RMSE` | Pydantic model | [Backtesting and metrics](evaluation.md) |
 | `Recipe` | Type alias | [Recipes](recipes.md) |
 | `RecipeError` | Exception | [Errors](errors.md) |
@@ -90,6 +92,9 @@ assertion rendered: a name that is not here is not public.
 | `TrainingContract` | Pydantic model | [Models and descriptors](models.md) |
 | `Transport` | Class | [Transports](transports.md) |
 | `UnknownModelError` | Exception | [Errors](errors.md) |
+| `UnsupportedDataShape` | Exception | [Errors](errors.md) |
+| `UnsupportedFeature` | Exception | [Errors](errors.md) |
+| `UnsupportedOutput` | Exception | [Errors](errors.md) |
 | `UnsupportedPlanError` | Exception | [Errors](errors.md) |
 | `Validation` | Type alias | [Backtesting and metrics](evaluation.md) |
 | `ViewKind` | Enumeration | [Models and descriptors](models.md) |

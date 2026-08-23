@@ -11,6 +11,8 @@ openforecast fit --config fit.json
 openforecast forecast --config forecast.json --json
 openforecast backtest --config backtest.json --json
 
+openforecast schema fit --json
+
 openforecast doctor
 openforecast serve
 ```
@@ -26,7 +28,10 @@ The CLI is intentionally uncreative. The tree is a group and a verb at most.
 Every information-producing command takes ``--json``. stdout is the requested
 output and stderr is everything else, so ``| jq`` is reliable. A failure is a
 non-zero exit code and a sentence on stderr, never prose on stdout that a script
-would have to read.
+would have to read — and with ``--json``, that sentence is the structured error
+envelope of Step 27.3, so recovery is a branch on a code rather than a match
+against prose. ``openforecast schema`` is the other half of that step: what a
+request has to look like, answered by the build that would execute it.
 
 It is built on ``argparse`` deliberately. A CLI framework would be a fourth
 runtime dependency for a projection, and rule 1 makes a dependency an

@@ -1,7 +1,37 @@
-"""The OpenForecast exception hierarchy.
+"""The OpenForecast exception hierarchy, and the one error envelope.
+
+```python
+try:
+    of.forecast("nixtla/nhits", data=frame, horizon=24)
+except of.OpenForecastError as error:
+    error.code      # 'MODEL_REQUIRES_FIT'
+    error.message   # 'nixtla/nhits has to be fitted before it can forecast; ...'
+    error.details   # {'model': 'nixtla/nhits'}
+```
 
 The innermost module in the package: it imports nothing from OpenForecast and
 everything else may import it.
+
+Three fields, and one of each kind of reader. The **code** is what a caller
+branches on, the **message** is what a person reads, and the **details** are the
+specifics a caller would otherwise have to parse back out of the message. Step
+27's rule is that recovery is a decision about the code: an agent that has to
+match ``"has to be fitted"`` against prose is an agent that breaks when the
+sentence is rewritten, and rewriting a sentence should always be safe.
+
+The same three fields at every boundary. :class:`~openforecast.protocol.messages.ErrorPayload`
+is what a provider answers with over its own protocol, ``{"error": {...}}`` is
+what the HTTP projection returns and what the CLI's ``--json`` writes to stderr,
+and :meth:`OpenForecastError.as_json` is the one function all of them serialize
+through — so there is one envelope with three spellings rather than three
+envelopes.
+
+Codes are **declared** per class, in :attr:`OpenForecastError.code`. Deriving
+them from the class name would keep them automatically in step with the
+hierarchy, which is the wrong thing to keep them in step with: a code an agent
+branches on must survive a class being renamed, and a class name has no business
+being a compatibility surface. ``tests/unit/test_errors.py`` holds the codes as
+a frozen table for exactly that reason.
 
 None of these inherit from :class:`ValueError`. That is deliberate — most of
 them are raised from Pydantic model validators, and Pydantic converts
@@ -12,6 +42,8 @@ caller sees the OpenForecast error it can act on rather than a wrapped one.
 
 from __future__ import annotations
 
+from typing import Any, ClassVar
+
 __all__ = [
     "ArtifactError",
     "DataError",
@@ -19,6 +51,7 @@ __all__ = [
     "FrequencyError",
     "IncompatibleForecastTask",
     "InconsistentTruthError",
+    "InvalidModelParameters",
     "ModelDoesNotSupportFit",
     "ModelError",
     "ModelRefError",
@@ -26,9 +59,13 @@ __all__ = [
     "OpenForecastError",
     "OriginScopeError",
     "ProviderError",
+    "ProviderNotInstalled",
     "RecipeError",
     "SchemaError",
     "UnknownModelError",
+    "UnsupportedDataShape",
+    "UnsupportedFeature",
+    "UnsupportedOutput",
     "UnsupportedPlanError",
 ]
 
@@ -36,33 +73,47 @@ __all__ = [
 class OpenForecastError(Exception):
     """Base class for every error OpenForecast raises deliberately.
 
-    Every one of them carries a :attr:`code`: the class name in
-    ``SCREAMING_SNAKE_CASE``, so ``ModelDoesNotSupportFit`` is
-    ``MODEL_DOES_NOT_SUPPORT_FIT``. Derived rather than declared per class,
-    because a code that has to be written down beside the name is a code that
-    can disagree with it — and a caller branching on ``error.code`` should be
-    reading the same fact ``except`` reads.
+    Raised directly only where a failure is genuinely nothing more specific — a
+    config file that cannot be read, two flags that configure the same field.
+    Everything a caller might reasonably branch on has a subclass, and therefore
+    a code of its own.
 
-    The code is what a caller *acts* on and the message is what a person reads.
-    Step 27 is where the rest of the envelope lands — a structured ``details``
-    mapping, the CLI's ``--json`` failures, the HTTP body — and it hangs off
-    this property rather than replacing it.
+    ``details`` are keyword arguments, so a raise site states the specifics
+    beside the sentence that reports them:
+
+    ```python
+    raise ModelRequiresFit(f"{ref} has to be fitted first", model=str(ref))
+    ```
+
+    They hold JSON-ready scalars and lists of them — a model reference as text,
+    a horizon as a number, the features a model cannot be given — because the
+    envelope they end up in crosses a process, a socket and a pipe. What they are
+    *not* is a second copy of the message: the message is a sentence about them.
     """
 
+    #: This failure, in terms a caller can branch on. Declared per class and
+    #: frozen by a test, because an agent's recovery path depends on it.
+    code: ClassVar[str] = "ERROR"
+
+    def __init__(self, message: str = "", /, **details: Any) -> None:
+        super().__init__(message)
+        #: The specifics, keyed by what they are. Empty when the sentence is all
+        #: there is to say, never a partial parse of the message.
+        self.details: dict[str, Any] = details
+
     @property
-    def code(self) -> str:
-        """This failure, in terms a caller can branch on."""
-        return _screaming_snake(type(self).__name__)
+    def message(self) -> str:
+        """The sentence a person reads. The same thing ``str(error)`` gives."""
+        return str(self.args[0]) if self.args else ""
 
+    def as_json(self) -> dict[str, Any]:
+        """This failure as the envelope every boundary reports it in.
 
-def _screaming_snake(name: str) -> str:
-    """``ModelDoesNotSupportFit`` -> ``MODEL_DOES_NOT_SUPPORT_FIT``."""
-    letters: list[str] = []
-    for position, letter in enumerate(name):
-        if letter.isupper() and position and not name[position - 1].isupper():
-            letters.append("_")
-        letters.append(letter.upper())
-    return "".join(letters)
+        ``{"code": ..., "message": ..., "details": {...}}`` — the payload inside
+        the ``{"error": ...}`` document the HTTP projection answers with and the
+        CLI writes to stderr. One function, so the two cannot drift.
+        """
+        return {"code": self.code, "message": self.message, "details": dict(self.details)}
 
 
 class SchemaError(OpenForecastError):
@@ -72,9 +123,13 @@ class SchemaError(OpenForecastError):
     static feature carrying an availability, duplicate instance keys.
     """
 
+    code = "INVALID_SCHEMA"
+
 
 class FrequencyError(SchemaError):
     """A frequency cannot be parsed, or has no fixed duration."""
+
+    code = "INVALID_FREQUENCY"
 
 
 class RecipeError(SchemaError):
@@ -86,6 +141,21 @@ class RecipeError(SchemaError):
     wrong before any data is looked at.
     """
 
+    code = "INVALID_RECIPE"
+
+
+class InvalidModelParameters(RecipeError):
+    """A model's own parameters were rejected by the model.
+
+    The half of a recipe OpenForecast does not interpret: ``params`` is passed to
+    the provider as it was written, so a level the model has never heard of is
+    refused by the model rather than by the catalog. A :class:`RecipeError`
+    because the thing to fix is the recipe, and the code is its own because the
+    fix is a parameter rather than the shape of the recipe around it.
+    """
+
+    code = "INVALID_MODEL_PARAMETERS"
+
 
 class UnsupportedPlanError(RecipeError):
     """The configuration is expressible in the protocol but not yet executable.
@@ -96,6 +166,8 @@ class UnsupportedPlanError(RecipeError):
     like the search they asked for had run.
     """
 
+    code = "UNSUPPORTED_PLAN"
+
 
 class DataError(OpenForecastError):
     """Data does not satisfy the schema it was declared against.
@@ -103,6 +175,42 @@ class DataError(OpenForecastError):
     Raised instead of repairing the data. Duplicate rows are not deduplicated,
     off-grid timestamps are not snapped, missing values are not imputed.
     """
+
+    code = "INVALID_DATA"
+
+
+class UnsupportedDataShape(DataError):
+    """The data is well-formed, and this model does not take that shape.
+
+    A panel handed to a model that declares a single series, or four targets
+    handed to a univariate one. Nothing is wrong with the data — the three
+    subclasses of :class:`DataError` here are the cases where the fix is to
+    choose a different model rather than to change the data, which is a different
+    recovery and therefore a different code.
+    """
+
+    code = "UNSUPPORTED_DATA_SHAPE"
+
+
+class UnsupportedFeature(DataError):
+    """The data carries a feature role the model declares it cannot consume.
+
+    Named separately from :class:`UnsupportedDataShape` because the two remedies
+    differ: a feature can be dropped from the data, where a shape cannot.
+    """
+
+    code = "UNSUPPORTED_FEATURE"
+
+
+class UnsupportedOutput(DataError):
+    """The model cannot produce the kind of forecast that was asked for.
+
+    A point-only model asked for quantiles. Refused from the declaration, before
+    a provider is started, so this is never discovered from a stack trace after a
+    fit has already run.
+    """
+
+    code = "UNSUPPORTED_OUTPUT"
 
 
 class OriginScopeError(OpenForecastError):
@@ -114,6 +222,8 @@ class OriginScopeError(OpenForecastError):
     model on data the caller never asked for.
     """
 
+    code = "ORIGIN_SCOPE_ERROR"
+
 
 class ModelError(OpenForecastError):
     """A model could not be named or resolved.
@@ -121,6 +231,8 @@ class ModelError(OpenForecastError):
     About the identifier and the catalog, not about the data: a model whose
     contract the data cannot satisfy raises a data or scope error instead.
     """
+
+    code = "MODEL_ERROR"
 
 
 class ModelRefError(ModelError, SchemaError):
@@ -131,6 +243,8 @@ class ModelRefError(ModelError, SchemaError):
     catching declaration errors should see this one too.
     """
 
+    code = "INVALID_MODEL_REF"
+
 
 class UnknownModelError(ModelError):
     """Nothing is registered under that reference.
@@ -138,6 +252,8 @@ class UnknownModelError(ModelError):
     Distinct from a malformed reference: the name is well-formed, and no
     provider advertises it.
     """
+
+    code = "MODEL_NOT_FOUND"
 
 
 class ModelRequiresFit(ModelError):
@@ -149,6 +265,8 @@ class ModelRequiresFit(ModelError):
     caller never trained, so the string lifecycle is explicit instead: fit it,
     and forecast with the artifact reference that comes back.
     """
+
+    code = "MODEL_REQUIRES_FIT"
 
 
 class ModelDoesNotSupportFit(ModelError):
@@ -162,6 +280,8 @@ class ModelDoesNotSupportFit(ModelError):
     artifact that records a fit that never happened.
     """
 
+    code = "MODEL_DOES_NOT_SUPPORT_FIT"
+
 
 class IncompatibleForecastTask(ModelError):
     """The artifact cannot answer the forecast that was asked of it.
@@ -171,6 +291,8 @@ class IncompatibleForecastTask(ModelError):
     steps the caller asked for would be a different question answered silently,
     so the mismatch is raised instead.
     """
+
+    code = "INCOMPATIBLE_FORECAST_TASK"
 
 
 class ProviderError(OpenForecastError):
@@ -182,6 +304,20 @@ class ProviderError(OpenForecastError):
     back was not.
     """
 
+    code = "PROVIDER_EXECUTION_FAILED"
+
+
+class ProviderNotInstalled(ProviderError):
+    """A model was advertised by a provider that is not here to execute it.
+
+    Its own code because it is the one provider failure with an obvious remedy,
+    and the remedy is a command: ``openforecast providers install <name>``. An
+    agent that can read that off ``error.code`` and ``error.details['provider']``
+    can install what it needs and retry, which is the whole point of Step 27.4.
+    """
+
+    code = "PROVIDER_NOT_INSTALLED"
+
 
 class DuplicateModelError(ModelError):
     """Two descriptors claim the same reference.
@@ -189,6 +325,8 @@ class DuplicateModelError(ModelError):
     A reference has to identify one model. Letting the second registration win
     would make which model you get depend on provider load order.
     """
+
+    code = "DUPLICATE_MODEL"
 
 
 class ArtifactError(OpenForecastError):
@@ -206,6 +344,8 @@ class ArtifactError(OpenForecastError):
     it.
     """
 
+    code = "INVALID_ARTIFACT"
+
 
 class InconsistentTruthError(DataError):
     """Vintages of the same event time disagree about what happened.
@@ -214,3 +354,5 @@ class InconsistentTruthError(DataError):
     those copies hold different realizations, only one can be the outcome, and
     OpenForecast will not pick for you.
     """
+
+    code = "INCONSISTENT_TRUTH"

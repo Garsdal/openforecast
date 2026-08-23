@@ -276,6 +276,22 @@ def test_forecasting_an_unfitted_reference_still_refuses(remote: of.OpenForecast
         remote.forecast(MODEL, frame(), horizon=4)
 
 
+def test_the_whole_envelope_crosses_and_not_only_the_class(
+    remote: of.OpenForecast,
+) -> None:
+    """Step 27.3 over a real socket: the code and the details survive the trip.
+
+    An agent that recovers by installing a provider or naming a different model
+    reads ``details``, so a boundary that dropped them would leave it parsing the
+    sentence again on the far side.
+    """
+    with pytest.raises(ModelRequiresFit) as raised:
+        remote.forecast(MODEL, frame(), horizon=4)
+
+    assert raised.value.code == "MODEL_REQUIRES_FIT"
+    assert raised.value.details == {"model": MODEL}
+
+
 def test_data_the_model_was_not_fitted_on_is_refused_remotely(
     remote: of.OpenForecast,
 ) -> None:

@@ -290,14 +290,24 @@ class ForecastPayload(Wire):
 class ErrorInfo(Wire):
     """A failure, in terms a caller can act on.
 
+    ``code``, ``message`` and ``details`` are :meth:`OpenForecastError.as_json
+    <openforecast.errors.OpenForecastError.as_json>` — the same three fields the
+    CLI's ``--json`` writes and a provider answers with, because Step 27 says
+    there is one error protocol rather than one per boundary. An agent recovers
+    on the ``code``: a rewritten sentence must never change what a caller does.
+
     ``type`` is the name of the OpenForecast exception the same failure would
     have raised in process, so a remote client re-raises what a local one would
     and a caller's ``except of.DataError`` does not depend on where the model
-    ran.
+    ran. It travels beside the code rather than instead of it: the code is the
+    contract, and the class name is how a Python client rebuilds the exact
+    subclass this build happens to have.
     """
 
     type: str
+    code: str
     message: str
+    details: dict[str, Any] = {}
 
 
 class ErrorBody(Wire):

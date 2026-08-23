@@ -59,6 +59,15 @@ jobs:
           uv run generate-reference
           git diff --exit-code docs/reference/generated
 
+      # Step 27.1, and the same rule again: the JSON Schemas under spec/schemas
+      # are generated from the Pydantic models the commands validate against, so
+      # a renamed field is a diff here rather than a schema an agent constructs a
+      # request from and is then refused for.
+      - name: Assert the committed JSON Schemas are the generated ones
+        run: |
+          uv run generate-schemas
+          git diff --exit-code spec/schemas
+
       - name: Assert no forecasting framework in the dependency tree
         run: |
           uv tree --no-dev > tree.txt

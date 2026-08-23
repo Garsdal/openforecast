@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 
-from openforecast.errors import ProviderError
+from openforecast.errors import ProviderError, ProviderNotInstalled
 from openforecast.providers.client import ProviderClient
 
 __all__ = ["ProviderClient", "ProviderRegistry"]
@@ -55,8 +55,10 @@ class ProviderRegistry:
         """
         provider = self._providers.get(name)
         if provider is None:
-            raise ProviderError(
-                f"no provider named {name!r} is installed; available: {sorted(self._providers)}"
+            raise ProviderNotInstalled(
+                f"no provider named {name!r} is installed; available: {sorted(self._providers)}",
+                provider=name,
+                installed=sorted(self._providers),
             )
         return provider
 

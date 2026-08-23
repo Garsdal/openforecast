@@ -45,7 +45,7 @@ from typing import Any, Protocol
 from platformdirs import user_cache_path
 from pydantic import BaseModel, ConfigDict
 
-from openforecast.errors import ProviderError, UnknownModelError
+from openforecast.errors import ProviderError, ProviderNotInstalled
 from openforecast.models.descriptor import ModelDescriptor
 from openforecast.protocol.version import PROTOCOL_VERSION
 from openforecast.providers.builtin import PROVIDER_NAME as BUILTIN_PROVIDER_NAME
@@ -314,10 +314,12 @@ class ProviderEnvironments:
             if environment.name == name:
                 return environment
         installed = [environment.name for environment in self.list()]
-        raise UnknownModelError(
+        raise ProviderNotInstalled(
             f"no provider named {name!r} is installed"
             + (f"; installed: {installed}" if installed else "; nothing is installed yet")
-            + f". Install it with: openforecast providers install {name}"
+            + f". Install it with: openforecast providers install {name}",
+            provider=name,
+            installed=installed,
         )
 
     def __contains__(self, name: str) -> bool:
