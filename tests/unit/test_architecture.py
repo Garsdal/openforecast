@@ -76,7 +76,15 @@ LAYERS: tuple[tuple[str, ...], ...] = (
         "openforecast.artifacts",
         "openforecast.providers",
     ),
-    ("openforecast.client", "openforecast.commands", "openforecast.server"),
+    # The outermost layer. ``evaluation/`` is here rather than beside ``tasks/``
+    # because benchmarking is a *user* of ``of.fit`` and ``of.forecast``: it
+    # drives the client rather than being something the engine can reach for.
+    (
+        "openforecast.client",
+        "openforecast.commands",
+        "openforecast.evaluation",
+        "openforecast.server",
+    ),
 )
 
 
@@ -385,6 +393,10 @@ PUBLIC_MODULES = (
     "openforecast",
     "openforecast.artifacts",
     "openforecast.data",
+    # A benchmark result is a public object too: a caller reading one should no
+    # more have to know which library executed the model than a caller reading a
+    # manifest does.
+    "openforecast.evaluation",
     "openforecast.models",
     "openforecast.protocol",
     "openforecast.recipes",

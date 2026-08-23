@@ -35,8 +35,10 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > `darts/nhits`, in `integrations/darts` — and the sktime integration from
 > Step 14: `sktime/theta` and `sktime/pooled-trees`, in `integrations/sktime` —
 > and the public V1 surface of Step 15, which is the one below and no longer
-> moves — and the HTTP/OpenAPI projection of Step 16: `openforecast serve`,
-> `HttpTransport`, and a generated `spec/openapi/openapi.json`.
+> moves — the HTTP/OpenAPI projection of Step 16: `openforecast serve`,
+> `HttpTransport`, and a generated `spec/openapi/openapi.json` — and the
+> benchmarking and point-in-time evaluation of Step 17: `of.benchmark`,
+> `of.RollingOrigin`, `of.ForecastOriginValidation` and `of.eligible_models`.
 > `of.fit` and `of.forecast` work end to end today with `builtin/seasonal-naive`,
 > both Nixtla models, all three Darts models and both sktime models, in this
 > process or over the subprocess protocol — the global ones trained on real
@@ -634,6 +636,97 @@ pip install openforecast                # to call one
 `HttpTransport` is `urllib`, so the core install stays `pydantic`, `pyarrow` and
 `platformdirs`, and a remote-only user never installs a web framework.
 
+## Benchmarking and point-in-time evaluation
+
+The same models, over the same origins, scored the same way:
+
+```python
+result = of.benchmark(
+    models=[
+        "builtin/seasonal-naive",
+        "nixtla/autoarima",
+        "nixtla/nhits",
+        "darts/nhits",
+    ],
+    data=train,
+    validation=of.RollingOrigin(horizon=24, windows=5),
+    metrics=[of.MAE(), of.Bias()],
+)
+
+result.leaderboard("mae")
+result.best("mae")
+```
+
+The defining property of the implementation is negative: there is no
+benchmarking code in it. No Nixtla backtester, no Darts `historical_forecasts`,
+no sktime evaluation harness — `of.benchmark` is a loop over `of.fit` and
+`of.forecast`, because every question a benchmark asks was already answered by
+the semantic layer. Which is also why it works over any transport: point a
+client at a service and the models are fitted and forecast there.
+
+Point-in-time data is the same call with the validation that fits it, and this
+is the part worth the whole design:
+
+```python
+result = of.benchmark(
+    models=["nixtla/nhits", "darts/nhits"],
+    data=pit_dataset,
+    validation=of.ForecastOriginValidation(
+        origins=of.OriginsBetween(start, end, stride=24),
+        horizon=72,
+    ),
+    metrics=[of.MAE()],
+)
+```
+
+At each origin the features come from *that vintage*, the truth comes from the
+truth frame, and later vintages are not merely unused — they are absent from the
+object the model is handed:
+
+```python
+frame.up_to(moment)      # the history, truncated: simulated origins
+dataset.up_to(moment)    # the vintages issued by then: observed origins
+```
+
+A fold holds the result of one of those, so there is nothing for a bug in the
+benchmark loop to reach for. `up_to` on an event-time frame keeps the known
+features of the truncated rows — a known feature's later values are knowable in
+advance, which is what the role means — and moves nothing else.
+
+The result is one long Arrow table, and three of its columns are not
+measurements:
+
+```text
+model  fold  origin  metric  value  pairs  fit_seconds  forecast_seconds
+       origin_fidelity  provider  artifact
+```
+
+`origin_fidelity` is `simulated` or `observed`, read off the artifact the fold
+published rather than declared by the benchmark — which makes "simulated
+historical availability versus true point-in-time availability" a comparison you
+can run rather than a caveat you have to remember. `artifact` is the pinned
+revision the numbers came from, so a benchmark's winner is a reference you can
+forecast with. `pairs` says how many outcomes a value was computed over, so a
+fold scored on a third of its horizon is visible in the table rather than only in
+the metric.
+
+`of.eligible_models` is the screening half of `openforecast/auto`:
+
+```python
+for entry in of.eligible_models(pit_dataset, horizon=72, plan=plan):
+    print(entry)
+
+nixtla/nhits      eligible
+nixtla/autoarima  ineligible: a series view holds one forecast origin, but the
+                  selection covers 300 vintages
+```
+
+Eligibility means exactly one thing — the fit would not be refused — so it
+materializes the view the model's contract asks for and checks it against the
+capabilities the model declared, which is the same sequence `of.fit` runs. No
+provider is started, and an ineligible model comes back with the sentence the fit
+would have failed with.
+
 ## The architectural invariant
 
 > OpenForecast owns forecasting semantics. Providers only consume
@@ -735,8 +828,12 @@ Imports flow in one direction only:
                         ↓
       runtime/  registry/  artifacts/  providers/
                         ↓
-        client.py  commands/  server/
+   client.py  commands/  server/  evaluation/
 ```
+
+`evaluation/` is in the outermost layer because benchmarking is a *user* of
+`of.fit` and `of.forecast` rather than something the engine can reach for, which
+is exactly why no provider knows it is being benchmarked.
 
 These rules are tests, not documentation: `tests/unit/test_architecture.py`
 AST-scans the package and fails on any forbidden import, any forecasting
@@ -781,6 +878,7 @@ src/openforecast/
     protocol/    the provider wire protocol: messages, errors, versions
     commands/    the CLI, including `openforecast serve`
     server/      the HTTP projection: wire models, transports, the FastAPI app
+    evaluation/  benchmarking, PIT validation strategies, metrics, results
     client.py    the user-facing client
 
 integrations/    provider distributions, each independently versioned

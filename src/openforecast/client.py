@@ -41,8 +41,11 @@ sending that reference. Locally the artifact is on this machine; remotely it is
 on the service's, and the reference means the same thing to whichever engine
 owns it.
 
-The outermost layer, by design. Everything may be imported from here and nothing
-may import it.
+The outermost layer, by design: everything may be imported from here. The one
+thing that imports it is :mod:`openforecast.evaluation`, which sits in the same
+layer and is a *user* of this module rather than something beneath it — a
+benchmark is a loop over ``fit`` and ``forecast``, which is exactly why nothing
+inside the engine knows it is being benchmarked.
 """
 
 from __future__ import annotations
