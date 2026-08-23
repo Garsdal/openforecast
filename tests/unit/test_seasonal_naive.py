@@ -58,8 +58,8 @@ def test_the_descriptor_declares_a_local_series_model() -> None:
     descriptor = seasonal_naive.descriptor("builtin")
 
     assert str(descriptor.ref) == "builtin/seasonal-naive"
-    assert descriptor.training.view is ViewKind.SERIES
-    assert not descriptor.training.horizon_bound_at_fit
+    assert descriptor.required_training.view is ViewKind.SERIES
+    assert not descriptor.required_training.horizon_bound_at_fit
     assert descriptor.lifecycle.requires_fit
 
 

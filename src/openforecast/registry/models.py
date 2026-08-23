@@ -11,6 +11,10 @@ place that answers what state it currently has. The catalog knows what a provide
 advertises; the artifact store knows what was fitted here. Neither can answer on
 its own, and the engine should not be asking two things and combining them.
 
+```python
+registry.for_fit("amazon/chronos-2")    # ModelDoesNotSupportFit
+```
+
 The lifecycle distinction is the interesting part. Forecasting from a bare
 ``nixtla/nhits`` raises :class:`~openforecast.errors.ModelRequiresFit`, because a
 model that has to be fitted is not a model that can forecast, and quietly fitting
@@ -25,7 +29,7 @@ from __future__ import annotations
 from openforecast.artifacts.handle import ModelHandle
 from openforecast.artifacts.manifest import LOCAL_NAMESPACE
 from openforecast.artifacts.store import ArtifactStore
-from openforecast.errors import ModelError, ModelRequiresFit
+from openforecast.errors import ModelDoesNotSupportFit, ModelError, ModelRequiresFit
 from openforecast.models.catalog import DEFAULT_CATALOG, ModelCatalog
 from openforecast.models.descriptor import ModelDescriptor
 from openforecast.models.ref import ModelRef
@@ -99,10 +103,10 @@ class ModelRegistry:
                 f"{source}, so fit that instead"
             )
         descriptor = self._catalog.get(parsed)
-        if not descriptor.lifecycle.supports_fit:
-            raise ModelError(
+        if not descriptor.is_fittable:
+            raise ModelDoesNotSupportFit(
                 f"{parsed} cannot be fitted; it is used zero-shot, so forecast with the "
-                f"reference directly"
+                f"reference directly: of.forecast(model='{parsed}', data=..., horizon=...)"
             )
         return descriptor
 

@@ -12,26 +12,35 @@ real missing values, and a model that cannot consume them has exactly two
 honest outcomes: the caller writes an explicit ``of.Impute`` step, which is
 recorded in the artifact, or the request is refused. Filling them in here would
 be the silent imputation the architecture forbids.
+
+Since Step 23 the same questions are asked of a *forecast* view, for the models
+that never have a fit view. A pretrained model is checked once, at the only
+moment it is ever handed data — and it is the same four questions, over the
+tables an inference origin holds, so that "this model cannot be given a panel"
+means one thing whichever lifecycle the model has.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 import pyarrow as pa
 
+from openforecast.data.features import FeatureSpec
 from openforecast.errors import DataError
-from openforecast.models.capabilities import MissingValueSupport, ModelCapabilities
+from openforecast.models.capabilities import MissingValueSupport
 from openforecast.models.descriptor import ModelDescriptor
 from openforecast.recipes.transforms import Impute, Transform
+from openforecast.views.base import EVENT_TIME
+from openforecast.views.forecast import ForecastView
 from openforecast.views.planner import FitView
 from openforecast.views.sequences import SequenceView
 from openforecast.views.series import SeriesView
 from openforecast.views.tabular import TabularView
 
-__all__ = ["validate_view", "view_tables"]
+__all__ = ["validate_forecast_view", "validate_view", "view_tables"]
 
 
 def validate_view(
@@ -43,21 +52,55 @@ def validate_view(
     the provider sees the data, which is what lets a model requiring an explicit
     imputation be fitted on data that has missing values.
     """
-    capabilities = descriptor.capabilities
     schema = view.schema
-    if not capabilities.instances.supports(is_panel=bool(schema.instance_keys)):
-        shape = "a panel" if schema.instance_keys else "a single series"
+    _check_shape(
+        descriptor, schema.instance_keys, schema.targets, schema.features, verb="fitted on"
+    )
+    _validate_missing_values(lambda: _missing_columns(view), descriptor, transforms)
+
+
+def validate_forecast_view(view: ForecastView, descriptor: ModelDescriptor) -> None:
+    """The same questions, of the one view a pretrained model is ever handed.
+
+    A fitted model was checked against the data it learned from, and a forecast
+    from it is checked against *that* — :func:`_check_data_schema` in the engine
+    — because the fit is what the artifact promises to answer. A model that was
+    never fitted has no such promise behind it, so the declaration meets data
+    here instead, and it is the only place it can.
+
+    Transforms are not a parameter: they belong to a recipe, a recipe is fitted,
+    and this path never fits anything.
+    """
+    metadata = view.metadata
+    _check_shape(
+        descriptor, metadata.instance_keys, metadata.targets, metadata.features, verb="given"
+    )
+    _validate_missing_values(lambda: _missing_forecast_columns(view), descriptor, ())
+
+
+def _check_shape(
+    descriptor: ModelDescriptor,
+    instance_keys: Sequence[str],
+    targets: Sequence[str],
+    features: Sequence[FeatureSpec],
+    *,
+    verb: str,
+) -> None:
+    """How many series, how many targets, and which feature roles."""
+    capabilities = descriptor.capabilities
+    if not capabilities.instances.supports(is_panel=bool(instance_keys)):
+        shape = "a panel" if instance_keys else "a single series"
         raise DataError(
-            f"{descriptor.ref} cannot be fitted on {shape}; it declares "
+            f"{descriptor.ref} cannot be {verb} {shape}; it declares "
             f"single={capabilities.instances.single}, panel={capabilities.instances.panel}"
         )
-    if not capabilities.targets.supports(len(schema.targets)):
+    if not capabilities.targets.supports(len(targets)):
         raise DataError(
-            f"{descriptor.ref} cannot be fitted on {len(schema.targets)} targets "
-            f"{list(schema.targets)}; it declares univariate="
+            f"{descriptor.ref} cannot be {verb} {len(targets)} targets "
+            f"{list(targets)}; it declares univariate="
             f"{capabilities.targets.univariate}, multivariate={capabilities.targets.multivariate}"
         )
-    unsupported = capabilities.features.unsupported(schema.features)
+    unsupported = capabilities.features.unsupported(features)
     if unsupported:
         raise DataError(
             f"{descriptor.ref} cannot be given the features {list(unsupported)}; it declares "
@@ -65,18 +108,18 @@ def validate_view(
             f"static={capabilities.features.static}. Drop them from the data, or fit a model "
             f"that consumes them"
         )
-    _validate_missing_values(view, descriptor, capabilities, transforms)
 
 
 def _validate_missing_values(
-    view: FitView,
+    found: Callable[[], set[str]],
     descriptor: ModelDescriptor,
-    capabilities: ModelCapabilities,
     transforms: Sequence[Transform],
 ) -> None:
+    """``found`` is a thunk: a tolerant model does not pay to scan the tables."""
+    capabilities = descriptor.capabilities
     if capabilities.tolerates_missing_values:
         return
-    columns = sorted(_missing_columns(view))
+    columns = sorted(found())
     if not columns:
         return
     if capabilities.requires_missing_value_transform and any(
@@ -115,6 +158,24 @@ def _missing_columns(view: FitView) -> set[str]:
     return {
         name
         for table in view_tables(view)
+        for name in table.column_names
+        if name not in identifiers and _holds_missing(table.column(name))
+    }
+
+
+def _missing_forecast_columns(view: ForecastView) -> set[str]:
+    """The same question of an inference origin's three tables.
+
+    The instance keys and the event time are left out for the reason the fit
+    views leave their identifiers out: they say which row this is rather than
+    what was observed, so a null in one is a broken view rather than an absent
+    measurement — and the view's own constructor is what refuses that.
+    """
+    identifiers = frozenset({*view.metadata.instance_keys, EVENT_TIME})
+    tables = (view.history, view.future, *((view.static,) if view.static is not None else ()))
+    return {
+        name
+        for table in tables
         for name in table.column_names
         if name not in identifiers and _holds_missing(table.column(name))
     }

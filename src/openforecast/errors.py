@@ -19,6 +19,7 @@ __all__ = [
     "FrequencyError",
     "IncompatibleForecastTask",
     "InconsistentTruthError",
+    "ModelDoesNotSupportFit",
     "ModelError",
     "ModelRefError",
     "ModelRequiresFit",
@@ -33,7 +34,35 @@ __all__ = [
 
 
 class OpenForecastError(Exception):
-    """Base class for every error OpenForecast raises deliberately."""
+    """Base class for every error OpenForecast raises deliberately.
+
+    Every one of them carries a :attr:`code`: the class name in
+    ``SCREAMING_SNAKE_CASE``, so ``ModelDoesNotSupportFit`` is
+    ``MODEL_DOES_NOT_SUPPORT_FIT``. Derived rather than declared per class,
+    because a code that has to be written down beside the name is a code that
+    can disagree with it — and a caller branching on ``error.code`` should be
+    reading the same fact ``except`` reads.
+
+    The code is what a caller *acts* on and the message is what a person reads.
+    Step 27 is where the rest of the envelope lands — a structured ``details``
+    mapping, the CLI's ``--json`` failures, the HTTP body — and it hangs off
+    this property rather than replacing it.
+    """
+
+    @property
+    def code(self) -> str:
+        """This failure, in terms a caller can branch on."""
+        return _screaming_snake(type(self).__name__)
+
+
+def _screaming_snake(name: str) -> str:
+    """``ModelDoesNotSupportFit`` -> ``MODEL_DOES_NOT_SUPPORT_FIT``."""
+    letters: list[str] = []
+    for position, letter in enumerate(name):
+        if letter.isupper() and position and not name[position - 1].isupper():
+            letters.append("_")
+        letters.append(letter.upper())
+    return "".join(letters)
 
 
 class SchemaError(OpenForecastError):
@@ -119,6 +148,18 @@ class ModelRequiresFit(ModelError):
     given — would return a number that looks like a forecast from a model the
     caller never trained, so the string lifecycle is explicit instead: fit it,
     and forecast with the artifact reference that comes back.
+    """
+
+
+class ModelDoesNotSupportFit(ModelError):
+    """The reference names a model that cannot be fitted at all.
+
+    The other half of :class:`ModelRequiresFit`. A pretrained foundation model
+    forecasts from the reference itself — ``of.forecast(model="amazon/chronos-2",
+    ...)`` — and ``of.fit`` on it has nothing to do: there is no training
+    contract behind it, so there is no view to materialize and no artifact to
+    publish. Accepting the call and returning something would hand back an
+    artifact that records a fit that never happened.
     """
 
 

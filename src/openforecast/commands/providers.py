@@ -125,7 +125,10 @@ def _describe(environment: ProviderEnvironment, out: IO[str], *, as_json: bool, 
     print(f"  path       {environment.path}", file=out)
     print(f"  models     {len(record.models)}", file=out)
     for descriptor in record.descriptors:
-        print(f"    {descriptor.ref}  view={descriptor.training.view}", file=out)
+        # A pretrained model trains on no view at all, and says so rather than
+        # borrowing the spelling of one it does not have.
+        view = "zero-shot" if descriptor.training is None else str(descriptor.training.view)
+        print(f"    {descriptor.ref}  view={view}", file=out)
     return 0
 
 

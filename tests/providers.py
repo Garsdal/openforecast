@@ -42,13 +42,22 @@ def descriptor(
     capabilities: ModelCapabilities | None = None,
     lifecycle: ModelLifecycle | None = None,
 ) -> ModelDescriptor:
-    """A descriptor that declares whatever a test needs it to declare."""
+    """A descriptor that declares whatever a test needs it to declare.
+
+    ``training`` defaults to a series contract for a model that can be fitted and
+    to nothing at all for one that cannot — which is the invariant the descriptor
+    enforces, so a pretrained lifecycle needs no second argument to express.
+    """
+    resolved = ModelLifecycle.trainable() if lifecycle is None else lifecycle
+    contract = training
+    if contract is None and resolved.supports_fit:
+        contract = TrainingContract.series()
     return ModelDescriptor(
         ref=ModelRef.parse(f"{provider}/{name}"),
         provider=provider,
         display_name=f"Stub {name}",
-        lifecycle=ModelLifecycle.trainable() if lifecycle is None else lifecycle,
-        training=TrainingContract.series() if training is None else training,
+        lifecycle=resolved,
+        training=contract,
         capabilities=ModelCapabilities(
             instances=InstanceCapabilities(single=True, panel=True),
             targets=TargetCapabilities(univariate=True, multivariate=True),
@@ -83,6 +92,11 @@ class StubProvider:
     #: Rewrites the answer, for testing what the engine does with a bad one.
     corrupt: Callable[[pa.Table], pa.Table] | None = None
     fits: list[FitCall] = field(default_factory=lambda: [])
+    #: The state directory each forecast was handed and what was in it *then*,
+    #: so a test can check that a model nothing was fitted for was given nothing.
+    #: Recorded rather than inspected afterwards: a zero-shot forecast's directory
+    #: is temporary and is gone by the time the call returns.
+    states: list[tuple[Path, tuple[str, ...]]] = field(default_factory=lambda: [])
 
     def descriptors(self) -> tuple[ModelDescriptor, ...]:
         return self.models
@@ -111,7 +125,12 @@ class StubProvider:
         state: Path,
     ) -> pa.Table:
         del model, params
-        value = float((state / STATE_FILENAME).read_text(encoding="utf-8"))
+        # A pretrained model is handed an empty directory, because nothing was
+        # fitted for it. Falling back to ``value`` rather than raising is what
+        # lets one stub serve both lifecycles.
+        persisted = state / STATE_FILENAME
+        value = float(persisted.read_text(encoding="utf-8")) if persisted.is_file() else self.value
+        self.states.append((state, tuple(sorted(item.name for item in state.iterdir()))))
         answer = flat_answer(view, value, output)
         return answer if self.corrupt is None else self.corrupt(answer)
 

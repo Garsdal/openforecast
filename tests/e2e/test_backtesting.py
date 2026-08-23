@@ -34,6 +34,7 @@ from openforecast.models import (
     MissingValueSupport,
     ModelCapabilities,
     ModelCatalog,
+    ModelLifecycle,
     OutputCapabilities,
     TargetCapabilities,
     TrainingContract,
@@ -833,7 +834,159 @@ def test_a_candidate_can_state_the_plan_it_needs(client: of.OpenForecast) -> Non
     assert result.models == ("every-origin",)
 
 
+# -- pretrained candidates: Step 23's "done when" ---------------------------
+
+PRETRAINED = "stub/pretrained"
+
+
+def mixed_client(tmp_path: Path) -> of.OpenForecast:
+    """A catalog holding both lifecycles, so one backtest can compare them."""
+    trainable = providers.descriptor("series", provider="other")
+    pretrained = providers.descriptor("pretrained", lifecycle=ModelLifecycle.pretrained())
+    return of.OpenForecast(
+        store=tmp_path / "mixed",
+        catalog=ModelCatalog((trainable, pretrained)),
+        providers=ProviderRegistry(
+            [
+                providers.StubProvider(models=(pretrained,), value=3.0),
+                providers.StubProvider(name="other", models=(trainable,), value=5.0),
+            ]
+        ),
+    )
+
+
+def test_a_pretrained_model_is_backtested_beside_a_fitted_one(tmp_path: Path) -> None:
+    """The claim of Step 23: one interface, two lifecycles, the same origins.
+
+    The zero-shot candidate is not fitted at any fold and the trainable one is,
+    and both are scored on exactly what was knowable at each origin — which is
+    what makes the comparison worth making.
+    """
+    result = of.backtest(
+        models=[PRETRAINED, "other/series"],
+        data=frame(),
+        validation=of.RollingOrigin(horizon=2, windows=2),
+        metrics=[of.MAE()],
+        client=mixed_client(tmp_path),
+    )
+
+    assert set(result.models) == {PRETRAINED, "other/series"}
+    assert result.metrics.num_rows == 2 * 2
+    fitted = _rows_for(result, "other/series")
+    zero_shot = _rows_for(result, PRETRAINED)
+    assert all(seconds is not None for seconds in fitted["fit_seconds"])
+    assert all(seconds is None for seconds in zero_shot["fit_seconds"])
+
+
+def test_a_pretrained_candidate_leaves_no_artifact_and_names_itself(
+    tmp_path: Path,
+) -> None:
+    """``artifact`` is what produced the number, and here that is the reference."""
+    client = mixed_client(tmp_path)
+    result = of.backtest(
+        models=[PRETRAINED],
+        data=frame(),
+        validation=of.RollingOrigin(horizon=2, windows=2),
+        metrics=[of.MAE()],
+        client=client,
+    )
+
+    rows = _rows_for(result, PRETRAINED)
+    assert set(rows["artifact"]) == {PRETRAINED}
+    assert set(rows["provider"]) == {"stub"}
+    assert client.engine.store.list() == ()
+
+
+def test_a_pretrained_candidate_reports_that_it_had_no_training_origins(
+    tmp_path: Path,
+) -> None:
+    """Not ``simulated`` and not ``observed``: there were no training origins.
+
+    A frozen revision and a pretrained model both report a null ``fit_seconds``,
+    and they do not mean the same thing about the numbers beside them. This is
+    the column that says which one it was.
+    """
+    result = of.backtest(
+        models=[PRETRAINED],
+        data=frame(),
+        validation=of.RollingOrigin(horizon=2, windows=1),
+        metrics=[of.MAE()],
+        client=mixed_client(tmp_path),
+    )
+
+    assert values(result.metrics, "origin_fidelity") == ["pretrained"]
+
+
+def test_a_plan_on_a_pretrained_candidate_would_do_nothing(tmp_path: Path) -> None:
+    with pytest.raises(RecipeError, match="used zero-shot"):
+        of.backtest(
+            models=[of.Candidate(PRETRAINED, plan=of.FitPlan(seed=1))],
+            data=frame(),
+            validation=of.RollingOrigin(horizon=2, windows=1),
+            metrics=[of.MAE()],
+            client=mixed_client(tmp_path),
+        )
+
+
+def test_parameters_on_a_pretrained_candidate_would_do_nothing_either(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(RecipeError, match="already part of it"):
+        of.backtest(
+            models=[of.Candidate(of.Model(PRETRAINED, params={"anything": 1}))],
+            data=frame(),
+            validation=of.RollingOrigin(horizon=2, windows=1),
+            metrics=[of.MAE()],
+            client=mixed_client(tmp_path),
+        )
+
+
+def test_a_pretrained_model_over_point_in_time_data_is_scored_at_every_vintage(
+    tmp_path: Path,
+) -> None:
+    """Step 23.7: no training folds, and the information vintage still holds."""
+    result = of.backtest(
+        models=[PRETRAINED],
+        data=dataset(),
+        validation=of.ForecastOriginValidation(
+            horizon=2, origins=of.OriginsBetween(at(8), at(12), stride=2)
+        ),
+        metrics=[of.MAE()],
+        client=mixed_client(tmp_path),
+    )
+
+    assert result.origins == (at(8), at(10), at(12))
+    assert values(result.metrics, "origin_fidelity") == ["pretrained"] * 3
+
+
+def _rows_for(result: of.BacktestResult, model: str) -> dict[str, list[Any]]:
+    table = result.metrics
+    keep = [index for index, name in enumerate(values(table, "model")) if name == model]
+    return {
+        name: [values(table, name)[index] for index in keep]
+        for name in ("fit_seconds", "artifact", "provider")
+    }
+
+
 # -- eligibility: the `openforecast/auto` foundation ------------------------
+
+
+def test_a_pretrained_model_is_ineligible_because_there_is_no_fit_to_refuse(
+    tmp_path: Path,
+) -> None:
+    """Eligibility screens fits, and a zero-shot model has none to screen.
+
+    Reported rather than hidden, and the reason says where to go instead: it is
+    not that the data is wrong for the model, it is that the question is.
+    """
+    found = of.eligible_models(frame(), horizon=4, client=mixed_client(tmp_path))
+    zero_shot = next(entry for entry in found if str(entry.model) == PRETRAINED)
+
+    assert not zero_shot.eligible
+    assert zero_shot.reason is not None
+    assert "used zero-shot" in zero_shot.reason
+    # And the model beside it in the same catalog is screened as usual.
+    assert next(entry for entry in found if str(entry.model) == "other/series").eligible
 
 
 def test_eligibility_is_answered_for_the_whole_catalog(client: of.OpenForecast) -> None:

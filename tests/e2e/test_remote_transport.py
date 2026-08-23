@@ -151,7 +151,7 @@ def test_a_descriptor_crosses_without_losing_what_it_declares(
     there = remote.models.get(MODEL)
 
     assert there.lifecycle == here.lifecycle
-    assert there.training.view == here.training.view
+    assert there.required_training.view == here.required_training.view
     assert there.capabilities == here.capabilities
     assert there.parameters_schema == here.parameters_schema
 

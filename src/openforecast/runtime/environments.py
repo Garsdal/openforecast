@@ -38,7 +38,7 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -59,6 +59,7 @@ __all__ = [
     "ProviderRecord",
     "UvBuilder",
     "default_cache_root",
+    "integration_for",
     "known_source",
     "module_for",
     "shipped_provider_names",
@@ -73,6 +74,19 @@ STAGING_DIRNAME = ".tmp"
 #: ``openforecast_nixtla``, which is the layout every integration follows.
 DISTRIBUTION_PREFIX = "openforecast-"
 MODULE_PREFIX = "openforecast_"
+
+#: The integrations whose distribution is not named after the provider they
+#: advertise, because the two answer different questions. A provider name is the
+#: *namespace of the models*, and Chronos-2 is published as ``amazon/chronos-2``
+#: — the reference a user already knows. A distribution is named after the
+#: library it wraps, which is ``chronos``. Amazon publishes more than one
+#: forecasting model, so naming the distribution ``openforecast-amazon`` would
+#: claim a vendor rather than a library.
+#:
+#: A table rather than a rule, and a short one on purpose: the convention is that
+#: the two names agree, and every entry here is a place it had to be written down
+#: that they do not.
+INTEGRATION_NAMES: Mapping[str, str] = {"amazon": "chronos"}
 
 
 def default_cache_root() -> Path:
@@ -95,9 +109,14 @@ def shipped_provider_names() -> frozenset[str]:
     return frozenset({BUILTIN_PROVIDER_NAME})
 
 
+def integration_for(name: str) -> str:
+    """The distribution that provides the models namespaced ``name``."""
+    return INTEGRATION_NAMES.get(name, name)
+
+
 def module_for(name: str) -> str:
     """The module ``python -m`` runs to serve the provider called ``name``."""
-    return f"{MODULE_PREFIX}{name.replace('-', '_')}"
+    return f"{MODULE_PREFIX}{integration_for(name).replace('-', '_')}"
 
 
 def known_source(name: str, repository: Path | None = None) -> str:
@@ -107,12 +126,13 @@ def known_source(name: str, repository: Path | None = None) -> str:
     the one in the working tree is what a contributor means. Anywhere else it is
     the published distribution.
     """
+    integration = integration_for(name)
     root = repository if repository is not None else _repository_root()
     if root is not None:
-        candidate = root / "integrations" / name
+        candidate = root / "integrations" / integration
         if (candidate / "pyproject.toml").is_file():
             return str(candidate)
-    return f"{DISTRIBUTION_PREFIX}{name}"
+    return f"{DISTRIBUTION_PREFIX}{integration}"
 
 
 class ProviderRecord(BaseModel):

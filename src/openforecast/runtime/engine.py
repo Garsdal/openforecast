@@ -38,6 +38,20 @@ The combination is a weighted mean and nothing else. A quantile forecast is
 averaged level by level, which is quantile averaging rather than the quantile of
 a mixture; sample paths are not combined at all, because draw *i* of one member
 has nothing to do with draw *i* of another.
+
+Since Step 23 a forecast has two shapes, and :meth:`Engine.forecast` is one
+branch wide because of it:
+
+```text
+local/de-price@01K...   an artifact -> its recipe, its leaves, its fitted state
+amazon/chronos-2        a descriptor -> one provider call, no artifact at all
+```
+
+Which one a reference means is the registry's answer rather than a flag on the
+call, and everything after the branch is shared: the same forecast view, the
+same output check, the same validation of what came back. Nothing downstream of
+here can tell whether the numbers came from a model fitted this morning or from
+one pretrained a year ago.
 """
 
 from __future__ import annotations
@@ -46,6 +60,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import pyarrow as pa
@@ -84,7 +99,7 @@ from openforecast.runtime.transforms import (
     read_state,
     write_state,
 )
-from openforecast.runtime.validation import validate_view
+from openforecast.runtime.validation import validate_forecast_view, validate_view
 from openforecast.tasks.forecast import ForecastTask, OutputKind, OutputSpec
 from openforecast.tasks.plan import FitPlan
 from openforecast.views.forecast import ForecastView
@@ -201,7 +216,7 @@ class Engine:
     ) -> _Prepared:
         """Everything that has to be true before a provider is started."""
         request = ViewRequest.for_contract(
-            descriptor.training, plan=plan, task=task, shared_plan=shared
+            descriptor.required_training, plan=plan, task=task, shared_plan=shared
         )
         view = self._planner.fit_view(data, request)
         view, transforms = fit_transforms(view, leaf.transforms)
@@ -211,7 +226,7 @@ class Engine:
             provider=self._providers.get(descriptor.provider),
             view=view,
             transforms=transforms,
-            contract=descriptor.training,
+            contract=descriptor.required_training,
         )
 
     def _describe(
@@ -260,10 +275,39 @@ class Engine:
         output: OutputSpec | None = None,
         origin_time: str | datetime | None = None,
     ) -> Forecast:
-        """Forecast ``horizon`` steps with a fitted artifact."""
+        """Forecast ``horizon`` steps, with a fitted artifact or a pretrained model."""
         task = ForecastTask(horizon)
         output = OutputSpec.point() if output is None else output
-        handle = self._resolve_artifact(model)
+        resolved = self._resolve(model)
+        context = normalize_forecast_context(data, origin_time=origin_time)
+        combined = (
+            self._zero_shot(resolved, context, task, output)
+            if isinstance(resolved, ModelDescriptor)
+            else self._fitted(resolved, context, task, output)
+        )
+        answer = Forecast(
+            combined,
+            origin_time=context.origin_time,
+            horizon=horizon,
+            targets=context.schema.targets,
+            instance_keys=context.schema.instance_keys,
+            model=str(resolved.ref),
+        )
+        # `quantiles(..., from_samples=n)` was executed as a sample forecast, so
+        # the reduction happens here rather than in the provider: one estimator,
+        # applied to whoever drew the paths, is the whole of what makes two
+        # providers' quantiles comparable.
+        return answer.to_quantiles(output.levels) if output.derived_from_samples else answer
+
+    def _fitted(
+        self,
+        handle: ModelHandle,
+        context: ForecastContext,
+        task: ForecastTask,
+        output: OutputSpec,
+    ) -> pa.Table:
+        """The forecast of an artifact: every leaf answered from its own state."""
+        horizon = task.horizon
         if not handle.serves_horizon(horizon):
             bound = [record.horizon for record in handle.training_records]
             raise IncompatibleForecastTask(
@@ -271,7 +315,6 @@ class Engine:
                 f"forecast {horizon} steps; fit it for the horizon you need"
             )
         artifact = self._store.read(handle.ref)
-        context = normalize_forecast_context(data, origin_time=origin_time)
         _check_data_schema(handle.data_schema, context, handle.ref)
 
         members = self._leaf_state(handle, artifact.recipe)
@@ -280,20 +323,47 @@ class Engine:
             self._answer(leaf, record, context, task, output, paths)
             for leaf, record, paths in members
         ]
-        combined = _combine(artifact.recipe, iter(answers))
-        answer = Forecast(
-            combined,
-            origin_time=context.origin_time,
-            horizon=horizon,
-            targets=context.schema.targets,
-            instance_keys=context.schema.instance_keys,
-            model=str(handle.ref),
+        return _combine(artifact.recipe, iter(answers))
+
+    def _zero_shot(
+        self,
+        descriptor: ModelDescriptor,
+        context: ForecastContext,
+        task: ForecastTask,
+        output: OutputSpec,
+    ) -> pa.Table:
+        """The forecast of a pretrained model, which was never fitted here.
+
+        Everything a fitted forecast reads out of the artifact is absent, and
+        each absence is a fact rather than a gap. There is no horizon bound,
+        because nothing bound one. There is no fitted schema to check the
+        context against, because the model was not fitted on any data — so what
+        the declaration is checked against is the forecast view itself, which is
+        the only data this model will ever see. There are no transforms, because
+        a recipe is fitted and this is a reference.
+
+        The provider is still handed a state directory, and it is empty on
+        purpose: the contract is "the directory belonging to this model", and
+        for a model nothing was fitted for there is nothing in it. Whatever
+        pretrained weights the integration needs are the integration's own, in
+        its own environment, and are not part of an OpenForecast artifact.
+        """
+        _check_output(output, descriptor)
+        executed = output.as_executed()
+        view = self._planner.forecast_view(
+            context, ViewRequest(kind=ViewKind.FORECAST, horizon=task.horizon)
         )
-        # `quantiles(..., from_samples=n)` was executed as a sample forecast, so
-        # the reduction happens here rather than in the provider: one estimator,
-        # applied to whoever drew the paths, is the whole of what makes two
-        # providers' quantiles comparable.
-        return answer.to_quantiles(output.levels) if output.derived_from_samples else answer
+        validate_forecast_view(view, descriptor)
+        with TemporaryDirectory(prefix="openforecast-zero-shot-") as empty:
+            answer = self._providers.get(descriptor.provider).forecast(
+                model=descriptor.ref,
+                params={},
+                view=view,
+                output=executed.model_dump(mode="json"),
+                state=Path(empty),
+            )
+        _check_answer(answer, view, executed, descriptor)
+        return answer
 
     def _answer(
         self,
@@ -340,7 +410,13 @@ class Engine:
             for index, (leaf, record) in enumerate(zip(found, records, strict=True))
         ]
 
-    def _resolve_artifact(self, model: ModelInput) -> ModelHandle:
+    def _resolve(self, model: ModelInput) -> ModelHandle | ModelDescriptor:
+        """What this reference forecasts with: an artifact, or a pretrained model.
+
+        The registry answers both, and which one came back is the whole of the
+        difference between the two lifecycles. A recipe is neither — it names
+        models to fit rather than a model to forecast with.
+        """
         if isinstance(model, ModelHandle):
             return model
         if isinstance(model, Pipeline | Ensemble | Reduction):
@@ -349,13 +425,7 @@ class Engine:
                 "and forecast with the local/... reference that comes back"
             )
         ref = model.ref if isinstance(model, Model) else ModelRef.parse(model)
-        resolved = self._registry.resolve(ref)
-        if isinstance(resolved, ModelDescriptor):
-            raise UnsupportedPlanError(
-                f"{ref} is used zero-shot, and executing a model that was never fitted "
-                f"arrives with the first pretrained model that needs it"
-            )
-        return resolved
+        return self._registry.resolve(ref)
 
     def __repr__(self) -> str:
         return (
@@ -575,7 +645,8 @@ def _check_shared_plan(plan: FitPlan, descriptors: Sequence[ModelDescriptor]) ->
     """
     if len(descriptors) < 2 or plan.window is None:
         return
-    if not any(descriptor.training.view is ViewKind.SEQUENCES for descriptor in descriptors):
+    views = {descriptor.required_training.view for descriptor in descriptors}
+    if ViewKind.SEQUENCES not in views:
         raise RecipeError(
             "no member of this recipe learns from context -> horizon sequences, so the "
             "WindowPlan would have no effect on any of them. Drop it, or ensemble in a "

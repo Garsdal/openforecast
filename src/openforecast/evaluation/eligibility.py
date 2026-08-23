@@ -55,6 +55,13 @@ missing values it cannot consume      DataError, from the capability check
 features it cannot be given           DataError, naming the features
 a target dimensionality it lacks      DataError, naming the count
 ```
+
+A pretrained model is therefore reported as ineligible, and the reason says why:
+there is no fit to be refused, so ``amazon/chronos-2`` is not a model this
+question is about. It is not a gap in the screen — a zero-shot model needs no
+screening, since the thing eligibility is protecting against is spending a fit
+to find out. Forecast with it directly, or put it in ``of.backtest`` beside the
+fitted candidates, which is where the two lifecycles are actually compared.
 """
 
 from __future__ import annotations
@@ -131,7 +138,7 @@ def _eligibility(
     """One model, answered by doing what a fit would do short of fitting."""
     try:
         request = ViewRequest.for_contract(
-            descriptor.training,
+            descriptor.required_training,
             plan=_plan_for(descriptor, plan),
             task=None if horizon is None else ForecastTask(horizon),
         )
@@ -151,6 +158,6 @@ def _plan_for(descriptor: ModelDescriptor, plan: FitPlan | None) -> FitPlan | No
     """
     if plan is None or plan.window is None:
         return plan
-    if descriptor.training.view is ViewKind.SEQUENCES:
+    if descriptor.training is not None and descriptor.training.view is ViewKind.SEQUENCES:
         return plan
     return plan.model_copy(update={"window": None})

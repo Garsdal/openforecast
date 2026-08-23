@@ -264,6 +264,7 @@ deliberately complete enough to plan against on its own:
 | Declaration           | What the engine does with it                        |
 | --------------------- | --------------------------------------------------- |
 | `lifecycle`           | whether a bare reference can forecast at all         |
+| `training`            | `None` for a pretrained model, which has no training unit |
 | `training.view`       | which execution view to materialize                  |
 | `training.origin_scope` | whether several forecast origins may be learned from jointly |
 | `capabilities`        | whether the materialized view is data this model accepts |
@@ -281,6 +282,18 @@ time, or to generalize to an instance it never saw — it has no shared paramete
 to generalize with. Those declarations are rejected at construction, which is
 the same rule the user meets later as `OriginScopeError` when point-in-time data
 reaches AutoARIMA with `AllOrigins()`.
+
+The lifecycle governs whether there is a contract at all. `training` is optional
+because a pretrained foundation model has no training unit to describe, and a
+contract nothing will ever read is a declaration nothing can ever check — so the
+descriptor refuses both a fittable model without one and a frozen one with one.
+Which lifecycle a reference has is therefore never a second declaration: it
+follows from `lifecycle.supports_fit`, and `of.fit` on a model that declares
+`False` raises `ModelDoesNotSupportFit` rather than materializing a view nobody
+described. `Engine.forecast` is one branch wide because of it — an artifact
+resolves to its recipe and its fitted state, a descriptor resolves to one
+provider call — and everything after that branch is shared, so nothing
+downstream can tell which lifecycle produced a number.
 
 ## Recipes, plans and tasks
 
@@ -359,7 +372,9 @@ reference that names an unfitted model raises `ModelRequiresFit` rather than
 fitting one on whatever data the forecast call happened to be given — a number
 that looks like a forecast from a model the caller never trained is worse than an
 error. A model declaring `requires_fit=False` resolves to its descriptor instead,
-because zero-shot use is a declaration, not an assumption.
+because zero-shot use is a declaration, not an assumption — and forecasting from
+that descriptor is what `amazon/chronos-2` does, with no artifact anywhere in
+the sequence.
 
 ## The engine and the providers
 

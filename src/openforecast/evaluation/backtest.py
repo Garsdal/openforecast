@@ -83,13 +83,26 @@ A candidate that *is* already a revision — ``local/de-price@01K...``, or the
 handle a fit returned — is evaluated rather than refitted, which is how you ask
 whether the model in production has drifted:
 
+A pretrained model — ``amazon/chronos-2`` — is the same shape of candidate for
+the opposite reason: there was never anything to train, so it forecasts at every
+origin as it stands. That is what makes the two lifecycles comparable on one
+leaderboard:
+
 ```text
 pinned revision      forecast at every origin, fit_seconds is null
+pretrained model     forecast at every origin, fit_seconds is null, no artifact
 recipe / bare ref    fit per fold
 ```
 
 Read from what the candidate is rather than from a mode argument, since a
-revision names one immutable fit and there is nothing else it could mean.
+revision names one immutable fit, a pretrained reference names a model that
+cannot be fitted, and there is nothing else either could mean.
+
+The two null ``fit_seconds`` do not mean the same thing about the numbers beside
+them, and ``origin_fidelity`` is where the difference shows: a frozen revision
+reports the fidelity of the fit it came from and may have seen data that
+postdates the early origins, while a pretrained model reports ``pretrained`` and
+saw none of this data at any origin.
 
 ## The plan a candidate is fitted with
 
@@ -120,6 +133,7 @@ import pyarrow as pa
 from pydantic import BaseModel, ConfigDict
 
 from openforecast.artifacts.handle import ModelHandle
+from openforecast.artifacts.manifest import LOCAL_NAMESPACE
 from openforecast.client import OpenForecast, default_client
 from openforecast.data._arrow import (
     InstanceKey,
@@ -149,6 +163,15 @@ __all__ = ["Candidate", "backtest", "plan_for"]
 ARTIFACT_PREFIX = "backtest"
 
 _NOT_A_NAME = re.compile(r"[^a-z0-9]+")
+
+#: What ``origin_fidelity`` says for a model that was never fitted here. The
+#: column reports how the *training* origins were come by, and a pretrained model
+#: has none of them in this run — so it is neither ``simulated`` nor ``observed``
+#: rather than defaulting to one of the two.
+PRETRAINED = "pretrained"
+
+#: What a candidate already is, when it is not a recipe to fit per fold.
+_Standing = ModelHandle | ModelDescriptor
 
 
 class Candidate(BaseModel):
@@ -247,11 +270,18 @@ def backtest(
     predictions: list[_Prediction] = []
     keys: dict[str, pa.DataType] = {}
     for candidate in candidates:
-        frozen = _frozen(candidate, executor)
-        fit_plan = None if frozen is not None else plan_for(candidate, executor, plan)
+        standing = _standing(candidate, executor)
+        fit_plan = None if standing is not None else plan_for(candidate, executor, plan)
         for fold in folds:
             measured = _measure(
-                executor, candidate, fit_plan, fold, validation.horizon, metrics, frozen, requested
+                executor,
+                candidate,
+                fit_plan,
+                fold,
+                validation.horizon,
+                metrics,
+                standing,
+                requested,
             )
             rows.extend(measured.rows)
             predictions.extend(measured.predictions)
@@ -288,8 +318,8 @@ def plan_for(
         return candidate.plan
     if template is None or template.window is None:
         return template
-    views = {_descriptor(client, ref).training.view for ref in estimator_refs(candidate.model)}
-    if ViewKind.SEQUENCES in views:
+    contracts = [_descriptor(client, ref).training for ref in estimator_refs(candidate.model)]
+    if any(contract is not None and contract.view is ViewKind.SEQUENCES for contract in contracts):
         return template
     return template.model_copy(update={"window": None})
 
@@ -381,6 +411,20 @@ class _Prediction:
 
 
 @dataclass(frozen=True)
+class _Executed:
+    """The model one fold actually forecast with, as the result records it."""
+
+    #: What ``client.forecast`` is handed: a pinned artifact, or a model that
+    #: needs no fitting. Either way a reference, so a backtest over a service
+    #: names it the same way a local one does.
+    model: str
+    fit_seconds: float | None
+    provider: str
+    artifact: str
+    origin_fidelity: str
+
+
+@dataclass(frozen=True)
 class _Measurement:
     """What one candidate at one origin produced: the scores and the predictions."""
 
@@ -397,30 +441,19 @@ def _measure(
     fold: Fold,
     horizon: int,
     metrics: Sequence[Metric],
-    frozen: ModelHandle | None,
+    standing: _Standing | None,
     output: OutputSpec,
 ) -> _Measurement:
     """Forecast this candidate at one origin and score the answer.
 
-    Fitting first, unless the candidate is a frozen revision — which is the
-    whole of the difference between evaluating an artifact and backtesting a
-    recipe.
+    Fitting first, unless the candidate already stands on its own — a frozen
+    revision or a pretrained model — which is the whole of the difference
+    between evaluating a model and backtesting a recipe.
     """
-    if frozen is None:
-        started = perf_counter()
-        handle = client.fit(
-            candidate.model,
-            fold.train,
-            horizon=horizon,
-            plan=plan,
-            name=_artifact_name(candidate, fold),
-        )
-        fit_seconds: float | None = perf_counter() - started
-    else:
-        handle, fit_seconds = frozen, None
+    executed = _fit_for(client, candidate, plan, fold, horizon, standing)
 
     started = perf_counter()
-    forecast = client.forecast(handle.ref, fold.context, horizon=horizon, output=output)
+    forecast = client.forecast(executed.model, fold.context, horizon=horizon, output=output)
     forecast_seconds = perf_counter() - started
 
     predictions = _predictions(candidate, fold, forecast)
@@ -434,11 +467,11 @@ def _measure(
             metric=metric.name,
             value=measurement.value,
             pairs=measurement.pairs,
-            fit_seconds=fit_seconds,
+            fit_seconds=executed.fit_seconds,
             forecast_seconds=forecast_seconds,
-            origin_fidelity=_fidelity(handle),
-            provider=handle.manifest.provider,
-            artifact=str(handle.ref),
+            origin_fidelity=executed.origin_fidelity,
+            provider=executed.provider,
+            artifact=executed.artifact,
         )
         for metric, measurement in measured
     )
@@ -506,6 +539,46 @@ def _predictions(candidate: Candidate, fold: Fold, forecast: Forecast) -> tuple[
     return found
 
 
+def _fit_for(
+    client: OpenForecast,
+    candidate: Candidate,
+    plan: FitPlan | None,
+    fold: Fold,
+    horizon: int,
+    standing: _Standing | None,
+) -> _Executed:
+    """What this fold forecasts with, and what the result table says it was."""
+    if isinstance(standing, ModelDescriptor):
+        return _Executed(
+            model=str(standing.ref),
+            fit_seconds=None,
+            provider=standing.provider,
+            artifact=str(standing.ref),
+            origin_fidelity=PRETRAINED,
+        )
+    if standing is not None:
+        return _described(standing, fit_seconds=None)
+    started = perf_counter()
+    handle = client.fit(
+        candidate.model,
+        fold.train,
+        horizon=horizon,
+        plan=plan,
+        name=_artifact_name(candidate, fold),
+    )
+    return _described(handle, fit_seconds=perf_counter() - started)
+
+
+def _described(handle: ModelHandle, *, fit_seconds: float | None) -> _Executed:
+    return _Executed(
+        model=str(handle.ref),
+        fit_seconds=fit_seconds,
+        provider=handle.manifest.provider,
+        artifact=str(handle.ref),
+        origin_fidelity=_fidelity(handle),
+    )
+
+
 def _fidelity(handle: ModelHandle) -> str:
     """What the artifact says its origins were, rather than what was intended.
 
@@ -553,32 +626,69 @@ def _as_reference(entry: ModelInput) -> ModelInput:
     return entry
 
 
-def _frozen(candidate: Candidate, client: OpenForecast) -> ModelHandle | None:
-    """The artifact this candidate already is, or ``None`` if it is fitted per fold.
+def _standing(candidate: Candidate, client: OpenForecast) -> _Standing | None:
+    """What this candidate already is, or ``None`` if it is fitted per fold.
 
-    A pinned revision names one immutable fit. Evaluating it over history is a
-    real question — it is how you check whether the model in production has
-    drifted — and it is the only thing a revision can mean here, since there is
-    nothing left to train. What follows from that is that anything configuring a
-    fit is refused rather than silently ignored: a plan that will never be bound
-    and parameters that will never be read are a caller expecting an effect.
+    Two candidates need no fit, for opposite reasons, and they are found the
+    same way — from what the candidate *is*, never from a mode argument:
+
+    ```text
+    local/de-price@01K...   a fitted revision: there is nothing left to train
+    amazon/chronos-2        a pretrained model: there was never anything to train
+    ```
+
+    Both make the same thing true of the run, which is why they share a branch:
+    ``fit_seconds`` is null because no fit happened, and anything configuring a
+    fit is refused rather than silently ignored — a plan that will never be
+    bound and parameters that will never be read are a caller expecting an
+    effect.
+
+    They differ in one way worth knowing when reading a leaderboard. A frozen
+    revision was fitted on data that may postdate the early origins, so its
+    numbers can be optimistic. A pretrained model never saw this data at all, so
+    its numbers are the honest zero-shot ones, at every origin equally.
     """
     revision = candidate.revision
-    if revision is None:
+    if revision is not None:
+        _reject_fit_settings(candidate, revision, "a fitted revision, so it is evaluated as it is")
+        return client.artifact(str(revision))
+    pretrained = _pretrained(candidate, client)
+    if pretrained is None:
         return None
+    _reject_fit_settings(
+        candidate, pretrained.ref, "used zero-shot, so it forecasts as it was published"
+    )
+    return pretrained
+
+
+def _pretrained(candidate: Candidate, client: OpenForecast) -> ModelDescriptor | None:
+    """The pretrained model this candidate is, if there is nothing to fit.
+
+    Only a bare provider reference can be one. A composite recipe is fitted as a
+    whole — a member that cannot be fitted is refused by ``of.fit``, which is
+    where that belongs — and a ``local/`` name is an artifact rather than a model
+    the catalog describes.
+    """
+    model = candidate.model
+    if not isinstance(model, Model) or model.ref.namespace == LOCAL_NAMESPACE:
+        return None
+    descriptor = _descriptor(client, model.ref)
+    return None if descriptor.is_fittable else descriptor
+
+
+def _reject_fit_settings(candidate: Candidate, ref: ModelRef, because: str) -> None:
+    """Nothing configuring a fit may be set on a candidate that is never fitted."""
     if candidate.plan is not None:
         raise RecipeError(
-            f"{revision} is a fitted revision, so it is evaluated rather than fitted and "
-            f"the plan on this candidate would do nothing; backtest the model it was fitted "
-            f"from to fit one per fold"
+            f"{ref} is {because} rather than fitted, and the plan on this candidate would "
+            f"do nothing; backtest a model that is fitted per fold to use one"
         )
     model = candidate.model
     if isinstance(model, Model) and model.params:
         raise RecipeError(
-            f"{revision} is a fitted revision, so the parameters it was fitted with are "
+            f"{ref} is {because} rather than fitted, so the parameters it runs with are "
             f"already part of it and {sorted(model.params)} would do nothing"
         )
-    return client.artifact(str(revision))
 
 
 def _reject_pinned_members(candidate: Candidate) -> None:

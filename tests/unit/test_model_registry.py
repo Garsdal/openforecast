@@ -37,7 +37,6 @@ FOUNDATION = ModelDescriptor(
     provider="nixtla",
     display_name="TimeGPT",
     lifecycle=ModelLifecycle.pretrained(),
-    training=TrainingContract.sequences(),
 )
 
 TUNABLE = ModelDescriptor(
@@ -111,7 +110,7 @@ def test_a_model_reference_resolves_to_the_descriptor_to_plan_against(
 ) -> None:
     descriptor = registry.for_fit("nixtla/nhits")
     assert descriptor == NHITS
-    assert descriptor.training.view == NHITS.training.view
+    assert descriptor.required_training.view == NHITS.required_training.view
 
 
 def test_an_artifact_is_not_something_to_fit(registry: ModelRegistry) -> None:
