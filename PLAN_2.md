@@ -520,85 +520,155 @@ forecast = client.forecast(
 
 Make historical evaluation a first-class OpenForecast capability with genuine point-in-time correctness.
 
-Add only one major public operation:
+**Step 17 already built this.** `of.benchmark`, `ForecastOriginValidation`, `Fold`, the
+`origin_fidelity` column and the leakage guarantee all shipped. This step was drafted before
+Step 17 landed and originally specified `client.backtest(...)` as a new operation; building it
+would fork the evaluation path in two, which is exactly what its own goal said not to do.
 
-```python
-client.backtest(...)
-```
-
-Reuse the existing:
+So Step 19 is not a second framework. It is four changes to the one that exists:
 
 ```text
-origin selectors
-FitPlan
-ViewPlanner
-ForecastContext
-Forecast
+19.1  rename benchmark → backtest, everywhere
+19.2  metrics stay classes — the plan's "use strings" is struck
+19.3  one BacktestResult, holding predictions as well as metrics
+19.7  frozen artifacts are evaluated rather than refused
 ```
 
-rather than building another validation framework.
+plus one conformance test (19.6). Sections 19.4 and 19.5 are recorded as settled, with the
+tests that hold them, so Step 20 does not reopen them.
 
 ---
 
-## 19.1 Public API
+## 19.1 Rename `benchmark` → `backtest`
 
-Example:
-
-```python
-result = client.backtest(
-    model="sklearn/hist-gradient-boosting",
-    data=pit_dataset,
-    origins=of.OriginsBetween(
-        start="2026-01-01",
-        end="2026-07-01",
-        stride=24,
-    ),
-    horizon=72,
-    metrics=[
-        "mae",
-        "rmse",
-        "bias",
-    ],
-)
-```
-
-Sequence model:
-
-```python
-result = client.backtest(
-    model="nixtla/nhits",
-    data=pit_dataset,
-    origins=of.AllOrigins(stride=24),
-    horizon=72,
-    fit_plan=of.FitPlan(
-        sequences=of.SequencePlan(
-            context=168,
-        ),
-    ),
-    metrics=[
-        "mae",
-        "bias",
-    ],
-)
-```
-
-Use metric names as strings.
-
-Do not introduce:
+Everything downstream of here — Steps 21, 23, 24, 25, 26, 27, 28, 30, 31 — already says
+`backtest`. One name, and it is that one:
 
 ```text
-MAE()
-RMSE()
-MetricRegistry
-SlicePlan
-ValidationStrategy
+of.benchmark(...)              → of.backtest(...)
+BenchmarkResult                → BacktestResult
+BenchmarkColumn                → BacktestColumn
+BENCHMARK_COLUMNS              → BACKTEST_COLUMNS
+evaluation/benchmark.py        → evaluation/backtest.py
+tests/e2e/test_benchmarking.py → tests/e2e/test_backtesting.py
+ARTIFACT_PREFIX = "benchmark"  → "backtest"
 ```
 
-unless later requirements prove they are needed.
+It is a mechanical rename plus one behavioural consequence: the artifact alias prefix changes,
+so aliases written by an earlier version are not found under the new prefix. Pre-1.0, no
+migration — the pinned revisions are unaffected and only the human-readable alias moves.
+
+`backtest` is also the more honest word. `benchmark` says *compare these models*; the operation
+is *evaluate against history*, and comparing several is one thing you do with it. A single model
+over a stride of origins is a backtest, and it was always awkward to call that a benchmark of one.
+
+The signature does not otherwise change. It stays a module-level function beside `of.fit` and
+`of.forecast` with an optional `client=`, rather than becoming `client.backtest(...)` — the
+earlier draft's spelling — because that is how every other operation in the SDK reads:
+
+```python
+result = of.backtest(
+    models=["sklearn/hist-gradient-boosting", "nixtla/nhits"],
+    data=pit_dataset,
+    validation=of.ForecastOriginValidation(
+        origins=of.OriginsBetween(start="2026-01-01", end="2026-07-01", stride=24),
+        horizon=72,
+    ),
+    metrics=[of.MAE(), of.RMSE(), of.Bias()],
+)
+```
+
+`models=` stays plural. A one-model backtest passes a list of one; a `model=` singular alias is
+a second door onto the same room and Step 24 is where the public surface gets frozen, not here.
+
+Whether an `OpenForecast.backtest` method mirrors the function — as `client.fit` mirrors
+`of.fit` — is Step 24's call, made once for all three operations rather than separately here.
 
 ---
 
-## 19.2 Historical PIT forecast semantics
+## 19.2 Metrics stay classes
+
+The earlier draft said to use metric names as strings and not to introduce `MAE()`/`RMSE()`.
+Struck — Step 17 shipped classes and they are correct:
+
+```text
+metrics take parameters   MASE needs a seasonality, MAPE an epsilon,
+                          pinball loss a quantile — a string cannot say q=0.9
+Step 20 needs this now    probabilistic normalization brings CRPS and quantile
+                          loss, which are parameterized by construction
+strings would come back   "mape@eps=1e-3" is a parsing mini-language, which is
+                          the MetricRegistry the draft was trying to avoid, worse
+```
+
+The rule already in the code and worth stating: **a metric is constructed as a class and
+identified as a string.** `of.MAE()` builds it, `"mae"` names it in the result table, and
+`leaderboard("mae")` looks it up. Both spellings, each where it belongs.
+
+Still refused, and the draft was right about these: `MetricRegistry`, `SlicePlan`. Four metrics
+do not need plugin indirection, and 19.3 covers grouping without a DSL.
+
+---
+
+## 19.3 One `BacktestResult`
+
+One public result primitive, holding both tables. Today `BenchmarkResult` holds only the metric
+rows: the per-point predictions are computed inside `_measure`, scored, and dropped. That makes
+the most common question after a backtest — *does it degrade after horizon 48?* — unanswerable
+from the result you were handed.
+
+Predictions, Arrow-backed:
+
+```text
+model
+fold
+instance keys...
+origin_time
+event_time
+horizon_step
+target
+prediction
+actual
+```
+
+Metrics — the existing long table, unchanged but for the rename:
+
+```text
+model fold origin metric value pairs fit_seconds forecast_seconds
+origin_fidelity provider artifact
+```
+
+Accessors:
+
+```python
+result.predictions
+result.metrics
+result.leaderboard("mae")
+result.best("mae")
+result.to_pandas()
+```
+
+For grouped analysis, computed from `predictions` rather than by re-running anything:
+
+```python
+result.metrics_by("horizon_step")
+result.metrics_by(["horizon_step", "zone"])
+```
+
+Group keys are column names of the predictions table, and an unknown one is an error naming the
+columns that exist. That is the whole slicing story — no DSL.
+
+`predictions` is where the memory goes: origins × horizon × instances × targets rows per model.
+Retaining it is the right default because the metric rows are derivable from it and not the
+reverse, but the size should be stated in the docstring rather than discovered.
+
+---
+
+---
+
+## 19.4 Historical PIT forecast semantics — settled in Step 17
+
+Recorded rather than rebuilt. `Fold.context` is a real `ForecastContext` and goes through the
+normal forecast path; there is no historical prediction implementation to keep in step.
 
 For validation origin:
 
@@ -636,35 +706,16 @@ This is important because backtesting and production forecasting should exercise
 
 ---
 
-## 19.3 Prevent training leakage
+## 19.5 Training leakage and event-time datasets — settled in Step 17
 
-For validation origin `T`, training should conservatively use only rows satisfying:
+For validation origin `T`, a fold trains on `data.up_to(T)` — a *different* dataset, not the
+same one with a cut-off remembered alongside it, so the later vintages are absent rather than
+merely unused. Held by `test_validation.py::test_later_vintages_are_absent_from_what_a_fold_trains_on`
+and `test_benchmarking.py::test_a_fit_at_a_historical_origin_never_saw_a_later_vintage`.
 
-```text
-origin_time < T
-```
+Explicit target publication/availability semantics stay deferred.
 
-and labels satisfying:
-
-```text
-event_time < T
-```
-
-for V1.
-
-This establishes a safe baseline.
-
-Later, OpenForecast may support explicit target publication/availability semantics, but do not add that yet.
-
----
-
-## 19.4 Event-time datasets
-
-`TimeSeriesFrame` works through the same API.
-
-OpenForecast simulates historical origins.
-
-So:
+`TimeSeriesFrame` goes through the same API with the weaker guarantee it can honestly make:
 
 ```text
 ForecastDataset
@@ -674,68 +725,11 @@ TimeSeriesFrame
     → simulated historical information sets
 ```
 
-Results record:
+Every result row records which one it was:
 
 ```text
 origin_fidelity = observed | simulated
 ```
-
----
-
-## 19.5 `BacktestResult`
-
-Add only one public result primitive:
-
-```python
-BacktestResult
-```
-
-Predictions are Arrow-backed:
-
-```text
-model
-fold
-instance keys...
-origin_time
-event_time
-horizon_step
-target
-prediction
-actual
-```
-
-Metrics:
-
-```text
-model
-fold
-metric
-value
-```
-
-Convenience:
-
-```python
-result.predictions
-result.metrics
-result.to_pandas()
-```
-
-For grouped analysis:
-
-```python
-result.metrics_by("horizon_step")
-```
-
-or:
-
-```python
-result.metrics_by(
-    ["horizon_step", "zone"]
-)
-```
-
-Avoid creating a slicing DSL.
 
 ---
 
@@ -771,6 +765,12 @@ and can never contain:
 
 This should become a permanent high-level conformance test.
 
+Still to do. Step 17 asserts the guarantee at the *manifest* — the artifact records the origin
+it was materialized from — and at the forecast value. Neither observes what the provider was
+handed. The missing test poisons a vintage and asserts on the materialized view itself, so a
+future planner change that reaches past the origin fails here rather than being invisible
+behind a plausible number.
+
 ---
 
 ## 19.7 Frozen artifacts
@@ -789,11 +789,31 @@ If a trainable model definition/recipe is passed, fit per fold.
 
 Infer this from model lifecycle rather than introducing a separate mode argument.
 
+This reverses `_reject_pinned`, which today refuses a pinned revision as a candidate on the
+grounds that a revision names one fit and a candidate is fitted per fold. That reasoning holds
+for the fit and is the wrong conclusion: a frozen artifact is a legitimate thing to evaluate
+over history — it is how you check whether the model in production has drifted — it simply
+skips the fit. So:
+
+```text
+pinned revision      forecast at every origin, fit_seconds is null
+recipe / bare ref    fit per fold, as today
+```
+
+Both are the same loop with the fit made conditional, and `artifact` in the result already
+carries which revision produced each row. One caveat the docstring should name: a frozen
+artifact was fitted on data that may postdate the early origins, so its numbers are not
+comparable with a fitted candidate's in the same table. That is the caller's judgement to
+make, not a reason to refuse the run — the same way `origin_fidelity` is reported rather than
+enforced.
+
 ---
 
 ## Done when
 
-All model families can be evaluated using the same historical-origin semantics, with a hard PIT leakage guarantee.
+`of.backtest` is the only name for the operation, `BacktestResult` carries predictions as well
+as metrics, a frozen artifact can be evaluated without refitting, and the poisoned-vintage
+conformance test holds the leakage guarantee at the provider boundary.
 
 ---
 
@@ -941,17 +961,17 @@ interval_width
 Example:
 
 ```python
-result = client.backtest(
-    model="nixtla/nhits",
+result = of.backtest(
+    models=["nixtla/nhits"],
     data=dataset,
-    horizon=72,
+    validation=of.RollingOrigin(horizon=72, windows=5),
     output=of.OutputSpec.quantiles(
         [0.1, 0.5, 0.9]
     ),
     metrics=[
-        "mae",
-        "pinball",
-        "coverage",
+        of.MAE(),
+        of.PinballLoss(q=0.9),
+        of.Coverage(),
     ],
 )
 ```
@@ -1143,12 +1163,11 @@ Do not combine samples yet.
 The existing API simply works:
 
 ```python
-result = client.backtest(
-    model=recipe,
+result = of.backtest(
+    models=[recipe],
     data=pit_dataset,
-    origins=...,
-    horizon=72,
-    metrics=["mae", "bias"],
+    validation=of.ForecastOriginValidation(origins=..., horizon=72),
+    metrics=[of.MAE(), of.Bias()],
 )
 ```
 
@@ -1360,14 +1379,16 @@ Chronos receives the correct current information set.
 Because Step 19 already exists:
 
 ```python
-result = client.backtest(
-    model="amazon/chronos-2",
+result = of.backtest(
+    models=["amazon/chronos-2"],
     data=pit_dataset,
-    origins=of.AllOrigins(stride=24),
-    horizon=72,
+    validation=of.ForecastOriginValidation(
+        origins=of.AllOrigins(stride=24),
+        horizon=72,
+    ),
     metrics=[
-        "mae",
-        "bias",
+        of.MAE(),
+        of.Bias(),
     ],
 )
 ```
