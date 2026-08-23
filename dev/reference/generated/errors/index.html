@@ -1545,6 +1545,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#invalidmodelparameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        InvalidModelParameters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#modeldoesnotsupportfit" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1622,6 +1633,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#providernotinstalled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ProviderNotInstalled
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#recipeerror" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1648,6 +1670,39 @@
     <span class="md-ellipsis">
       
         UnknownModelError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unsupporteddatashape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UnsupportedDataShape
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unsupportedfeature" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UnsupportedFeature
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unsupportedoutput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UnsupportedOutput
       
     </span>
   </a>
@@ -1774,6 +1829,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#invalidmodelparameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        InvalidModelParameters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#modeldoesnotsupportfit" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1851,6 +1917,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#providernotinstalled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ProviderNotInstalled
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#recipeerror" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1877,6 +1954,39 @@
     <span class="md-ellipsis">
       
         UnknownModelError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unsupporteddatashape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UnsupportedDataShape
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unsupportedfeature" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UnsupportedFeature
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unsupportedoutput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UnsupportedOutput
       
     </span>
   </a>
@@ -1929,23 +2039,23 @@ a model nobody can describe.</p>
 <p>A reference that simply names no artifact raises
 :class:<code>UnknownModelError</code> instead: the store is intact, the name is not in
 it.</p>
-<p><code>error.code</code> is <code>ARTIFACT_ERROR</code>.</p>
+<p><code>error.code</code> is <code>INVALID_ARTIFACT</code>.</p>
 <h2 id="dataerror"><code>DataError</code><a class="headerlink" href="#dataerror" title="Permanent link">&para;</a></h2>
 <p><em>Exception — <code>openforecast.errors</code></em></p>
 <p>Data does not satisfy the schema it was declared against.</p>
 <p>Raised instead of repairing the data. Duplicate rows are not deduplicated,
 off-grid timestamps are not snapped, missing values are not imputed.</p>
-<p><code>error.code</code> is <code>DATA_ERROR</code>.</p>
+<p><code>error.code</code> is <code>INVALID_DATA</code>.</p>
 <h2 id="duplicatemodelerror"><code>DuplicateModelError</code><a class="headerlink" href="#duplicatemodelerror" title="Permanent link">&para;</a></h2>
 <p><em>Exception — <code>openforecast.errors</code></em></p>
 <p>Two descriptors claim the same reference.</p>
 <p>A reference has to identify one model. Letting the second registration win
 would make which model you get depend on provider load order.</p>
-<p><code>error.code</code> is <code>DUPLICATE_MODEL_ERROR</code>.</p>
+<p><code>error.code</code> is <code>DUPLICATE_MODEL</code>.</p>
 <h2 id="frequencyerror"><code>FrequencyError</code><a class="headerlink" href="#frequencyerror" title="Permanent link">&para;</a></h2>
 <p><em>Exception — <code>openforecast.errors</code></em></p>
 <p>A frequency cannot be parsed, or has no fixed duration.</p>
-<p><code>error.code</code> is <code>FREQUENCY_ERROR</code>.</p>
+<p><code>error.code</code> is <code>INVALID_FREQUENCY</code>.</p>
 <h2 id="incompatibleforecasttask"><code>IncompatibleForecastTask</code><a class="headerlink" href="#incompatibleforecasttask" title="Permanent link">&para;</a></h2>
 <p><em>Exception — <code>openforecast.errors</code></em></p>
 <p>The artifact cannot answer the forecast that was asked of it.</p>
@@ -1960,7 +2070,16 @@ so the mismatch is raised instead.</p>
 <p>A point-in-time source table repeats its labels on every origin. If two of
 those copies hold different realizations, only one can be the outcome, and
 OpenForecast will not pick for you.</p>
-<p><code>error.code</code> is <code>INCONSISTENT_TRUTH_ERROR</code>.</p>
+<p><code>error.code</code> is <code>INCONSISTENT_TRUTH</code>.</p>
+<h2 id="invalidmodelparameters"><code>InvalidModelParameters</code><a class="headerlink" href="#invalidmodelparameters" title="Permanent link">&para;</a></h2>
+<p><em>Exception — <code>openforecast.errors</code></em></p>
+<p>A model's own parameters were rejected by the model.</p>
+<p>The half of a recipe OpenForecast does not interpret: <code>params</code> is passed to
+the provider as it was written, so a level the model has never heard of is
+refused by the model rather than by the catalog. A :class:<code>RecipeError</code>
+because the thing to fix is the recipe, and the code is its own because the
+fix is a parameter rather than the shape of the recipe around it.</p>
+<p><code>error.code</code> is <code>INVALID_MODEL_PARAMETERS</code>.</p>
 <h2 id="modeldoesnotsupportfit"><code>ModelDoesNotSupportFit</code><a class="headerlink" href="#modeldoesnotsupportfit" title="Permanent link">&para;</a></h2>
 <p><em>Exception — <code>openforecast.errors</code></em></p>
 <p>The reference names a model that cannot be fitted at all.</p>
@@ -1983,7 +2102,7 @@ contract the data cannot satisfy raises a data or scope error instead.</p>
 <p>Inherits from :class:<code>SchemaError</code> as well, because a malformed reference is
 a declaration that is wrong before any data is looked at, and a caller
 catching declaration errors should see this one too.</p>
-<p><code>error.code</code> is <code>MODEL_REF_ERROR</code>.</p>
+<p><code>error.code</code> is <code>INVALID_MODEL_REF</code>.</p>
 <h2 id="modelrequiresfit"><code>ModelRequiresFit</code><a class="headerlink" href="#modelrequiresfit" title="Permanent link">&para;</a></h2>
 <p><em>Exception — <code>openforecast.errors</code></em></p>
 <p>The reference names a model that has to be fitted before it can forecast.</p>
@@ -1996,17 +2115,19 @@ and forecast with the artifact reference that comes back.</p>
 <h2 id="openforecasterror"><code>OpenForecastError</code><a class="headerlink" href="#openforecasterror" title="Permanent link">&para;</a></h2>
 <p><em>Exception — <code>openforecast.errors</code></em></p>
 <p>Base class for every error OpenForecast raises deliberately.</p>
-<p>Every one of them carries a :attr:<code>code</code>: the class name in
-<code>SCREAMING_SNAKE_CASE</code>, so <code>ModelDoesNotSupportFit</code> is
-<code>MODEL_DOES_NOT_SUPPORT_FIT</code>. Derived rather than declared per class,
-because a code that has to be written down beside the name is a code that
-can disagree with it — and a caller branching on <code>error.code</code> should be
-reading the same fact <code>except</code> reads.</p>
-<p>The code is what a caller <em>acts</em> on and the message is what a person reads.
-Step 27 is where the rest of the envelope lands — a structured <code>details</code>
-mapping, the CLI's <code>--json</code> failures, the HTTP body — and it hangs off
-this property rather than replacing it.</p>
-<p><code>error.code</code> is <code>OPEN_FORECAST_ERROR</code>.</p>
+<p>Raised directly only where a failure is genuinely nothing more specific — a
+config file that cannot be read, two flags that configure the same field.
+Everything a caller might reasonably branch on has a subclass, and therefore
+a code of its own.</p>
+<p><code>details</code> are keyword arguments, so a raise site states the specifics
+beside the sentence that reports them:</p>
+<div class="highlight"><pre><span></span><code><span class="k">raise</span> <span class="n">ModelRequiresFit</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">ref</span><span class="si">}</span><span class="s2"> has to be fitted first"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">ref</span><span class="p">))</span>
+</code></pre></div>
+<p>They hold JSON-ready scalars and lists of them — a model reference as text,
+a horizon as a number, the features a model cannot be given — because the
+envelope they end up in crosses a process, a socket and a pipe. What they are
+<em>not</em> is a second copy of the message: the message is a sentence about them.</p>
+<p><code>error.code</code> is <code>ERROR</code>.</p>
 <h2 id="originscopeerror"><code>OriginScopeError</code><a class="headerlink" href="#originscopeerror" title="Permanent link">&para;</a></h2>
 <p><em>Exception — <code>openforecast.errors</code></em></p>
 <p>More forecast origins were selected than the requested view can express.</p>
@@ -2022,7 +2143,15 @@ model on data the caller never asked for.</p>
 was asked for a horizon and returned half of it, or one that is named by a
 descriptor but is not installed. The request was well-formed — what came
 back was not.</p>
-<p><code>error.code</code> is <code>PROVIDER_ERROR</code>.</p>
+<p><code>error.code</code> is <code>PROVIDER_EXECUTION_FAILED</code>.</p>
+<h2 id="providernotinstalled"><code>ProviderNotInstalled</code><a class="headerlink" href="#providernotinstalled" title="Permanent link">&para;</a></h2>
+<p><em>Exception — <code>openforecast.errors</code></em></p>
+<p>A model was advertised by a provider that is not here to execute it.</p>
+<p>Its own code because it is the one provider failure with an obvious remedy,
+and the remedy is a command: <code>openforecast providers install &lt;name&gt;</code>. An
+agent that can read that off <code>error.code</code> and <code>error.details['provider']</code>
+can install what it needs and retry, which is the whole point of Step 27.4.</p>
+<p><code>error.code</code> is <code>PROVIDER_NOT_INSTALLED</code>.</p>
 <h2 id="recipeerror"><code>RecipeError</code><a class="headerlink" href="#recipeerror" title="Permanent link">&para;</a></h2>
 <p><em>Exception — <code>openforecast.errors</code></em></p>
 <p>A recipe or a plan does not describe something executable.</p>
@@ -2030,19 +2159,41 @@ back was not.</p>
 last step forecasts nothing, an ensemble whose weights do not match its
 members, a model parameter naming something OpenForecast owns. All of it is
 wrong before any data is looked at.</p>
-<p><code>error.code</code> is <code>RECIPE_ERROR</code>.</p>
+<p><code>error.code</code> is <code>INVALID_RECIPE</code>.</p>
 <h2 id="schemaerror"><code>SchemaError</code><a class="headerlink" href="#schemaerror" title="Permanent link">&para;</a></h2>
 <p><em>Exception — <code>openforecast.errors</code></em></p>
 <p>Declared semantics are internally inconsistent.</p>
 <p>Raised before any data is looked at: a target that is also a feature, a
 static feature carrying an availability, duplicate instance keys.</p>
-<p><code>error.code</code> is <code>SCHEMA_ERROR</code>.</p>
+<p><code>error.code</code> is <code>INVALID_SCHEMA</code>.</p>
 <h2 id="unknownmodelerror"><code>UnknownModelError</code><a class="headerlink" href="#unknownmodelerror" title="Permanent link">&para;</a></h2>
 <p><em>Exception — <code>openforecast.errors</code></em></p>
 <p>Nothing is registered under that reference.</p>
 <p>Distinct from a malformed reference: the name is well-formed, and no
 provider advertises it.</p>
-<p><code>error.code</code> is <code>UNKNOWN_MODEL_ERROR</code>.</p>
+<p><code>error.code</code> is <code>MODEL_NOT_FOUND</code>.</p>
+<h2 id="unsupporteddatashape"><code>UnsupportedDataShape</code><a class="headerlink" href="#unsupporteddatashape" title="Permanent link">&para;</a></h2>
+<p><em>Exception — <code>openforecast.errors</code></em></p>
+<p>The data is well-formed, and this model does not take that shape.</p>
+<p>A panel handed to a model that declares a single series, or four targets
+handed to a univariate one. Nothing is wrong with the data — the three
+subclasses of :class:<code>DataError</code> here are the cases where the fix is to
+choose a different model rather than to change the data, which is a different
+recovery and therefore a different code.</p>
+<p><code>error.code</code> is <code>UNSUPPORTED_DATA_SHAPE</code>.</p>
+<h2 id="unsupportedfeature"><code>UnsupportedFeature</code><a class="headerlink" href="#unsupportedfeature" title="Permanent link">&para;</a></h2>
+<p><em>Exception — <code>openforecast.errors</code></em></p>
+<p>The data carries a feature role the model declares it cannot consume.</p>
+<p>Named separately from :class:<code>UnsupportedDataShape</code> because the two remedies
+differ: a feature can be dropped from the data, where a shape cannot.</p>
+<p><code>error.code</code> is <code>UNSUPPORTED_FEATURE</code>.</p>
+<h2 id="unsupportedoutput"><code>UnsupportedOutput</code><a class="headerlink" href="#unsupportedoutput" title="Permanent link">&para;</a></h2>
+<p><em>Exception — <code>openforecast.errors</code></em></p>
+<p>The model cannot produce the kind of forecast that was asked for.</p>
+<p>A point-only model asked for quantiles. Refused from the declaration, before
+a provider is started, so this is never discovered from a stack trace after a
+fit has already run.</p>
+<p><code>error.code</code> is <code>UNSUPPORTED_OUTPUT</code>.</p>
 <h2 id="unsupportedplanerror"><code>UnsupportedPlanError</code><a class="headerlink" href="#unsupportedplanerror" title="Permanent link">&para;</a></h2>
 <p><em>Exception — <code>openforecast.errors</code></em></p>
 <p>The configuration is expressible in the protocol but not yet executable.</p>
@@ -2050,7 +2201,7 @@ provider advertises it.</p>
 the capability lands. Until it does, a plan that uses one is refused loudly
 rather than accepted and quietly ignored, which would look to the caller
 like the search they asked for had run.</p>
-<p><code>error.code</code> is <code>UNSUPPORTED_PLAN_ERROR</code>.</p>
+<p><code>error.code</code> is <code>UNSUPPORTED_PLAN</code>.</p>
 
 
 

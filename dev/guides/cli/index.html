@@ -777,6 +777,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#asking-the-build-what-a-request-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Asking the build what a request is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#streams-and-exit-codes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1622,6 +1633,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#asking-the-build-what-a-request-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Asking the build what a request is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#streams-and-exit-codes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1778,6 +1800,24 @@ table rendering shows a preview and says how many it is not showing. A model
 prints as the <code>ModelDescriptor</code> the HTTP projection returns for
 <code>GET /v1/models</code>, so an agent reading a model over the CLI and one reading it
 over the network are reading one schema rather than two spellings of it.</p>
+<h2 id="asking-the-build-what-a-request-is">Asking the build what a request is<a class="headerlink" href="#asking-the-build-what-a-request-is" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>openforecast<span class="w"> </span>schema<span class="w"> </span>fit
+openforecast<span class="w"> </span>schema<span class="w"> </span>fit<span class="w"> </span>--json
+</code></pre></div>
+<p><code>--json</code> prints the JSON Schema of the request itself, which is the same document
+committed under <code>spec/schemas</code>, generated from the Pydantic models the commands
+validate against. So the shape of a request never has to be guessed at:</p>
+<div class="highlight"><pre><span></span><code>inspect schema  -&gt;  construct request  -&gt;  execute
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>openforecast<span class="w"> </span>schema<span class="w"> </span>forecast<span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">'.required'</span>
+openforecast<span class="w"> </span>schema<span class="w"> </span>backtest<span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">'.properties | keys'</span>
+openforecast<span class="w"> </span>schema<span class="w"> </span>recipe<span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">'."$defs" | keys'</span>
+</code></pre></div>
+<p>There is one for every request and for every object a request is built out of —
+<code>fit</code>, <code>forecast</code>, <code>backtest</code>, <code>recipe</code>, <code>plan</code>, <code>output</code>, <code>series-schema</code>,
+<code>model</code> and <code>error</code> — and <code>openforecast schema --help</code> lists them. Without
+<code>--json</code> the command prints the top-level fields and which of them are required,
+which is the version worth reading in a terminal.</p>
 <h2 id="streams-and-exit-codes">Streams and exit codes<a class="headerlink" href="#streams-and-exit-codes" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>stdout    the requested output, and nothing else
 stderr    logs, progress, warnings, and the message when something fails
@@ -1791,6 +1831,22 @@ writes one sentence to stderr and exits non-zero:</p>
 </code></pre></div>
 <p>That is what makes a pipeline reliable: <code>openforecast models list --json | jq</code>
 either parses or the exit code says why not.</p>
+<p>With <code>--json</code>, a failure is structured too — still on stderr, still with an empty
+stdout and a non-zero exit code:</p>
+<div class="highlight"><pre><span></span><code>openforecast<span class="w"> </span>forecast<span class="w"> </span>--model<span class="w"> </span>nixtla/nhits<span class="w"> </span>--data<span class="w"> </span>./dataset<span class="w"> </span>--horizon<span class="w"> </span><span class="m">24</span><span class="w"> </span>--json
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"error"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"code"</span><span class="p">:</span><span class="w"> </span><span class="s2">"MODEL_REQUIRES_FIT"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"nixtla/nhits has to be fitted before it can forecast; ..."</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"details"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"nixtla/nhits"</span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The <code>code</code> is the part to write a branch on. It is the same envelope the HTTP API
+answers with and the same three fields <code>except of.OpenForecastError as error</code>
+gives you in Python, and the codes are stable — a message is free to be rewritten
+for clarity, so recovery that string-matches one is recovery that breaks.</p>
 <h2 id="checking-an-installation">Checking an installation<a class="headerlink" href="#checking-an-installation" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>openforecast<span class="w"> </span>doctor
 openforecast<span class="w"> </span>doctor<span class="w"> </span>--json
