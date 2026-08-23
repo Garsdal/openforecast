@@ -5,15 +5,14 @@ descriptors("amazon")                    # every model, as the handshake reports
 adapter_for("amazon/chronos-2", "amazon")  # the one that executes it
 ```
 
-A catalog rather than a chain of ``if`` statements in the provider: a model is
-added by naming its adapter here, and both the handshake and the dispatch read
-the same table.
+A catalog rather than a chain of ``if`` statements in the provider: every
+compatible checkpoint specification is mapped through the same
+``ChronosAdapter``, and both handshake and dispatch read that generated table.
 
 One entry, and the plan says so outright: the point of the step is the second
 model lifecycle, not a shelf of checkpoints. ``amazon/chronos-bolt-base`` and
-the rest are a row here each once there is a reason to prefer one, and if adding
-the second needs more than a row then the zero-shot path is doing less than it
-claims.
+the rest are a ``CheckpointSpec`` row each once there is a reason to prefer one;
+adding the second needs no forecast implementation.
 
 Asking for the descriptors imports neither ``chronos`` nor ``torch`` — the
 adapter imports them inside the calls that need them — so a handshake stays
@@ -32,7 +31,7 @@ import pyarrow as pa
 from openforecast.errors import UnknownModelError
 from openforecast.models import ModelDescriptor, ModelRef
 from openforecast.views import ForecastView
-from openforecast_chronos.adapter import CHRONOS_2
+from openforecast_chronos.adapter import CHECKPOINTS, ChronosAdapter
 
 __all__ = ["Adapter", "adapter_for", "descriptors", "model_names"]
 
@@ -56,9 +55,9 @@ class Adapter(Protocol):
     def forecast(self, view: ForecastView, output: Mapping[str, Any], state: Path) -> pa.Table: ...
 
 
-#: Every model this integration provides, by the name in its reference.
+#: Every compatible checkpoint becomes an adapter through one protocol class.
 ADAPTERS: Mapping[str, Adapter] = {
-    CHRONOS_2.name: CHRONOS_2,
+    spec.name: ChronosAdapter.from_spec(spec) for spec in CHECKPOINTS
 }
 
 

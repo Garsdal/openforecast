@@ -1,10 +1,11 @@
 """The OpenForecast conformance suite, applied to this provider.
 
-Nothing here is written per model. The parameters are generated from the
-descriptors :class:`SktimeProvider` advertises, so every capability it declares
-becomes a fit that must succeed — over an event-time frame *and* over real
-forecast vintages — and everything it withholds becomes a request that must be
-refused before the provider is started.
+Nothing here is written per model. Certified descriptors exercise every
+capability of the shared sktime local and pooled protocol adapters — over an
+event-time frame *and* over real forecast vintages — and everything they
+withhold becomes a request that must be refused before the provider is started.
+Reflected forecasters inherit the local adapter; discovery tests separately
+verify their native tags and constructor schemas.
 
 This is the file Step 14 is really about: it is the *same* suite the Nixtla and
 Darts integrations run, generated from declarations rather than written per
@@ -34,7 +35,6 @@ suite = pytest.importorskip(
 )
 
 PROVIDER = SktimeProvider()
-DESCRIPTORS = PROVIDER.descriptors()
 
 #: What the suite must not be made to pay for. A boosted model's default is a
 #: hundred iterations, and none of them say anything about whether it consumes a
@@ -42,8 +42,15 @@ DESCRIPTORS = PROVIDER.descriptors()
 #: Only parameters the descriptor already advertises are accepted here, so this
 #: cannot quietly change what is being conformance-tested.
 PARAMETERS: dict[str, dict[str, object]] = {
+    "theta": {},
     "pooled-trees": {"max_iter": 5},
 }
+
+DESCRIPTORS = tuple(
+    descriptor
+    for descriptor in PROVIDER.descriptors()
+    if descriptor.ref.name in PARAMETERS
+)
 
 CASES = [
     pytest.param(descriptor, case, id=f"{descriptor.ref.name}-{case.name}")

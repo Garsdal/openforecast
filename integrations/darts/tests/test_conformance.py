@@ -1,10 +1,11 @@
 """The OpenForecast conformance suite, applied to this provider.
 
-Nothing here is written per model. The parameters are generated from the
-descriptors :class:`DartsProvider` advertises, so every capability it declares
-becomes a fit that must succeed — over an event-time frame *and* over real
-forecast vintages — and everything it withholds becomes a request that must be
-refused before the provider is started.
+Nothing here is written per model. Certified descriptors exercise every
+capability of the shared Darts local and global protocol adapters — over an
+event-time frame *and* over real forecast vintages — and everything they
+withhold becomes a request that must be refused before the provider is started.
+Reflected models inherit those adapters; discovery tests separately verify
+their native family, capabilities and constructor schemas.
 
 This is the file Step 13 is really about: it is the *same* suite the Nixtla
 integration runs, generated from declarations rather than written per library, so
@@ -32,7 +33,6 @@ suite = pytest.importorskip(
 )
 
 PROVIDER = DartsProvider()
-DESCRIPTORS = PROVIDER.descriptors()
 
 #: What the suite must not be made to pay for. A neural model's default is a
 #: hundred epochs, and none of them say anything about whether it consumes a
@@ -40,9 +40,16 @@ DESCRIPTORS = PROVIDER.descriptors()
 #: Only parameters the descriptor already advertises are accepted here, so this
 #: cannot quietly change what is being conformance-tested.
 PARAMETERS: dict[str, dict[str, object]] = {
+    "theta": {},
     "tide": {"n_epochs": 1},
     "nhits": {"n_epochs": 1},
 }
+
+DESCRIPTORS = tuple(
+    descriptor
+    for descriptor in PROVIDER.descriptors()
+    if descriptor.ref.name in PARAMETERS
+)
 
 CASES = [
     pytest.param(descriptor, case, id=f"{descriptor.ref.name}-{case.name}")

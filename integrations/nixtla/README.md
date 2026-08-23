@@ -132,9 +132,9 @@ integration's:
 src/openforecast_nixtla/
     __main__.py     the serving harness, two lines
     provider.py     the three provider calls, dispatched
-    catalog.py      which models exist, and which adapter runs each
+    catalog.py      discovers both libraries and selects a protocol adapter
     conversion.py   the views <-> Nixtla's long frame
-    parameters.py   a native parameter, as both a schema and a check
+    parameters.py   re-exports shared signature reflection and validation
     state.py        what an adapter remembers beside the native model
     adapters/
         statsforecast.py    local statistical models    -> SeriesView
@@ -147,9 +147,11 @@ constructed in `conversion.py` on the way into a Nixtla library and taken off
 again on the way out; what crosses the provider boundary is an execution view
 and an Arrow table in the canonical forecast columns.
 
-Neither adapter imports its library at module scope. A handshake — which is what
-installing a provider and listing models does — only asks what this integration
-advertises, and `neuralforecast` pulls in PyTorch.
+The installation handshake inspects `statsforecast.models` and
+`neuralforecast.models`, caches their public compatible classes, and derives
+constructor schemas and exogenous capabilities. Ordinary execution dispatches
+those specifications through the two adapters above; upgrading either library
+therefore expands the catalog without another model implementation.
 
 ## Development
 

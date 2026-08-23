@@ -26,9 +26,8 @@ extrapolation, mislabeled. So the last event time of every series is persisted
 and an origin that does not match it is refused with an explanation, rather than
 answered with numbers that quietly forecast the wrong steps.
 
-``sktime`` is imported inside the calls that need it rather than at module
-scope: a handshake asks what this integration advertises, and answering that
-should not pay for a library import.
+The catalog discovers sktime forecasters and class tags once and injects the
+selected class into this adapter. Fit and forecast contain no model-name dispatch.
 """
 
 from __future__ import annotations
@@ -83,12 +82,16 @@ class SktimeLocalAdapter:
         model_type: Callable[[], Any],
         parameters: Sequence[Parameter],
         defaults: Mapping[str, Any] | None = None,
+        missing_values: MissingValueSupport = MissingValueSupport.UNSUPPORTED,
+        seeded: bool = False,
     ) -> None:
         self._name = name
         self._display_name = display_name
         self._model_type = model_type
         self._parameters = named(parameters)
         self._defaults = dict(defaults or {})
+        self._missing_values = missing_values
+        self._seeded = seeded
 
     @property
     def name(self) -> str:
@@ -116,7 +119,7 @@ class SktimeLocalAdapter:
                 targets=TargetCapabilities(univariate=True, multivariate=False),
                 features=FeatureCapabilities(observed=False, known=False, static=False),
                 outputs=OutputCapabilities(point=True),
-                missing_values=MissingValueSupport.UNSUPPORTED,
+                missing_values=self._missing_values,
             ),
             parameters_schema=schema_of(self._parameters),
         )
@@ -127,7 +130,6 @@ class SktimeLocalAdapter:
         self, view: FitView, params: Mapping[str, Any], into: Path, *, seed: int | None
     ) -> None:
         """Fit one native forecaster per series, and persist each with what labels it."""
-        del seed  # the forecasters exposed here are deterministic
         if not isinstance(view, SeriesView):
             raise ProviderError(
                 f"{self._name} trains on one complete time series, so it cannot be fitted "
@@ -136,7 +138,7 @@ class SktimeLocalAdapter:
         prepared = conversion.training_series(view)
         entries: list[dict[str, Any]] = []
         for index, (series_id, series) in enumerate(prepared.series.items()):
-            model = self._instantiate(params)
+            model = self._instantiate(params, seed=seed)
             try:
                 model.fit(series)
             except Exception as error:
@@ -229,7 +231,7 @@ class SktimeLocalAdapter:
 
     # -- the native model ---------------------------------------------------
 
-    def _instantiate(self, params: Mapping[str, Any]) -> Any:
+    def _instantiate(self, params: Mapping[str, Any], *, seed: int | None) -> Any:
         """The native forecaster the caller's parameters describe.
 
         Over the adapter's own defaults, which are a *narrower* starting point
@@ -238,6 +240,8 @@ class SktimeLocalAdapter:
         library's behavior back. Nothing here is silently unreachable.
         """
         settings = {**self._defaults, **checked(params, self._parameters, self._name)}
+        if self._seeded:
+            settings["random_state"] = seed
         try:
             return self._model_type()(**settings)
         except (TypeError, ValueError) as error:

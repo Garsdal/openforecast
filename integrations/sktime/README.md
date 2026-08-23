@@ -170,9 +170,9 @@ inference is positional.
 src/openforecast_sktime/
     __main__.py     the serving harness, two lines
     provider.py     the three provider calls, dispatched
-    catalog.py      which models exist, and which adapter runs each
+    catalog.py      discovers installed forecasters from sktime's registry
     conversion.py   the views <-> sktime's pandas containers
-    parameters.py   a native parameter, as both a schema and a check
+    parameters.py   re-exports shared signature reflection and validation
     state.py        what an adapter remembers beside the native model
     adapters/
         local_models.py     fitted per series          -> SeriesView
@@ -192,9 +192,11 @@ a panel unit by *position* and maps the answer back, where the Nixtla integratio
 maintains a `unique_id` mapping and the Darts one a list-position mapping. Same
 bookkeeping problem, same place, a third spelling.
 
-No adapter imports `sktime` at module scope. A handshake — which is what
-installing a provider and listing models does — only asks what this integration
-advertises, and importing sktime pulls in its registry, scikit-learn and pandas.
+The installation handshake reads `sktime.registry.all_estimators`, class tags
+and soft-dependency declarations. Compatible forecasters that do not require a
+fit-time horizon share the local adapter; the pooled reduction remains the one
+specialized sequence protocol. Missing optional dependencies remove a model
+from the installed catalog rather than producing a descriptor that cannot run.
 
 ## What this integration is not
 

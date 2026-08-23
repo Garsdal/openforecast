@@ -34,10 +34,9 @@ answered with numbers that quietly forecast the wrong steps.
 another :class:`StatsForecastAdapter` beside it, which is the point of the
 parameters being declared as data.
 
-``statsforecast`` is imported inside the two calls that need it rather than at
-module scope. A handshake — which is what installing a provider and listing
-models does — only asks what this integration advertises, and paying for a JIT
-compiler to answer that would make discovery slow for no reason.
+The catalog imports StatsForecast once to discover its public model classes.
+This adapter remains model-agnostic: the selected class is injected as data and
+fit/forecast contain no per-model dispatch.
 """
 
 from __future__ import annotations
@@ -201,7 +200,7 @@ class StatsForecastAdapter:
         self._require_matching_origin(view, unique_ids, persisted)
 
         forecaster = StatsForecast.load(str(state / MODEL_FILENAME))
-        future = conversion.future_frame(view, unique_ids, exogenous)
+        future = conversion.future_frame(view, unique_ids, exogenous) if exogenous else None
         column = str(persisted["column"])
         try:
             predictions = forecaster.predict(

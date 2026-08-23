@@ -39,10 +39,9 @@ declares ``horizon_bound_at_fit`` and the engine refuses the request with
 true, so ``supports_unseen_instances`` is declared — and asserted in the tests,
 because a capability nobody exercised is a claim rather than a capability.
 
-``neuralforecast`` is imported inside the two calls that need it rather than at
-module scope. A handshake — which is what installing a provider and listing
-models does — only asks what this integration advertises, and importing PyTorch
-to answer that would make discovery slow for no reason.
+The catalog imports NeuralForecast once to discover its public model classes and
+class-level exogenous capabilities. This adapter remains model-agnostic: the
+selected class is injected as data and fit/forecast contain no per-model dispatch.
 """
 
 from __future__ import annotations
@@ -87,6 +86,8 @@ TRAINER_KWARGS: Mapping[str, Any] = {
     "enable_model_summary": False,
 }
 
+ALL_FEATURES = FeatureCapabilities(observed=True, known=True, static=True)
+
 
 class NeuralForecastAdapter:
     """One NeuralForecast model, as OpenForecast advertises and executes it."""
@@ -98,11 +99,13 @@ class NeuralForecastAdapter:
         display_name: str,
         build: Callable[..., Any],
         parameters: Sequence[Parameter],
+        features: FeatureCapabilities = ALL_FEATURES,
     ) -> None:
         self._name = name
         self._display_name = display_name
         self._build = build
         self._parameters = named(parameters)
+        self._features = features
 
     @property
     def name(self) -> str:
@@ -134,7 +137,7 @@ class NeuralForecastAdapter:
             capabilities=ModelCapabilities(
                 instances=InstanceCapabilities(single=True, panel=True),
                 targets=TargetCapabilities(univariate=True, multivariate=False),
-                features=FeatureCapabilities(observed=True, known=True, static=True),
+                features=self._features,
                 outputs=OutputCapabilities(point=True),
                 missing_values=MissingValueSupport.REQUIRES_TRANSFORM,
             ),

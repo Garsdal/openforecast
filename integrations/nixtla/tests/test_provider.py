@@ -2,8 +2,8 @@
 
 A handshake is the only thing that happens at installation time, so what it
 reports has to be right and it has to be cheap: the descriptors below are what
-the engine plans every fit against, and answering them may not import a
-forecasting library.
+the engine plans every fit against, and answering reflects the installed
+StatsForecast and NeuralForecast catalogs without fitting models.
 """
 
 from __future__ import annotations
@@ -35,10 +35,8 @@ def descriptor_for(name: str) -> ModelDescriptor:
 def test_the_provider_is_the_namespace_of_the_models_it_advertises() -> None:
     assert PROVIDER.name == PROVIDER_NAME == "nixtla"
     assert PROVIDER.version == PROVIDER_VERSION
-    assert {str(descriptor.ref) for descriptor in PROVIDER.descriptors()} == {
-        "nixtla/autoarima",
-        "nixtla/nhits",
-    }
+    refs = {str(descriptor.ref) for descriptor in PROVIDER.descriptors()}
+    assert {"nixtla/autoarima", "nixtla/autoets", "nixtla/nhits", "nixtla/patchtst"} <= refs
     assert all(descriptor.provider == "nixtla" for descriptor in PROVIDER.descriptors())
 
 
@@ -121,21 +119,14 @@ def test_the_declared_parameters_are_the_ones_that_are_accepted() -> None:
 
 def test_a_model_this_provider_does_not_have_is_named_as_such() -> None:
     with pytest.raises(UnknownModelError, match=r"nixtla/nhits"):
-        catalog.adapter_for("nixtla/autoets", "nixtla")
+        catalog.adapter_for("nixtla/not-a-model", "nixtla")
 
     with pytest.raises(UnknownModelError, match=r"not a model of the 'nixtla' provider"):
         catalog.adapter_for("darts/tcn", "nixtla")
 
 
-def test_the_handshake_imports_no_forecasting_library() -> None:
-    """Discovery is a question about descriptors, and it should stay cheap.
-
-    In a fresh interpreter, because by the time the rest of this suite has run
-    the libraries are loaded and the question would answer itself. It matters
-    more now than it did with one model: ``neuralforecast`` pulls in PyTorch,
-    and paying seconds of import to list two model names would make every
-    ``openforecast providers list`` feel broken.
-    """
+def test_the_handshake_discovers_from_the_installed_forecasting_libraries() -> None:
+    """The installed Nixtla versions, rather than copied class lists, are authoritative."""
     probe = (
         "import sys\n"
         "from openforecast_nixtla import NixtlaProvider\n"
@@ -147,7 +138,8 @@ def test_the_handshake_imports_no_forecasting_library() -> None:
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     )
 
-    assert completed.stdout.strip() == "[]", "answering a handshake imported a library"
+    assert "statsforecast" in completed.stdout
+    assert "neuralforecast" in completed.stdout
 
 
 @pytest.mark.parametrize(
@@ -174,4 +166,16 @@ def test_the_adapter_says_which_model_it_is() -> None:
     assert "autoarima" in repr(AUTOARIMA)
     assert NHITS.name == "nhits"
     assert "nhits" in repr(NHITS)
-    assert repr(PROVIDER) == f"NixtlaProvider(version={PROVIDER_VERSION}, models=2)"
+    assert repr(PROVIDER) == (
+        f"NixtlaProvider(version={PROVIDER_VERSION}, models={len(catalog.model_names())})"
+    )
+
+
+def test_discovered_models_inherit_their_native_protocol_and_parameters() -> None:
+    autoets = descriptor_for("autoets")
+    patchtst = descriptor_for("patchtst")
+
+    assert autoets.training.view is ViewKind.SERIES
+    assert "season_length" in autoets.parameters_schema["properties"]
+    assert patchtst.training.view is ViewKind.SEQUENCES
+    assert "max_steps" in patchtst.parameters_schema["properties"]

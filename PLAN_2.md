@@ -1432,6 +1432,98 @@ behind one forecast/backtest interface.
 
 ---
 
+# Step 23A — Native-protocol adapters and reflective catalogs
+
+## Goal
+
+Make integrations scale with their upstream ecosystems:
+
+```text
+one adapter per model          no
+one adapter per native protocol yes
+```
+
+The integration discovers convention-conforming native classes and maps each
+one to a shared execution family. A newly released upstream model should appear
+after the provider environment is refreshed without an OpenForecast adapter
+implementation.
+
+## 23A.1 Protocol families
+
+Use the execution contracts already proved by Steps 12–18:
+
+```text
+StatsForecast local class       -> SeriesView driver
+NeuralForecast global class     -> SequenceView driver
+sklearn regressor               -> TabularView driver
+Darts local/global class        -> SeriesView / SequenceView drivers
+sktime forecaster               -> SeriesView driver
+Chronos checkpoint spec         -> zero-shot ForecastView driver
+```
+
+Specialized pooled reductions or genuinely different native lifecycles remain
+separate protocol drivers. Model names are data resolved by a catalog, never
+branches in a provider.
+
+## 23A.2 Discover from the installed framework
+
+Prefer the framework's own registry or public model surface:
+
+```text
+sklearn      all_estimators(type_filter="regressor") + estimator tags
+sktime       all_estimators(estimator_types="forecaster") + class tags
+Darts        ForecastingModel class hierarchy + supports_* capabilities
+Nixtla       statsforecast.models / neuralforecast.models public classes
+Chronos      lightweight checkpoint manifest
+```
+
+Cache discovery for the provider process. The installation handshake records
+the resulting descriptors; OpenForecast core still imports no forecasting
+framework and planning still reads descriptors before materializing a view.
+
+## 23A.3 Reflect native parameters, reserve semantics
+
+Generate a closed JSON Schema from each native constructor. Pass through JSON-
+representable modeling parameters and let the native constructor remain the
+final validator.
+
+Do not expose opaque Python objects such as callbacks, losses, nested estimators
+or trainer instances. Do not expose a second spelling of context, horizon,
+feature roles, seed, output shape or provider execution policy. Those values are
+compiled from OpenForecast's recipe, plan and task exactly once.
+
+## 23A.4 Conservative discovery, certified overrides
+
+Automatic discovery grants only capabilities the native metadata can establish
+reliably. It must never infer probabilistic or covariate behavior from a class
+name or from a permissive method signature.
+
+Keep a small override table for models with:
+
+```text
+stronger verified capabilities
+parameter codecs or renamed enum values
+safer OpenForecast-specific defaults
+full generated conformance coverage
+```
+
+An override strengthens one model specification; it does not introduce another
+fit/forecast implementation. Run the complete conformance matrix for certified
+representatives of every protocol family, and generated discovery/schema tests
+for the catalog around them.
+
+## Done when
+
+- upgrading a framework automatically expands the compatible model catalog;
+- every discovered model dispatches through a protocol-family adapter;
+- native constructor parameters are reflected without copying parameter tables;
+- OpenForecast-owned semantics cannot be supplied through native parameters;
+- exceptional models are skipped or overridden explicitly rather than guessed;
+- Chronos checkpoints use the same data-specification pattern as trainable
+  model classes.
+
+---
+
 # Step 24 — Freeze and simplify the public Python SDK
 
 At this point, the forecasting architecture is quite broad.
@@ -2475,6 +2567,12 @@ DEFERRED
 Zero-shot foundation model
         │
         │ proves pretrained/no-fit lifecycle
+        ▼
+
+23A
+Native-protocol adapters + reflected catalogs
+        │
+        │ makes framework breadth declarative
         ▼
 
 ────────────────────────────────────

@@ -1,9 +1,9 @@
 """What the provider says about itself, before anything is fitted.
 
 A handshake is the only thing that happens at installation time, so what it
-reports has to be right and it has to be cheap: the descriptor below is what the
-engine plans every fit against, and answering for it may not import an estimator
-library.
+reports has to be right and it has to be cheap: the descriptors below are what
+the engine plans every fit against, and answering reflects the installed
+estimator registry without constructing or fitting models.
 
 The last section is the boundary claim of Step 18, and it is checked by parsing
 this distribution's own imports rather than by trusting them: a provider that
@@ -61,9 +61,13 @@ def descriptor_for(name: str) -> ModelDescriptor:
 def test_the_provider_is_the_namespace_of_the_models_it_advertises() -> None:
     assert PROVIDER.name == PROVIDER_NAME == "sklearn"
     assert PROVIDER.version == PROVIDER_VERSION
-    assert {str(descriptor.ref) for descriptor in PROVIDER.descriptors()} == {
-        "sklearn/hist-gradient-boosting"
-    }
+    refs = {str(descriptor.ref) for descriptor in PROVIDER.descriptors()}
+    assert {
+        "sklearn/hist-gradient-boosting",
+        "sklearn/random-forest",
+        "sklearn/ridge",
+    } <= refs
+    assert len(refs) > 3
     assert all(descriptor.provider == "sklearn" for descriptor in PROVIDER.descriptors())
 
 
@@ -134,20 +138,14 @@ def test_the_declared_parameters_are_the_ones_that_are_accepted() -> None:
 
 def test_a_model_this_provider_does_not_have_is_named_as_such() -> None:
     with pytest.raises(UnknownModelError, match=r"sklearn/hist-gradient-boosting"):
-        catalog.adapter_for("sklearn/ridge", "sklearn")
+        catalog.adapter_for("sklearn/not-a-regressor", "sklearn")
 
     with pytest.raises(UnknownModelError, match=r"not a model of the 'sklearn' provider"):
         catalog.adapter_for("sktime/theta", "sklearn")
 
 
-def test_the_handshake_imports_no_estimator_library() -> None:
-    """Discovery is a question about descriptors, and it should stay cheap.
-
-    In a fresh interpreter, because by the time the rest of this suite has run
-    scikit-learn is loaded and the question would answer itself. Importing it
-    pulls in scipy and its compiled extensions, and paying that to list one model
-    name would make every ``openforecast providers list`` feel broken.
-    """
+def test_the_handshake_discovers_from_the_installed_estimator_library() -> None:
+    """The installed sklearn version, rather than a copied list, is the catalog."""
     probe = (
         "import sys\n"
         "from openforecast_sklearn import SklearnProvider\n"
@@ -158,7 +156,7 @@ def test_the_handshake_imports_no_estimator_library() -> None:
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     )
 
-    assert completed.stdout.strip() == "[]", "answering a handshake imported a library"
+    assert "sklearn" in completed.stdout
 
 
 def imported_names() -> list[tuple[str, str, str]]:
@@ -258,5 +256,17 @@ def test_a_whole_fit_and_forecast_loads_no_forecasting_framework(tmp_path: Path)
 def test_the_adapter_says_which_model_it_is() -> None:
     assert HIST_GRADIENT_BOOSTING.name == "hist-gradient-boosting"
     assert "hist-gradient-boosting" in repr(HIST_GRADIENT_BOOSTING)
-    assert catalog.model_names() == ("hist-gradient-boosting",)
-    assert repr(PROVIDER) == f"SklearnProvider(version={PROVIDER_VERSION}, models=1)"
+    assert "hist-gradient-boosting" in catalog.model_names()
+    assert "random-forest" in catalog.model_names()
+    assert repr(PROVIDER) == (
+        f"SklearnProvider(version={PROVIDER_VERSION}, models={len(catalog.model_names())})"
+    )
+
+
+def test_a_discovered_estimator_gets_native_parameters_and_conservative_capabilities() -> None:
+    ridge = descriptor_for("ridge")
+
+    assert "alpha" in ridge.parameters_schema["properties"]
+    assert "random_state" not in ridge.parameters_schema["properties"]
+    assert ridge.training.view is ViewKind.TABULAR
+    assert ridge.capabilities.missing_values is MissingValueSupport.REQUIRES_TRANSFORM

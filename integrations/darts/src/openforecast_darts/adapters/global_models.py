@@ -6,7 +6,7 @@ state      into/        -> model.pt + model.pt.ckpt + state.json
 forecast   ForecastView -> predict(n, series=[...], ...) -> the canonical columns
 ```
 
-A Darts ``TorchForecastingModel`` is *global*: one set of parameters is learned
+A Darts ``GlobalForecastingModel`` is *global*: one set of parameters is learned
 from every training sample at once, and a sample is one ``context -> horizon``
 window at one forecast origin. This is the half of the integration that Step 13
 exists for — the same point-in-time claim as ``nixtla/nhits``, made by a library
@@ -48,10 +48,9 @@ special case in the code, which is what stops a known feature from being quietly
 handed over as a past covariate — a value known ahead of its event time, used as
 if it were not.
 
-``darts`` is imported inside the calls that need it rather than at module scope.
-A handshake — which is what installing a provider and listing models does — only
-asks what this integration advertises, and importing PyTorch to answer that
-would make discovery slow for no reason.
+The catalog discovers Darts' global classes and runtime capabilities once and
+injects the selected class into this adapter. Fit and forecast contain no
+model-name dispatch.
 """
 
 from __future__ import annotations
@@ -117,12 +116,22 @@ class DartsGlobalAdapter:
         model_type: Callable[[], Any],
         parameters: Sequence[Parameter],
         features: FeatureCapabilities,
+        common_parameters: Sequence[Parameter] = TORCH_PARAMETERS,
+        horizon_bound_at_fit: bool = True,
+        constructor_parameters: Sequence[str] = (
+            "input_chunk_length",
+            "output_chunk_length",
+            "pl_trainer_kwargs",
+            "random_state",
+        ),
     ) -> None:
         self._name = name
         self._display_name = display_name
         self._model_type = model_type
-        self._parameters = named((*TORCH_PARAMETERS, *parameters))
+        self._parameters = named((*common_parameters, *parameters))
         self._features = features
+        self._horizon_bound_at_fit = horizon_bound_at_fit
+        self._constructor_parameters = set(constructor_parameters)
 
     @property
     def name(self) -> str:
@@ -150,7 +159,10 @@ class DartsGlobalAdapter:
             provider=provider,
             display_name=self._display_name,
             lifecycle=ModelLifecycle.trainable(),
-            training=TrainingContract.sequences(supports_unseen_instances=True),
+            training=TrainingContract.sequences(
+                horizon_bound_at_fit=self._horizon_bound_at_fit,
+                supports_unseen_instances=True,
+            ),
             capabilities=ModelCapabilities(
                 instances=InstanceCapabilities(single=True, panel=True),
                 targets=TargetCapabilities(univariate=True, multivariate=False),
@@ -251,7 +263,10 @@ class DartsGlobalAdapter:
         metadata = view.metadata
         wanted = (int(persisted["context"]), int(persisted["horizon"]))
         given = (metadata.context, metadata.horizon)
-        if given != wanted:
+        mismatch = given[0] != wanted[0] or (
+            self._horizon_bound_at_fit and given[1] != wanted[1]
+        )
+        if mismatch:
             raise DataError(
                 f"{self._name} was fitted on {wanted[0]} context steps and a horizon of "
                 f"{wanted[1]}, and this view holds {given[0]} and {given[1]}; a global "
@@ -271,12 +286,14 @@ class DartsGlobalAdapter:
         concepts OpenForecast owns.
         """
         settings = checked(params, self._parameters, self._name)
-        compiled: dict[str, Any] = {
-            "input_chunk_length": context,
-            "output_chunk_length": horizon,
-            "pl_trainer_kwargs": dict(TRAINER_KWARGS),
-        }
-        if seed is not None:
+        compiled: dict[str, Any] = {}
+        if "input_chunk_length" in self._constructor_parameters:
+            compiled["input_chunk_length"] = context
+        if "output_chunk_length" in self._constructor_parameters:
+            compiled["output_chunk_length"] = horizon
+        if "pl_trainer_kwargs" in self._constructor_parameters:
+            compiled["pl_trainer_kwargs"] = dict(TRAINER_KWARGS)
+        if seed is not None and "random_state" in self._constructor_parameters:
             compiled["random_state"] = seed
         try:
             return self._model_type()(**settings, **compiled)
