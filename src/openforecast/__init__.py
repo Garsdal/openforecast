@@ -100,6 +100,27 @@ invents a distribution around a point forecast.
 The execution views of Step 4 are deliberately not re-exported here either: they
 are a provider-facing boundary, imported from :mod:`openforecast.views`, not
 something a user of the library needs to name.
+
+Step 24 stopped adding to that and froze what is here. There is one name per
+intent — ``fit``, never ``train``; ``forecast``, never ``predict`` or ``infer``;
+``backtest``, never ``evaluate`` or ``historical_forecasts`` — and every
+operation is reachable the same two ways:
+
+```python
+client = of.OpenForecast()
+
+client.models.list()
+client.models.get("nixtla/autoarima")
+
+client.fit(...)
+client.forecast(...)
+client.backtest(...)
+```
+
+A module-level ``of.backtest(..., client=client)`` is ``client.backtest(...)``
+and nothing else, so the two signatures are identical apart from which client
+runs it. ``__all__`` below is the whole public surface and is asserted exactly,
+which is what keeps it from growing by accident.
 """
 
 from openforecast import models
