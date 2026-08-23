@@ -138,3 +138,55 @@ def test_inspecting_something_that_is_not_installed_fails_loudly(cache: Path) ->
 def test_an_unknown_command_is_refused_by_the_parser() -> None:
     with pytest.raises(SystemExit):
         run("providers", "levitate")
+
+
+# -- openforecast serve -----------------------------------------------------
+
+
+def test_serve_binds_to_loopback_unless_told_otherwise() -> None:
+    """A forecasting service has no authentication yet.
+
+    So the default has to be the one that does not publish an unauthenticated
+    service to a network by accident; ``--host 0.0.0.0`` is a decision the
+    operator makes out loud.
+    """
+    args = build_parser().parse_args(["serve"])
+
+    assert args.host == "127.0.0.1"
+    assert args.port == 8321
+    assert args.store is None
+
+
+def test_serve_runs_the_application_over_a_local_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The command is a projection: it builds the app and hands it to uvicorn.
+
+    Asserted without binding a socket, because what the command decides is which
+    engine and which address — the serving itself is uvicorn's.
+    """
+    from openforecast.commands import serve as serve_command
+    from openforecast.server.transport import LocalTransport
+
+    served: dict[str, Any] = {}
+
+    class FakeUvicorn:
+        @staticmethod
+        def run(app: object, *, host: str, port: int, log_level: str) -> None:
+            served.update(app=app, host=host, port=port)
+
+    captured: dict[str, Any] = {}
+
+    def application(transport: LocalTransport) -> object:
+        captured["store"] = transport.engine.store.root
+        return "the app"
+
+    monkeypatch.setattr(serve_command, "_uvicorn", lambda: FakeUvicorn)
+    monkeypatch.setattr(serve_command, "_application", application)
+
+    result = run("serve", "--store", str(tmp_path / "store"), "--port", "9999")
+
+    assert result.code == 0
+    assert served == {"app": "the app", "host": "127.0.0.1", "port": 9999}
+    assert captured["store"] == tmp_path / "store"
+    assert "http://127.0.0.1:9999/v1" in result.out

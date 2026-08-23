@@ -35,7 +35,8 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > `darts/nhits`, in `integrations/darts` — and the sktime integration from
 > Step 14: `sktime/theta` and `sktime/pooled-trees`, in `integrations/sktime` —
 > and the public V1 surface of Step 15, which is the one below and no longer
-> moves.
+> moves — and the HTTP/OpenAPI projection of Step 16: `openforecast serve`,
+> `HttpTransport`, and a generated `spec/openapi/openapi.json`.
 > `of.fit` and `of.forecast` work end to end today with `builtin/seasonal-naive`,
 > both Nixtla models, all three Darts models and both sktime models, in this
 > process or over the subprocess protocol — the global ones trained on real
@@ -314,8 +315,8 @@ works on both, and only the recorded `OriginFidelity` differs.
 
 Recipes and plans are a serializable AST, tagged by `kind`, and
 `of.parse_recipe` reads one back. The same JSON is what reaches an artifact
-manifest, a provider subprocess request and — in Step 16 — an HTTP body; no part
-of it is provider-specific.
+manifest, a provider subprocess request and an HTTP body; no part of it is
+provider-specific.
 
 ## Fitted models
 
@@ -575,6 +576,64 @@ same three calls the in-process one does, and `builtin/seasonal-naive` fitted
 over the wire produces the same forecast as `builtin/seasonal-naive` fitted
 here — which is the test that says the abstraction holds.
 
+## The same semantics, remotely
+
+Where a forecast runs is a client's transport, not a fact about the library:
+
+```python
+client = of.OpenForecast(transport=of.LocalTransport())
+client = of.OpenForecast(transport=of.HttpTransport("http://localhost:8321"))
+```
+
+Both expose `client.models.list()`, `client.models.get(...)`, `client.fit(...)`
+and `client.forecast(...)`, and the code above them never branches on which one
+it is holding. `LocalTransport` owns an engine and an artifact store;
+`HttpTransport` owns a URL. The service is the *same* transport behind a router,
+which is why `tests/e2e/test_remote_transport.py` is written as a comparison —
+two clients, the same data, the same calls, and the Arrow tables that come back
+have to be equal.
+
+```bash
+openforecast serve                      # loopback:8321 by default
+```
+
+```text
+GET  /v1/models
+GET  /v1/models/{ref}
+
+POST /v1/fit
+POST /v1/forecast
+
+GET  /v1/artifacts/{ref}
+```
+
+Control travels as JSON and bulk data as Arrow IPC — the same split the provider
+protocol makes. A recipe, a plan and a horizon are Pydantic models and appear in
+the OpenAPI document as themselves; a dataset crosses as the Arrow tables it
+already holds rather than as nested JSON rows, and is decoded through the
+ordinary constructors, so a truncated table fails to load instead of being
+fitted as a shorter history. A failure crosses as the failure: a service that
+refuses a fit answers with the exception name, and `except of.DataError` means
+the same thing on both transports.
+
+`spec/openapi/openapi.json` is generated from those models, committed, and
+diffed in CI, which is rule 7 made mechanical:
+
+```bash
+uv run generate-openapi
+git diff --exit-code spec/openapi/openapi.json
+```
+
+Serving needs the extra; calling a service does not.
+
+```bash
+pip install 'openforecast[server]'      # to run one
+pip install openforecast                # to call one
+```
+
+`HttpTransport` is `urllib`, so the core install stays `pydantic`, `pyarrow` and
+`platformdirs`, and a remote-only user never installs a web framework.
+
 ## The architectural invariant
 
 > OpenForecast owns forecasting semantics. Providers only consume
@@ -697,6 +756,11 @@ uv run pyright          # type check
 uv run pytest           # test
 ```
 
+```bash
+uv sync --extra server  # add FastAPI and uvicorn, for `openforecast serve`
+uv run generate-openapi # regenerate spec/openapi/openapi.json
+```
+
 Arrow is the canonical data-plane representation, so anything crossing a
 process or language boundary is Arrow IPC rather than JSON.
 
@@ -715,8 +779,8 @@ src/openforecast/
     providers/   the provider SDK — the client contract, the serving harness —
                  and the built-in reference provider
     protocol/    the provider wire protocol: messages, errors, versions
-    commands/    the CLI
-    server/      the HTTP projection
+    commands/    the CLI, including `openforecast serve`
+    server/      the HTTP projection: wire models, transports, the FastAPI app
     client.py    the user-facing client
 
 integrations/    provider distributions, each independently versioned

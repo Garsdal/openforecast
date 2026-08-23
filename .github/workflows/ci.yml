@@ -38,11 +38,47 @@ jobs:
       - name: Test
         run: uv run pytest --cov
 
+      # Rule 7: OpenAPI is a projection of OpenForecast semantics, never their
+      # source. The document is generated from the Pydantic request/response
+      # models and committed, so a change to what a fit request means shows up
+      # here as a diff rather than as a spec that quietly disagrees with the
+      # code the generated SDKs are built against.
+      - name: Assert the committed OpenAPI document is the generated one
+        run: |
+          uv run generate-openapi
+          git diff --exit-code spec/openapi/openapi.json
+
       - name: Assert no forecasting framework in the dependency tree
         run: |
           uv tree --no-dev > tree.txt
           cat tree.txt
           ! grep -Eiq '(neural|stats|ml|hierarchical)forecast|darts|sktime|torch|jax|tensorflow|lightgbm|xgboost' tree.txt
+
+  # The core install is `pydantic`, `pyarrow` and `platformdirs`, and the HTTP
+  # projection does not change that: serving needs `openforecast[server]`, and
+  # *calling* a service needs nothing at all. This job is the only one that
+  # installs neither the dev group nor the extra, so a web framework that had
+  # crept into the runtime dependencies would fail here rather than in a user's
+  # container.
+  core-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync without the dev group or any extra
+        run: uv sync --no-dev --no-editable
+
+      - name: Import the package and a remote client
+        run: |
+          uv run --no-dev python -c "
+          import openforecast as of
+          client = of.OpenForecast(transport=of.HttpTransport('http://localhost:8321'))
+          print(client, of.models.list())
+          "
 
   # Each integration is its own distribution in its own environment, which is
   # the whole point of the provider boundary — so it is also its own job. The
