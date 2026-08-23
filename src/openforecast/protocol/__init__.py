@@ -9,7 +9,10 @@ execution views in ``views/``, and those two layers cannot import each other.
 ``ForecastColumn`` is written by whoever executes a model and read by the engine
 that asked for it. The request and response messages in
 :mod:`openforecast.protocol.messages` are written by the engine and read by a
-provider in another process, and vice versa. ``PROTOCOL_VERSION`` ties all of it
+provider in another process, and vice versa. ``quantile_of_samples`` is here for the same reason
+``ForecastColumn`` is: the engine reduces sample draws to quantiles and a
+probabilistic metric reads a quantile out of the draws it was given, and those
+two are one estimator. ``PROTOCOL_VERSION`` ties all of it
 together: it is stamped into an artifact manifest, declared in every message,
 and checked at the handshake, and those are one number.
 """
@@ -31,6 +34,7 @@ from openforecast.protocol.messages import (
     parse_request,
     parse_response,
 )
+from openforecast.protocol.quantiles import quantile_of_samples
 from openforecast.protocol.version import PROTOCOL_VERSION
 from openforecast.protocol.vocabulary import ForecastColumn, ViewKind, forecast_columns
 
@@ -54,4 +58,5 @@ __all__ = [
     "forecast_columns",
     "parse_request",
     "parse_response",
+    "quantile_of_samples",
 ]

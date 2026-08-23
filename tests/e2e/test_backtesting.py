@@ -28,6 +28,17 @@ import pytest
 
 import openforecast as of
 from openforecast.errors import DataError, RecipeError
+from openforecast.models import (
+    FeatureCapabilities,
+    InstanceCapabilities,
+    MissingValueSupport,
+    ModelCapabilities,
+    ModelCatalog,
+    OutputCapabilities,
+    TargetCapabilities,
+)
+from openforecast.runtime import ProviderRegistry
+from tests import providers
 
 MODEL = "builtin/seasonal-naive"
 START = datetime(2026, 1, 1)
@@ -229,6 +240,9 @@ def test_the_result_holds_every_prediction_as_well_as_the_metrics(
         "event_time",
         "horizon_step",
         "target",
+        "kind",
+        "quantile",
+        "sample",
         "prediction",
         "actual",
     ]
@@ -489,6 +503,180 @@ def test_parameters_on_a_frozen_candidate_would_do_nothing_either(
             models=[of.Model(str(frozen.ref), params={"season_length": 2})],
             data=frame(),
             validation=of.RollingOrigin(horizon=3, windows=1),
+            metrics=[of.MAE()],
+            client=client,
+        )
+
+
+# -- backtesting a distribution ---------------------------------------------
+
+# The reference provider is deterministic, so a probabilistic backtest needs a
+# model that declares quantiles or samples. The stub does, and what is under test
+# is exactly what does *not* change: one metric list, one prediction table, one
+# set of columns, whichever of the two forms the provider is native in.
+PROBABILISTIC = "stub/series"
+
+
+def probabilistic_client(tmp_path: Path, *, quantiles: bool, samples: bool) -> of.OpenForecast:
+    descriptor = providers.descriptor(
+        "series",
+        capabilities=ModelCapabilities(
+            instances=InstanceCapabilities(single=True, panel=True),
+            targets=TargetCapabilities(univariate=True, multivariate=True),
+            features=FeatureCapabilities(observed=True, known=True, static=True),
+            outputs=OutputCapabilities(point=True, quantiles=quantiles, samples=samples),
+            missing_values=MissingValueSupport.NATIVE,
+        ),
+    )
+    return of.OpenForecast(
+        store=tmp_path / "probabilistic",
+        catalog=ModelCatalog((descriptor,)),
+        providers=ProviderRegistry([providers.StubProvider(models=(descriptor,), value=8.0)]),
+    )
+
+
+def probabilistic_metrics() -> list[of.Metric]:
+    return [of.MAE(), of.PinballLoss(0.9), of.Coverage(), of.IntervalWidth()]
+
+
+def test_a_quantile_backtest_scores_the_distribution_it_asked_for(tmp_path: Path) -> None:
+    result = of.backtest(
+        models=[PROBABILISTIC],
+        data=frame(),
+        validation=of.RollingOrigin(horizon=2, windows=2),
+        output=of.OutputSpec.quantiles([0.1, 0.5, 0.9]),
+        metrics=probabilistic_metrics(),
+        client=probabilistic_client(tmp_path, quantiles=True, samples=False),
+    )
+
+    assert result.metric_names == ("mae", "pinball[0.9]", "coverage[0.8]", "interval_width[0.8]")
+    # The stub answers value + (level - 0.5) * 10, so the 0.1 to 0.9 interval is
+    # eight wide at every event time — the one number here that is arithmetic.
+    widths = [
+        value
+        for metric, value in zip(
+            values(result.metrics, "metric"), values(result.metrics, "value"), strict=True
+        )
+        if metric == "interval_width[0.8]"
+    ]
+    assert widths == [pytest.approx(8.0)] * 2
+    coverages = [
+        value
+        for metric, value in zip(
+            values(result.metrics, "metric"), values(result.metrics, "value"), strict=True
+        )
+        if metric == "coverage[0.8]"
+    ]
+    assert all(0.0 <= coverage <= 1.0 for coverage in coverages)
+
+
+def test_the_prediction_table_holds_one_row_per_level(tmp_path: Path) -> None:
+    result = of.backtest(
+        models=[PROBABILISTIC],
+        data=frame(),
+        validation=of.RollingOrigin(horizon=2, windows=2),
+        output=of.OutputSpec.quantiles([0.1, 0.5, 0.9]),
+        metrics=[of.MAE()],
+        client=probabilistic_client(tmp_path, quantiles=True, samples=False),
+    )
+
+    # folds x horizon x levels, of one instance and one target.
+    assert result.predictions.num_rows == 2 * 2 * 3
+    assert set(values(result.predictions, "kind")) == {"quantile"}
+    assert set(values(result.predictions, "quantile")) == {0.1, 0.5, 0.9}
+    assert set(values(result.predictions, "sample")) == {None}
+    # A point metric read the median of it: two outcomes per fold, not six rows.
+    assert values(result.metrics, "pairs") == [2, 2]
+
+
+def test_a_sample_model_answers_the_same_backtest(tmp_path: Path) -> None:
+    """The claim of Step 20: the caller's code does not change with the provider."""
+    result = of.backtest(
+        models=[PROBABILISTIC],
+        data=frame(),
+        validation=of.RollingOrigin(horizon=2, windows=2),
+        output=of.OutputSpec.samples(4),
+        metrics=probabilistic_metrics(),
+        client=probabilistic_client(tmp_path, quantiles=False, samples=True),
+    )
+
+    assert result.metric_names == ("mae", "pinball[0.9]", "coverage[0.8]", "interval_width[0.8]")
+    assert set(values(result.predictions, "kind")) == {"sample"}
+    assert set(values(result.predictions, "sample")) == {0, 1, 2, 3}
+    assert all(value is not None for value in values(result.metrics, "value"))
+
+
+def test_quantiles_of_a_sample_model_are_reduced_before_they_are_scored(
+    tmp_path: Path,
+) -> None:
+    result = of.backtest(
+        models=[PROBABILISTIC],
+        data=frame(),
+        validation=of.RollingOrigin(horizon=2, windows=2),
+        output=of.OutputSpec.quantiles([0.1, 0.5, 0.9], from_samples=4),
+        metrics=probabilistic_metrics(),
+        client=probabilistic_client(tmp_path, quantiles=False, samples=True),
+    )
+
+    assert set(values(result.predictions, "kind")) == {"quantile"}
+    assert set(values(result.predictions, "quantile")) == {0.1, 0.5, 0.9}
+
+
+def test_a_probabilistic_metric_is_regrouped_from_the_predictions_too(
+    tmp_path: Path,
+) -> None:
+    result = of.backtest(
+        models=[PROBABILISTIC],
+        data=frame(),
+        validation=of.RollingOrigin(horizon=2, windows=2),
+        output=of.OutputSpec.quantiles([0.1, 0.5, 0.9]),
+        metrics=[of.IntervalWidth()],
+        client=probabilistic_client(tmp_path, quantiles=True, samples=False),
+    )
+
+    by_step = result.metrics_by("horizon_step")
+
+    assert values(by_step, "horizon_step") == [1, 2]
+    assert values(by_step, "value") == [pytest.approx(8.0)] * 2
+    # Two folds pooled inside each horizon group, as for any other metric.
+    assert values(by_step, "pairs") == [2, 2]
+
+
+def test_a_metric_that_cannot_score_the_requested_output_is_refused_before_any_fit(
+    tmp_path: Path,
+) -> None:
+    """Discovering it after an hour of fits would be discovering it too late."""
+    client = probabilistic_client(tmp_path, quantiles=True, samples=False)
+
+    with pytest.raises(RecipeError, match="point forecast is not one"):
+        of.backtest(
+            models=[PROBABILISTIC],
+            data=frame(),
+            validation=of.RollingOrigin(horizon=2, windows=1),
+            metrics=[of.Coverage()],
+            client=client,
+        )
+    with pytest.raises(RecipeError, match=r"0.5 is not among the levels"):
+        of.backtest(
+            models=[PROBABILISTIC],
+            data=frame(),
+            validation=of.RollingOrigin(horizon=2, windows=1),
+            output=of.OutputSpec.quantiles([0.1, 0.9]),
+            metrics=[of.MAE()],
+            client=client,
+        )
+
+
+def test_a_deterministic_model_is_not_asked_for_a_distribution(
+    client: of.OpenForecast,
+) -> None:
+    """The capability check of the engine, reached through a backtest."""
+    with pytest.raises(DataError, match="cannot produce a quantiles forecast"):
+        of.backtest(
+            models=[MODEL],
+            data=frame(),
+            validation=of.RollingOrigin(horizon=2, windows=1),
+            output=of.OutputSpec.quantiles([0.1, 0.5, 0.9]),
             metrics=[of.MAE()],
             client=client,
         )

@@ -4,7 +4,7 @@
 SeriesView    ->  unique_id, ds, y, exogenous columns
 SequenceView  ->  unique_id, ds, y, hist/futr/stat exogenous columns
 ForecastView  ->  unique_id, ds, y  +  the future half, separately
-predictions   ->  the canonical forecast columns, as Arrow
+predictions   ->  the canonical forecast columns, as Arrow — point or quantile
 ```
 
 This module is the only place in the integration where ``unique_id``, ``ds``,
@@ -75,6 +75,7 @@ __all__ = [
     "forecast_frames",
     "future_frame",
     "pandas_frequency",
+    "quantile_answer",
     "sequence_frames",
     "single_target",
     "training_frame",
@@ -352,40 +353,83 @@ def answer(
     column: str,
     target: str,
 ) -> pa.Table:
-    """The canonical long forecast, from what the library returned.
+    """The canonical long point forecast, from what the library returned.
 
     The values are ordered by event time per series and labeled with the event
     times the view asked about — never with the ones the library derived from its
     own reading of the frequency.
     """
-    if column not in predictions.columns:
+    return _long_answer(view, unique_ids, predictions, target, ((None, column),))
+
+
+def quantile_answer(
+    view: ForecastView,
+    unique_ids: dict[tuple[Any, ...], str],
+    predictions: pd.DataFrame,
+    columns: Sequence[tuple[float, str]],
+    target: str,
+) -> pa.Table:
+    """The canonical long quantile forecast: one row per level, ascending.
+
+    ``columns`` says which returned column holds which quantile level, which is
+    the whole of the translation — a StatsForecast interval bound is a quantile
+    of the predictive distribution under another name, and naming the mapping
+    here rather than in the adapter keeps the library's column spellings in the
+    one module rule 6 confines them to.
+    """
+    return _long_answer(view, unique_ids, predictions, target, columns)
+
+
+def _long_answer(
+    view: ForecastView,
+    unique_ids: dict[tuple[Any, ...], str],
+    predictions: pd.DataFrame,
+    target: str,
+    parts: Sequence[tuple[float | None, str]],
+) -> pa.Table:
+    """One row per instance, event time and requested part of the distribution.
+
+    ``parts`` is ``(quantile level or None, column)``: a point forecast is one
+    part holding no level, and a quantile forecast is one part per level. Written
+    once for both because everything except the ``kind`` and ``quantile`` columns
+    is the same labeling job, and doing it twice is how two answers of one
+    provider drift apart.
+    """
+    missing = [column for _, column in parts if column not in predictions.columns]
+    if missing:
         raise ProviderError(
             f"the fitted model answered with the columns {list(predictions.columns)} and "
-            f"{column!r} is not among them"
+            f"{missing} are not among them"
         )
     event_times = view.event_times
     ordered = predictions.sort_values([PANEL_ID, TIME])
     by_series = {
-        str(series_id): [float(value) for value in group[column]]
+        str(series_id): {column: [float(value) for value in group[column]] for _, column in parts}
         for series_id, group in ordered.groupby(PANEL_ID)
     }
 
     instance_keys = view.metadata.instance_keys
     keys: list[tuple[Any, ...]] = []
     times: list[datetime] = []
+    levels: list[float | None] = []
     values: list[float] = []
     for instance in view.instances:
         series_id = _unique_id(unique_ids, instance)
-        predicted = by_series.get(series_id, [])
-        if len(predicted) != len(event_times):
-            raise ProviderError(
-                f"the fitted model answered {len(predicted)} steps for instance {instance} "
-                f"and {len(event_times)} were asked for"
-            )
-        keys.extend([instance] * len(event_times))
-        times.extend(event_times)
-        values.extend(predicted)
+        answered = by_series.get(series_id, {})
+        for position, moment in enumerate(event_times):
+            for level, column in parts:
+                predicted = answered.get(column, [])
+                if len(predicted) != len(event_times):
+                    raise ProviderError(
+                        f"the fitted model answered {len(predicted)} steps for instance "
+                        f"{instance} and {len(event_times)} were asked for"
+                    )
+                keys.append(instance)
+                times.append(moment)
+                levels.append(level)
+                values.append(predicted[position])
 
+    is_point = all(level is None for level, _ in parts)
     columns: dict[str, pa.Array[Any]] = {
         name: pa.array([key[index] for key in keys], type=view.future.column(name).type)
         for index, name in enumerate(instance_keys)
@@ -394,8 +438,10 @@ def answer(
         times, type=view.future.column(EVENT_TIME).type
     )
     columns[ForecastColumn.TARGET.value] = pa.array([target] * len(values), type=pa.string())
-    columns[ForecastColumn.KIND.value] = pa.array(["point"] * len(values), type=pa.string())
-    columns[ForecastColumn.QUANTILE.value] = pa.nulls(len(values), type=pa.float64())
+    columns[ForecastColumn.KIND.value] = pa.array(
+        ["point" if is_point else "quantile"] * len(values), type=pa.string()
+    )
+    columns[ForecastColumn.QUANTILE.value] = pa.array(levels, type=pa.float64())
     columns[ForecastColumn.SAMPLE.value] = pa.nulls(len(values), type=pa.int64())
     columns[ForecastColumn.VALUE.value] = pa.array(values, type=pa.float64())
     return pa.table({name: columns[name] for name in forecast_columns(instance_keys)})

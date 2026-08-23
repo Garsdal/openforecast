@@ -169,3 +169,98 @@ def test_the_parameters_are_compiled_into_the_native_model(tmp_path: Path) -> No
 
     assert golden.values(free) == pytest.approx([480.0, 490.0, 500.0], abs=1e-6)
     assert golden.values(restricted) != pytest.approx(golden.values(free), abs=1.0)
+
+
+# -- quantiles: the prediction intervals of Step 20 -------------------------
+
+
+LEVELS = [0.1, 0.5, 0.9]
+
+
+def test_the_prediction_intervals_come_back_as_quantiles(tmp_path: Path) -> None:
+    """A StatsForecast interval bound *is* a quantile, under another name."""
+    frame = golden.event_time_frame(periods=24)
+    client = golden.client(tmp_path)
+
+    handle = client.fit(AUTOARIMA, frame, name="de-load")
+    forecast = client.forecast(
+        handle, frame, horizon=HORIZON, output=of.OutputSpec.quantiles(LEVELS)
+    )
+
+    assert forecast.kind is of.OutputKind.QUANTILES
+    assert forecast.quantile_levels == (0.1, 0.5, 0.9)
+    assert forecast.table.num_rows == HORIZON * len(LEVELS)
+    # The 0.5 of a symmetric predictive distribution is the point forecast, and
+    # this line is continued exactly.
+    median: list[float] = forecast.quantile(0.5).column("value").to_pylist()
+    assert median == pytest.approx([240.0, 250.0, 260.0], abs=1e-6)
+
+
+def test_the_quantiles_are_ordered_and_widen_with_the_horizon(tmp_path: Path) -> None:
+    """What makes them a distribution rather than three numbers."""
+    frame = golden.event_time_frame(periods=24)
+    client = golden.client(tmp_path)
+
+    forecast = client.forecast(
+        client.fit(AUTOARIMA, frame, name="de-load"),
+        frame,
+        horizon=HORIZON,
+        output=of.OutputSpec.quantiles(LEVELS),
+    )
+    wide = forecast.to_wide()
+    low: list[float] = wide.column("load_q0.1").to_pylist()
+    mid: list[float] = wide.column("load_q0.5").to_pylist()
+    high: list[float] = wide.column("load_q0.9").to_pylist()
+
+    assert all(lower < middle < upper for lower, middle, upper in zip(low, mid, high, strict=True))
+    widths = [upper - lower for lower, upper in zip(low, high, strict=True)]
+    assert widths == sorted(widths), "uncertainty does not shrink with the horizon"
+
+
+def test_an_asymmetric_pair_of_levels_is_answered_by_two_intervals(tmp_path: Path) -> None:
+    """Each level is read off the interval that carries it, not off one of them."""
+    frame = golden.event_time_frame(periods=24)
+    client = golden.client(tmp_path)
+
+    forecast = client.forecast(
+        client.fit(AUTOARIMA, frame, name="de-load"),
+        frame,
+        horizon=1,
+        output=of.OutputSpec.quantiles([0.05, 0.25, 0.75]),
+    )
+    values = {
+        level: forecast.quantile(level).column("value").to_pylist()[0]
+        for level in (0.05, 0.25, 0.75)
+    }
+
+    assert values[0.05] < values[0.25] < values[0.75]
+
+
+def test_the_median_of_a_quantile_forecast_scores_as_a_point_forecast(tmp_path: Path) -> None:
+    """The interoperability claim, through the metric that does not know the provider."""
+    frame = golden.event_time_frame(periods=24)
+    client = golden.client(tmp_path)
+
+    result = of.backtest(
+        models=[AUTOARIMA],
+        data=frame,
+        validation=of.RollingOrigin(horizon=2, windows=2),
+        output=of.OutputSpec.quantiles(LEVELS),
+        metrics=[of.MAE(), of.PinballLoss(0.9), of.Coverage(), of.IntervalWidth()],
+        client=client,
+    )
+
+    assert result.metric_names == ("mae", "pinball[0.9]", "coverage[0.8]", "interval_width[0.8]")
+    values: list[float] = result.metrics.column("value").to_pylist()
+    assert all(value is not None for value in values)
+    assert set(result.predictions.column("kind").to_pylist()) == {"quantile"}
+
+
+def test_samples_are_not_manufactured_from_fitted_intervals(tmp_path: Path) -> None:
+    """The model has interval bounds, not paths; drawing paths would invent them."""
+    frame = golden.event_time_frame(periods=24)
+    client = golden.client(tmp_path)
+    handle = client.fit(AUTOARIMA, frame, name="de-load")
+
+    with pytest.raises(DataError, match="cannot produce a samples forecast"):
+        client.forecast(handle, frame, horizon=HORIZON, output=of.OutputSpec.samples(100))

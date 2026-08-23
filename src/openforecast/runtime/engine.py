@@ -78,7 +78,7 @@ from openforecast.runtime.transforms import (
     write_state,
 )
 from openforecast.runtime.validation import validate_view
-from openforecast.tasks.forecast import ForecastTask, OutputSpec
+from openforecast.tasks.forecast import ForecastTask, OutputKind, OutputSpec
 from openforecast.tasks.plan import FitPlan
 from openforecast.views.forecast import ForecastView
 from openforecast.views.planner import FitView, ViewPlanner, ViewRequest
@@ -255,7 +255,7 @@ class Engine:
             for leaf, record, paths in self._leaf_state(handle, artifact.recipe)
         ]
         combined = _combine(artifact.recipe, iter(answers))
-        return Forecast(
+        answer = Forecast(
             combined,
             origin_time=context.origin_time,
             horizon=horizon,
@@ -263,6 +263,11 @@ class Engine:
             instance_keys=context.schema.instance_keys,
             model=str(handle.ref),
         )
+        # `quantiles(..., from_samples=n)` was executed as a sample forecast, so
+        # the reduction happens here rather than in the provider: one estimator,
+        # applied to whoever drew the paths, is the whole of what makes two
+        # providers' quantiles comparable.
+        return answer.to_quantiles(output.levels) if output.derived_from_samples else answer
 
     def _answer(
         self,
@@ -275,13 +280,8 @@ class Engine:
     ) -> pa.Table:
         """One leaf's forecast, on the scale the caller's data was on."""
         descriptor = self._catalog.get(leaf.model.ref)
-        if not output.is_supported_by(descriptor.capabilities.outputs):
-            raise DataError(
-                f"{descriptor.ref} cannot produce a {output.kind} forecast; it declares "
-                f"point={descriptor.capabilities.outputs.point}, quantiles="
-                f"{descriptor.capabilities.outputs.quantiles}, samples="
-                f"{descriptor.capabilities.outputs.samples}"
-            )
+        _check_output(output, descriptor)
+        executed = output.as_executed()
         request = ViewRequest(kind=ViewKind.FORECAST, horizon=task.horizon, context=record.context)
         view = self._planner.forecast_view(context, request)
         transforms = read_state(paths.transforms)
@@ -289,10 +289,10 @@ class Engine:
             model=leaf.model.ref,
             params=leaf.model.params,
             view=apply_to_forecast_view(view, transforms),
-            output=output.model_dump(mode="json"),
+            output=executed.model_dump(mode="json"),
             state=paths.state,
         )
-        _check_answer(answer, view, output, descriptor)
+        _check_answer(answer, view, executed, descriptor)
         return invert_forecast(answer, context.schema.instance_keys, transforms)
 
     def _leaf_state(
@@ -538,6 +538,33 @@ def _check_data_schema(expected: TrainedSchema, context: ForecastContext, ref: M
         )
 
 
+def _check_output(output: OutputSpec, descriptor: ModelDescriptor) -> None:
+    """A model produces what it declares, and is not asked for anything else.
+
+    Checked from the declaration, before a provider is started: an unanswerable
+    request is a mismatch between what was asked and what the model says it can
+    do, and finding that out from a provider stack trace after a fit would be
+    finding it out in the wrong place.
+    """
+    outputs = descriptor.capabilities.outputs
+    if output.is_supported_by(outputs):
+        return
+    asked_for_native_quantiles = (
+        output.kind is OutputKind.QUANTILES and not output.derived_from_samples
+    )
+    remedy = (
+        " It draws samples, so of.OutputSpec.quantiles("
+        f"{list(output.levels)}, from_samples=n) asks for quantiles of n draws."
+        if asked_for_native_quantiles and outputs.samples
+        else ""
+    )
+    raise DataError(
+        f"{descriptor.ref} cannot produce a {output.kind} forecast; it declares "
+        f"point={outputs.point}, quantiles={outputs.quantiles}, samples={outputs.samples}."
+        f"{remedy}"
+    )
+
+
 def _check_answer(
     answer: pa.Table, view: ForecastView, output: OutputSpec, descriptor: ModelDescriptor
 ) -> None:
@@ -561,10 +588,38 @@ def _check_answer(
             f"{len(seen)}, for different instances, event times or targets"
         )
     kinds = set(column_values(answer, ForecastColumn.KIND.value))
-    if kinds != {output.kind.value}:
+    if kinds != {output.kind.row_kind}:
         raise ProviderError(
             f"{descriptor.ref} was asked for a {output.kind} forecast and answered {sorted(kinds)}"
         )
+    _check_distribution(answer, output, descriptor)
+
+
+def _check_distribution(answer: pa.Table, output: OutputSpec, descriptor: ModelDescriptor) -> None:
+    """A probabilistic answer describes the distribution it was asked for.
+
+    The levels that came back are the levels that were requested, and a sample
+    forecast holds the draws it was asked to take. Neither is a formality: a
+    provider that answered ``0.9`` where ``0.95`` was asked for produces a table
+    a caller then scores as if it held a 0.95, and no later check would notice.
+    """
+    if output.kind is OutputKind.QUANTILES:
+        levels = column_values(answer, ForecastColumn.QUANTILE.value)
+        found = tuple(sorted({level for level in levels if level is not None}))
+        if found != output.levels:
+            raise ProviderError(
+                f"{descriptor.ref} was asked for the quantiles {list(output.levels)} and "
+                f"answered {list(found)}"
+            )
+    if output.kind is OutputKind.SAMPLES:
+        draws = column_values(answer, ForecastColumn.SAMPLE.value)
+        found_draws = {draw for draw in draws if draw is not None}
+        if found_draws != set(range(output.draws or 0)):
+            raise ProviderError(
+                f"{descriptor.ref} was asked for {output.draws} sample paths and answered "
+                f"{len(found_draws)}, indexed {sorted(found_draws)[:5]}...; the draws of a "
+                f"sample forecast are numbered from 0"
+            )
 
 
 def _described_rows(

@@ -110,30 +110,58 @@ class StubProvider:
         output: Mapping[str, Any],
         state: Path,
     ) -> pa.Table:
-        del model, params, output
+        del model, params
         value = float((state / STATE_FILENAME).read_text(encoding="utf-8"))
-        answer = flat_answer(view, value)
+        answer = flat_answer(view, value, output)
         return answer if self.corrupt is None else self.corrupt(answer)
 
 
-def flat_answer(view: ForecastView, value: float) -> pa.Table:
+def flat_answer(
+    view: ForecastView, value: float, output: Mapping[str, Any] | None = None
+) -> pa.Table:
+    """``value`` for every instance, event time and target, in the form asked for.
+
+    A quantile is ``value`` shifted by how far the level is from the median and a
+    sample path is ``value`` shifted by its draw index — arbitrary numbers, and
+    deliberately so: what a test of the boundary can check is that the *shape* of
+    the answer is the one that was requested, and arithmetic a provider invented
+    would be the wrong thing to assert on.
+    """
+    kind = str((output or {}).get("kind", "point"))
+    levels = [float(level) for level in (output or {}).get("levels", ())]
+    draws = (output or {}).get("draws")
+
     keys = view.metadata.instance_keys
-    rows = [
+    described = [
         (instance, moment, target)
         for instance in view.instances
         for moment in view.event_times
         for target in view.metadata.targets
     ]
+    if kind == "quantiles":
+        parts = [("quantile", level, None, value + (level - 0.5) * 10.0) for level in levels]
+    elif kind == "samples":
+        parts = [("sample", None, draw, value + float(draw)) for draw in range(int(draws or 0))]
+    else:
+        parts = [("point", None, None, value)]
+    rows = [
+        (instance, moment, target, part) for instance, moment, target in described for part in parts
+    ]
+
     columns: dict[str, pa.Array[Any]] = {
-        name: pa.array([instance[index] for instance, _, _ in rows])
+        name: pa.array([instance[index] for instance, _, _, _ in rows])
         for index, name in enumerate(keys)
     }
     columns[ForecastColumn.EVENT_TIME.value] = pa.array(
-        [moment for _, moment, _ in rows], type=view.future.column(EVENT_TIME).type
+        [moment for _, moment, _, _ in rows], type=view.future.column(EVENT_TIME).type
     )
-    columns[ForecastColumn.TARGET.value] = pa.array([target for _, _, target in rows])
-    columns[ForecastColumn.KIND.value] = pa.array(["point"] * len(rows))
-    columns[ForecastColumn.QUANTILE.value] = pa.nulls(len(rows), type=pa.float64())
-    columns[ForecastColumn.SAMPLE.value] = pa.nulls(len(rows), type=pa.int64())
-    columns[ForecastColumn.VALUE.value] = pa.array([value] * len(rows), type=pa.float64())
+    columns[ForecastColumn.TARGET.value] = pa.array([target for _, _, target, _ in rows])
+    columns[ForecastColumn.KIND.value] = pa.array([part[0] for *_, part in rows])
+    columns[ForecastColumn.QUANTILE.value] = pa.array(
+        [part[1] for *_, part in rows], type=pa.float64()
+    )
+    columns[ForecastColumn.SAMPLE.value] = pa.array([part[2] for *_, part in rows], type=pa.int64())
+    columns[ForecastColumn.VALUE.value] = pa.array(
+        [part[3] for *_, part in rows], type=pa.float64()
+    )
     return pa.table({name: columns[name] for name in forecast_columns(keys)})

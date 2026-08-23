@@ -49,8 +49,36 @@ def predictions(*rows: PredictionRow) -> pa.Table:
         ),
         "horizon_step": pa.array([step for _, _, step, _, _ in rows], type=pa.int64()),
         "target": pa.array(["price"] * len(rows), type=pa.string()),
+        "kind": pa.array(["point"] * len(rows), type=pa.string()),
+        "quantile": pa.nulls(len(rows), type=pa.float64()),
+        "sample": pa.nulls(len(rows), type=pa.int64()),
         "prediction": pa.array([value for _, _, _, value, _ in rows], type=pa.float64()),
         "actual": pa.array([outcome for _, _, _, _, outcome in rows], type=pa.float64()),
+    }
+    return pa.table(columns)
+
+
+#: ``(model, zone, horizon_step, level, prediction, actual)`` — one quantile row.
+QuantileRow = tuple[str, str, int, float, float, float | None]
+
+
+def quantile_predictions(*rows: QuantileRow) -> pa.Table:
+    """The same table, holding one row per quantile level instead of a point."""
+    columns: dict[str, pa.Array[Any]] = {
+        "model": pa.array([model for model, _, _, _, _, _ in rows], type=pa.string()),
+        "fold": pa.array([0] * len(rows), type=pa.int64()),
+        "zone": pa.array([zone for _, zone, _, _, _, _ in rows], type=pa.string()),
+        "origin_time": pa.array([ORIGIN] * len(rows), type=pa.timestamp("us")),
+        "event_time": pa.array(
+            [ORIGIN + HOUR * step for _, _, step, _, _, _ in rows], type=pa.timestamp("us")
+        ),
+        "horizon_step": pa.array([step for _, _, step, _, _, _ in rows], type=pa.int64()),
+        "target": pa.array(["price"] * len(rows), type=pa.string()),
+        "kind": pa.array(["quantile"] * len(rows), type=pa.string()),
+        "quantile": pa.array([level for _, _, _, level, _, _ in rows], type=pa.float64()),
+        "sample": pa.nulls(len(rows), type=pa.int64()),
+        "prediction": pa.array([value for _, _, _, _, value, _ in rows], type=pa.float64()),
+        "actual": pa.array([outcome for _, _, _, _, _, outcome in rows], type=pa.float64()),
     }
     return pa.table(columns)
 

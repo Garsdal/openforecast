@@ -6,6 +6,8 @@ of.ForecastTask(horizon=24)
 of.OutputSpec.point()
 of.OutputSpec.quantiles([0.1, 0.5, 0.9])
 of.OutputSpec.samples(100)
+
+of.OutputSpec.quantiles([0.1, 0.9], from_samples=200)   # of a model that draws
 ```
 
 The task says how far ahead; the output spec says what kind of answer. They are
@@ -23,7 +25,7 @@ from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from openforecast.errors import RecipeError
+from openforecast.errors import ProviderError, RecipeError
 from openforecast.models.capabilities import OutputCapabilities
 
 __all__ = ["ForecastTask", "OutputKind", "OutputSpec"]
@@ -63,6 +65,28 @@ class OutputKind(StrEnum):
     #: Draws from the predictive distribution, for the caller to reduce.
     SAMPLES = "samples"
 
+    @property
+    def row_kind(self) -> str:
+        """How a forecast's ``kind`` column spells this.
+
+        Singular, because one row of a forecast is one number rather than the set
+        of them: a request for ``quantiles`` comes back as rows of ``quantile``.
+        The two spellings are one mapping rather than two vocabularies, which is
+        what this property is for.
+        """
+        return _ROW_KINDS[self]
+
+    @classmethod
+    def of_row(cls, row_kind: str) -> OutputKind:
+        """The request a forecast row of this ``kind`` answers."""
+        for kind, spelling in _ROW_KINDS.items():
+            if spelling == row_kind:
+                return kind
+        raise ProviderError(
+            f"{row_kind!r} is not a kind a forecast row can hold; the kinds are "
+            f"{sorted(_ROW_KINDS.values())}"
+        )
+
 
 class OutputSpec(BaseModel):
     """What kind of forecast to produce.
@@ -82,15 +106,19 @@ class OutputSpec(BaseModel):
     kind: OutputKind = OutputKind.POINT
     #: The quantile levels asked for, strictly between 0 and 1, ascending.
     levels: tuple[float, ...] = ()
-    #: How many sample paths to draw.
+    #: How many sample paths to draw — for a sample forecast, and for quantiles
+    #: that are read off the draws of one.
     draws: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _check_kind_matches_fields(self) -> Self:
         if self.kind is not OutputKind.QUANTILES and self.levels:
             raise RecipeError(f"a {self.kind} forecast does not take quantile levels")
-        if self.kind is not OutputKind.SAMPLES and self.draws is not None:
-            raise RecipeError(f"a {self.kind} forecast does not take a draw count")
+        if self.kind is OutputKind.POINT and self.draws is not None:
+            raise RecipeError(
+                "a point forecast does not take a draw count; a deterministic model has no "
+                "distribution to draw from, and OpenForecast does not manufacture one"
+            )
         if self.kind is OutputKind.QUANTILES and not self.levels:
             raise RecipeError("a quantile forecast must name the levels it wants")
         if self.kind is OutputKind.SAMPLES and self.draws is None:
@@ -116,9 +144,22 @@ class OutputSpec(BaseModel):
         return cls(kind=OutputKind.POINT)
 
     @classmethod
-    def quantiles(cls, levels: Sequence[float]) -> OutputSpec:
-        """``OutputSpec.quantiles([0.1, 0.5, 0.9])``."""
-        return cls(kind=OutputKind.QUANTILES, levels=tuple(levels))
+    def quantiles(cls, levels: Sequence[float], *, from_samples: int | None = None) -> OutputSpec:
+        """``OutputSpec.quantiles([0.1, 0.5, 0.9])``.
+
+        ``from_samples`` asks a model that draws sample paths for quantiles of
+        them instead — ``OutputSpec.quantiles([0.1, 0.9], from_samples=200)``
+        draws 200 paths and reads the two levels out of each predictive
+        distribution. It is stated rather than inferred because how many draws
+        the quantiles were estimated from is part of what they are: a 0.99 read
+        off 20 paths is not the same number read off 2000.
+
+        The conversion goes this way only. Quantiles cannot be turned back into
+        sample paths, because the paths would have to be invented — and neither
+        direction is available for a deterministic model, which has no
+        distribution to read either from.
+        """
+        return cls(kind=OutputKind.QUANTILES, levels=tuple(levels), draws=from_samples)
 
     @classmethod
     def samples(cls, draws: int) -> OutputSpec:
@@ -129,15 +170,49 @@ class OutputSpec(BaseModel):
     def is_probabilistic(self) -> bool:
         return self.kind is not OutputKind.POINT
 
+    @property
+    def derived_from_samples(self) -> bool:
+        """Whether these quantiles are read off sample paths the model drew."""
+        return self.kind is OutputKind.QUANTILES and self.draws is not None
+
+    def as_executed(self) -> OutputSpec:
+        """What the provider is asked for, which is not always what was asked of it.
+
+        Quantiles of ``from_samples`` draws are executed as a sample forecast and
+        reduced afterwards — by OpenForecast, with one estimator, so that two
+        providers asked the same question answer in the same numbers rather than
+        in whatever each library's own quantile convention is.
+        """
+        if self.derived_from_samples:
+            assert self.draws is not None  # what derived_from_samples means
+            return OutputSpec.samples(self.draws)
+        return self
+
     def is_supported_by(self, outputs: OutputCapabilities) -> bool:
         """Whether a model declaring ``outputs`` can answer this request.
 
         A quantile request is not silently downgraded to a point forecast, nor
-        derived from samples the caller did not ask for: those are different
-        answers, and picking one would hide that the model cannot give this one.
+        read off samples the caller did not ask for: those are different answers,
+        and picking one would hide that the model cannot give this one. Asking
+        for it — ``OutputSpec.quantiles([...], from_samples=200)`` — is what
+        makes the sample capability answer a quantile request, and the reason it
+        can is that the draws are the model's own distribution rather than a
+        shape assumed around a point.
         """
+        if self.derived_from_samples:
+            return outputs.samples
         if self.kind is OutputKind.QUANTILES:
             return outputs.quantiles
         if self.kind is OutputKind.SAMPLES:
             return outputs.samples
         return outputs.point
+
+
+#: How the ``kind`` column of a forecast spells each requested output kind.
+#: Defined once, beside the enum, so that a row and the request it answers cannot
+#: be spelled two different ways.
+_ROW_KINDS: dict[OutputKind, str] = {
+    OutputKind.POINT: "point",
+    OutputKind.QUANTILES: "quantile",
+    OutputKind.SAMPLES: "sample",
+}

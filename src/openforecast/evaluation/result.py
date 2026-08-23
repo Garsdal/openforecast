@@ -35,11 +35,22 @@ with, not a name you have to fit again.
 And the predictions every one of those numbers was computed from:
 
 ```text
-model                   fold zone origin_time event_time horizon_step target prediction actual
+model             fold zone origin event_time step target kind     quantile sample prediction actual
 
-builtin/seasonal-naive   0   DE   06:00       07:00      1            price  78.0       80.1
-builtin/seasonal-naive   0   DE   06:00       08:00      2            price  78.0       74.6
+seasonal-naive     0   DE   06:00  07:00      1    price  point    null     null   78.0       80.1
+seasonal-naive     0   DE   06:00  08:00      2    price  point    null     null   78.0       74.6
+nixtla/autoarima   0   DE   06:00  07:00      1    price  quantile 0.9      null   84.2       80.1
 ```
+
+(``origin`` and ``step`` are ``origin_time`` and ``horizon_step``, abbreviated to
+fit the page.)
+
+Long over the distribution as well as over the folds, for the same reason a
+forecast is: a quantile forecast contributes one row per level and a sample
+forecast one per draw, so the columns do not change with what was asked for and
+one reader reads every backtest. The rows about one outcome are gathered back
+into one prediction before a metric sees them, which is what lets a pinball loss
+and a mean absolute error be computed from this one table.
 
 Retained rather than dropped, because the metric rows are derivable from these
 and not the reverse: *does it degrade after horizon 48?* is the most common
@@ -55,6 +66,7 @@ rather than a fact about them.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -63,9 +75,10 @@ from typing import Any
 
 import pyarrow as pa
 
-from openforecast.data._arrow import build_table, column_type, column_values, is_missing
+from openforecast.data._arrow import build_table, column_type, column_values
 from openforecast.errors import DataError, RecipeError
 from openforecast.evaluation.metrics import Metric
+from openforecast.evaluation.predictions import PredictedValue, Prediction, predictions_of
 
 __all__ = [
     "BACKTEST_COLUMNS",
@@ -86,9 +99,10 @@ class BacktestColumn(StrEnum):
     ORIGIN = "origin"
     METRIC = "metric"
     VALUE = "value"
-    #: How many (event time, target) outcomes the value was computed over. A
+    #: How many (event time, target) outcomes *this metric* was computed over. A
     #: fold whose truth is partly unpublished is scored on what exists, and this
-    #: is how much that was.
+    #: is how much that was. Per metric rather than per fold, because two metrics
+    #: of one fold do not always have what they need on the same outcomes.
     PAIRS = "pairs"
     #: How long the fit took, or null for a frozen revision that skipped it.
     FIT_SECONDS = "fit_seconds"
@@ -117,6 +131,13 @@ class PredictionColumn(StrEnum):
     #: How far ahead of the origin that moment is, counting from 1.
     HORIZON_STEP = "horizon_step"
     TARGET = "target"
+    #: ``point``, ``quantile`` or ``sample`` — which part of the predictive
+    #: distribution this row holds, spelled as a forecast spells it.
+    KIND = "kind"
+    #: The level, for a quantile row; null otherwise.
+    QUANTILE = "quantile"
+    #: The draw index, for a sample row; null otherwise.
+    SAMPLE = "sample"
     PREDICTION = "prediction"
     #: What happened. Null where the truth published no outcome, which is also
     #: what makes such a row unscorable.
@@ -207,14 +228,19 @@ class BacktestResult:
         """The models ranked by one metric, averaged over the folds.
 
         Best first, where "best" is the metric's own idea of it: lowest for an
-        error, closest to zero for a bias. A metric is required when the
-        backtest measured several, because ranking by whichever came first
-        would answer a question nobody asked.
+        error, closest to zero for a bias, closest to its nominal level for a
+        coverage. A metric is required when the backtest measured several,
+        because ranking by whichever came first would answer a question nobody
+        asked.
+
+        A model this metric could score on no fold at all is last, with a null
+        value: it was measured and came back with nothing, which is a different
+        result from a bad score and from not having been entered.
         """
         name = self._one_metric(metric)
         rows = self._rows_for(name)
         ranker = self._scored_by[name]
-        ordered = sorted(rows, key=lambda entry: ranker.rank(entry.value))
+        ordered = sorted(rows, key=lambda entry: _ranked(ranker, entry.value))
         columns: dict[str, tuple[list[Any], pa.DataType]] = {
             BacktestColumn.MODEL.value: ([entry.model for entry in ordered], pa.string()),
             BacktestColumn.METRIC.value: ([name] * len(ordered), pa.string()),
@@ -307,8 +333,14 @@ class BacktestResult:
         return name
 
     def _rows_for(self, metric: str) -> list[_Summary]:
-        """One summary per model, over the folds that metric was measured on."""
-        grouped: dict[str, list[tuple[float, float | None, float]]] = {}
+        """One summary per model, over the folds that metric was measured on.
+
+        A fold this metric scored nothing of carries a null value, and averaging
+        it in as a zero would report a score for a fold that produced none. So
+        the mean is over the folds that have a value, and ``folds`` says how many
+        that was — the same rule ``fit_seconds`` follows for a frozen revision.
+        """
+        grouped: dict[str, list[tuple[float | None, float | None, float]]] = {}
         for model, name, value, fit, predict in zip(
             column_values(self._metrics, BacktestColumn.MODEL.value),
             column_values(self._metrics, BacktestColumn.METRIC.value),
@@ -322,8 +354,8 @@ class BacktestResult:
         return [
             _Summary(
                 model=model,
-                value=_mean(value for value, _, _ in measured),
-                folds=len(measured),
+                value=_mean_or_none(value for value, _, _ in measured),
+                folds=sum(1 for value, _, _ in measured if value is not None),
                 fit_seconds=_mean_or_none(fit for _, fit, _ in measured),
                 forecast_seconds=_mean(predict for _, _, predict in measured),
             )
@@ -331,37 +363,74 @@ class BacktestResult:
         ]
 
     def _grouped(self, grouping: Sequence[str]) -> pa.Table:
-        """Every metric, computed over the scorable predictions of each group."""
+        """Every metric, computed over the predictions of each group.
+
+        The rows of one group are gathered back into one prediction per outcome
+        before anything is scored, exactly as the per-fold metric rows were: a
+        quantile forecast holds several rows about one event time, and a metric
+        of a distribution needs them together. Which is also why grouping by
+        ``quantile`` or ``kind`` is allowed but rarely useful — it splits a
+        distribution across groups, and each group then holds whatever part of it
+        landed there.
+        """
+        gathered = self._by_group(grouping)
+        rows = [(group, metric) for group in gathered for metric in self._scored_by.values()]
+        measured = [metric.measure(gathered[group]) for group, metric in rows]
+        built: dict[str, tuple[list[Any], pa.DataType]] = {
+            name: ([group[position] for group, _ in rows], column_type(self._predictions, name))
+            for position, name in enumerate(grouping)
+        }
+        built[BacktestColumn.METRIC.value] = ([metric.name for _, metric in rows], pa.string())
+        built[BacktestColumn.VALUE.value] = (
+            [measurement.value for measurement in measured],
+            pa.float64(),
+        )
+        built[BacktestColumn.PAIRS.value] = (
+            [measurement.pairs for measurement in measured],
+            pa.int64(),
+        )
+        return build_table(built)
+
+    def _by_group(self, grouping: Sequence[str]) -> dict[tuple[Any, ...], tuple[Prediction, ...]]:
+        """The predictions of each group, one per outcome, in group order."""
         columns = [column_values(self._predictions, name) for name in grouping]
+        identity = [column_values(self._predictions, name) for name in self._outcome_columns()]
+        kinds = column_values(self._predictions, PredictionColumn.KIND.value)
+        levels = column_values(self._predictions, PredictionColumn.QUANTILE.value)
+        draws = column_values(self._predictions, PredictionColumn.SAMPLE.value)
         predicted = column_values(self._predictions, PredictionColumn.PREDICTION.value)
         outcomes = column_values(self._predictions, PredictionColumn.ACTUAL.value)
 
-        scored: dict[tuple[Any, ...], list[tuple[float, float]]] = {}
+        rows: dict[tuple[Any, ...], list[PredictedValue]] = {}
         for position, group in enumerate(zip(*columns, strict=True)):
-            pairs = scored.setdefault(group, [])
-            outcome, forecast = outcomes[position], predicted[position]
-            # The rule the metric rows were computed under, applied again: an
-            # event time with no outcome, or one the model answered nothing
-            # for, is not an error of zero.
-            if not (is_missing(outcome) or is_missing(forecast)):
-                pairs.append((float(outcome), float(forecast)))
+            rows.setdefault(group, []).append(
+                PredictedValue(
+                    outcome=tuple(values[position] for values in identity),
+                    kind=str(kinds[position]),
+                    level=levels[position],
+                    draw=draws[position],
+                    predicted=predicted[position],
+                    actual=outcomes[position],
+                )
+            )
+        return {group: predictions_of(values) for group, values in rows.items()}
 
-        rows = [
-            (group, metric, measured)
-            for group, measured in scored.items()
-            for metric in self._scored_by.values()
-        ]
-        built: dict[str, tuple[list[Any], pa.DataType]] = {
-            name: ([group[position] for group, _, _ in rows], column_type(self._predictions, name))
-            for position, name in enumerate(grouping)
+    def _outcome_columns(self) -> tuple[str, ...]:
+        """What identifies one outcome, whatever the grouping is.
+
+        Everything but the columns describing *which part* of the distribution a
+        row holds, and the value it holds.
+        """
+        describes_the_row = {
+            PredictionColumn.KIND.value,
+            PredictionColumn.QUANTILE.value,
+            PredictionColumn.SAMPLE.value,
+            PredictionColumn.PREDICTION.value,
+            PredictionColumn.ACTUAL.value,
         }
-        built[BacktestColumn.METRIC.value] = ([metric.name for _, metric, _ in rows], pa.string())
-        built[BacktestColumn.VALUE.value] = (
-            [_computed(metric, measured) for _, metric, measured in rows],
-            pa.float64(),
+        return tuple(
+            name for name in self._predictions.column_names if name not in describes_the_row
         )
-        built[BacktestColumn.PAIRS.value] = ([len(measured) for _, _, measured in rows], pa.int64())
-        return build_table(built)
 
     # -- dunder ------------------------------------------------------------
 
@@ -393,25 +462,22 @@ class _Summary:
     """One model's measurements of one metric, averaged over its folds."""
 
     model: str
-    value: float
+    #: Null where no fold of this model could be scored by this metric.
+    value: float | None
     folds: int
     #: Null for a frozen revision, which was evaluated rather than fitted.
     fit_seconds: float | None
     forecast_seconds: float
 
 
-def _computed(metric: Metric, measured: Sequence[tuple[float, float]]) -> float | None:
-    """One metric over the scorable pairs of a group, or null when it holds none.
+def _ranked(metric: Metric, value: float | None) -> float:
+    """A value as the number a leaderboard sorts by.
 
-    A group every prediction of which is unscorable is reported as a null value
-    beside a ``pairs`` of zero rather than dropped: that the slice exists and
-    could not be scored is the answer.
+    A model with no value at all sorts last rather than first: nothing measured
+    is not a perfect score, and a ranking that put it above a model that was
+    actually scored would name it the winner.
     """
-    if not measured:
-        return None
-    return metric.compute(
-        [outcome for outcome, _ in measured], [forecast for _, forecast in measured]
-    )
+    return math.inf if value is None else metric.rank(value)
 
 
 def _mean(values: Iterable[float]) -> float:

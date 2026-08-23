@@ -190,6 +190,88 @@ def test_a_forecast_holding_two_values_for_one_cell_cannot_be_widened() -> None:
         forecast(doubled).to_wide()
 
 
+# -- what a forecast holds, and the one conversion between kinds -------------
+
+
+def sample_answer(draws: int = 4, value: float = 70.0) -> pa.Table:
+    """One instance, one event time, one target, ``draws`` sample paths."""
+    return pa.table(
+        {
+            "zone": ["DE"] * draws,
+            ForecastColumn.EVENT_TIME.value: [ORIGIN] * draws,
+            ForecastColumn.TARGET.value: ["load"] * draws,
+            ForecastColumn.KIND.value: ["sample"] * draws,
+            ForecastColumn.QUANTILE.value: [None] * draws,
+            ForecastColumn.SAMPLE.value: list(range(draws)),
+            ForecastColumn.VALUE.value: [value + 10.0 * index for index in range(draws)],
+        }
+    )
+
+
+def test_a_forecast_says_which_kind_of_answer_it_holds() -> None:
+    assert forecast().kind is of.OutputKind.POINT
+    assert forecast(quantile_answer()).kind is of.OutputKind.QUANTILES
+    assert forecast(sample_answer()).kind is of.OutputKind.SAMPLES
+
+    assert forecast(quantile_answer()).quantile_levels == (0.1, 0.5, 0.9)
+    assert forecast(sample_answer()).sample_indices == (0, 1, 2, 3)
+    assert forecast().quantile_levels == ()
+
+
+def test_a_forecast_that_mixes_kinds_cannot_say_what_its_values_mean() -> None:
+    mixed = answer(kind=["point", "quantile"], quantile=[None, 0.5])
+
+    with pytest.raises(ProviderError, match="holds one kind of answer"):
+        _ = forecast(mixed).kind
+
+
+def test_one_sample_path_comes_back_in_the_shape_a_point_forecast_does() -> None:
+    kept = forecast(sample_answer()).sample(2)
+
+    assert kept.column_names == ["zone", "event_time", "target", "value"]
+    assert kept.column("value").to_pylist() == [90.0]
+    with pytest.raises(DataError, match=r"no sample path 9"):
+        forecast(sample_answer()).sample(9)
+
+
+def test_samples_reduce_to_the_quantiles_asked_for() -> None:
+    """The draws are the distribution, so reading levels out of them is a projection."""
+    reduced = forecast(sample_answer()).to_quantiles([0.1, 0.5, 0.9])
+
+    assert reduced.kind is of.OutputKind.QUANTILES
+    assert reduced.quantile_levels == (0.1, 0.5, 0.9)
+    assert reduced.origin_time == forecast().origin_time
+    assert reduced.model == forecast().model
+    # 70, 80, 90, 100 — linear interpolation between the order statistics.
+    assert reduced.quantile(0.5).column("value").to_pylist() == [85.0]
+    assert reduced.quantile(0.1).column("value").to_pylist() == [pytest.approx(73.0)]
+
+
+def test_a_distribution_holding_a_missing_draw_has_no_quantile() -> None:
+    """A model that answered a NaN said it did not know; dropping it would narrow it."""
+    with_gap = sample_answer().set_column(
+        sample_answer().column_names.index(ForecastColumn.VALUE.value),
+        ForecastColumn.VALUE.value,
+        pa.array([70.0, None, 90.0, 100.0], type=pa.float64()),
+    )
+
+    reduced = forecast(with_gap).to_quantiles([0.5])
+
+    assert reduced.quantile(0.5).column("value").to_pylist() == [None]
+
+
+def test_quantiles_are_never_turned_back_into_samples_or_read_off_a_point() -> None:
+    with pytest.raises(DataError, match="only a sample forecast"):
+        forecast(quantile_answer()).to_quantiles([0.5])
+    with pytest.raises(DataError, match="only a sample forecast"):
+        forecast().to_quantiles([0.5])
+
+
+def test_reducing_samples_validates_the_levels_a_request_would_have() -> None:
+    with pytest.raises(of.RecipeError, match="must be ascending"):
+        forecast(sample_answer()).to_quantiles([0.9, 0.1])
+
+
 def test_two_forecasts_are_equal_when_they_say_the_same_thing() -> None:
     assert forecast() == forecast()
     assert forecast() != forecast(answer(value=[1.0, 3.0]))
