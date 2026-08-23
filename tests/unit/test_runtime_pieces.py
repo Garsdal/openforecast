@@ -115,6 +115,81 @@ def test_a_probabilistic_row_is_not_a_point_forecast() -> None:
     assert forecast(mixed).point().num_rows == 1
 
 
+def quantile_answer() -> pa.Table:
+    """Two event times, three levels each, of one target for one instance."""
+    moments = [ORIGIN, datetime(2026, 1, 1, 13)]
+    levels = [0.1, 0.5, 0.9]
+    return pa.table(
+        {
+            "zone": ["DE"] * 6,
+            ForecastColumn.EVENT_TIME.value: [moment for moment in moments for _ in levels],
+            ForecastColumn.TARGET.value: ["load"] * 6,
+            ForecastColumn.KIND.value: ["quantile"] * 6,
+            ForecastColumn.QUANTILE.value: levels * 2,
+            ForecastColumn.SAMPLE.value: [None] * 6,
+            ForecastColumn.VALUE.value: [65.0, 78.0, 95.0, 66.0, 79.0, 96.0],
+        }
+    )
+
+
+def test_one_quantile_level_comes_back_in_the_shape_a_point_forecast_does() -> None:
+    kept = forecast(quantile_answer()).quantile(0.5)
+
+    assert kept.column_names == ["zone", "event_time", "target", "value"]
+    assert kept.column("value").to_pylist() == [78.0, 79.0]
+
+
+def test_a_level_that_was_never_asked_for_is_not_interpolated() -> None:
+    """Deriving a 0.25 from a 0.1 and a 0.5 answers a question nobody asked."""
+    with pytest.raises(DataError, match=r"no quantile 0.25.*\[0.1, 0.5, 0.9\]"):
+        forecast(quantile_answer()).quantile(0.25)
+
+    with pytest.raises(DataError, match="holds none"):
+        forecast().quantile(0.5)
+
+
+def test_widening_gives_one_column_per_thing_forecast() -> None:
+    wide = forecast(quantile_answer()).to_wide()
+
+    assert wide.column_names == ["zone", "event_time", "load_q0.1", "load_q0.5", "load_q0.9"]
+    assert wide.num_rows == 2
+    assert wide.column("load_q0.9").to_pylist() == [95.0, 96.0]
+
+
+def test_a_point_forecast_widens_to_the_target_under_its_own_name() -> None:
+    """There is only one point per target and event time, so nothing to tell apart."""
+    wide = forecast(
+        answer(event_time=[ORIGIN, datetime(2026, 1, 1, 13)], value=[80.0, 78.0])
+    ).to_wide()
+
+    assert wide.column_names == ["zone", "event_time", "load"]
+    assert wide.column("load").to_pylist() == [80.0, 78.0]
+    assert wide.column("zone").to_pylist() == ["DE", "DE"]
+
+
+def test_samples_widen_to_one_column_per_draw() -> None:
+    wide = forecast(answer(kind=["sample", "sample"], sample=[0, 1], value=[80.0, 82.0])).to_wide()
+
+    assert wide.column_names == ["zone", "event_time", "load_s0", "load_s1"]
+    assert wide.num_rows == 1
+
+
+def test_a_cell_a_forecast_never_answered_is_missing_rather_than_invented() -> None:
+    """A ragged long table widens to a ragged wide one, nulls and all."""
+    ragged = quantile_answer().slice(0, 4)  # 0.9 only at the first event time
+
+    wide = forecast(ragged).to_wide()
+
+    assert wide.column("load_q0.9").to_pylist() == [95.0, None]
+
+
+def test_a_forecast_holding_two_values_for_one_cell_cannot_be_widened() -> None:
+    doubled = answer()  # the same zone, event time, target and kind, twice
+
+    with pytest.raises(ProviderError, match="two values for load"):
+        forecast(doubled).to_wide()
+
+
 def test_two_forecasts_are_equal_when_they_say_the_same_thing() -> None:
     assert forecast() == forecast()
     assert forecast() != forecast(answer(value=[1.0, 3.0]))

@@ -85,6 +85,8 @@ _OWNED_PARAMETERS: dict[str, str] = {
     "hist_exog_list": "the observed features declared on the data",
     "futr_exog_list": "the known features declared on the data",
     "stat_exog_list": "the static features declared on the data",
+    "past_covariates": "the observed features declared on the data",
+    "future_covariates": "the known features declared on the data",
 }
 
 

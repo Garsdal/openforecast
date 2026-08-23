@@ -1,24 +1,32 @@
 """Architecture tests for the rules in ARCHITECTURE.md.
 
-Every invariant is checked by scanning source rather than by importing
-anything, so a violation fails the suite even if the offending module is never
-executed:
+The import-shaped invariants are checked by scanning source rather than by
+importing anything, so a violation fails the suite even if the offending module
+is never executed:
 
 1. ``openforecast`` never depends on a forecasting framework (rule 1).
 2. Imports only ever flow one way down the layer stack (rules 1, 2 and 7).
 3. Providers — the built-in one as much as an external integration — import
    execution views, never semantic source datasets (rules 2 and 3).
 
-The forbidden-terminology scan (rule 6) lands in Step 15.
+The forbidden-terminology scan of rule 6 is the exception and the last section
+of this file: what it has to check is what a public object *serializes*, and
+that is a property of the objects rather than of the source they are written in.
+So it imports the public surface and reads the names out of it.
 """
 
 from __future__ import annotations
 
 import ast
 import tomllib
+from collections.abc import Iterator
+from enum import Enum
+from importlib import import_module
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
+from pydantic import BaseModel
 
 from tests._imports import (
     PACKAGE_ROOT,
@@ -340,6 +348,163 @@ def test_the_origin_selections_are_defined_exactly_once() -> None:
     }
     assert set(definitions) == selections
     assert set(definitions.values()) == {PACKAGE_ROOT / "tasks" / "origins.py"}
+
+
+# -- forbidden terminology (rule 6) -----------------------------------------
+
+# The spellings the integrations of Steps 11 to 14 use for concepts OpenForecast
+# already names. Every one of them is legal inside `integrations/` and nowhere
+# else: a user reading a fitted manifest, a descriptor or a wire message should
+# never have to know which library executed the model.
+PROVIDER_TERMS = frozenset(
+    {
+        # Nixtla
+        "unique_id",
+        "ds",
+        "y",
+        "input_size",
+        "hist_exog_list",
+        "futr_exog_list",
+        "stat_exog_list",
+        # Darts
+        "past_covariates",
+        "future_covariates",
+        "input_chunk_length",
+        "output_chunk_length",
+        # sktime
+        "window_length",
+        "pooling",
+        "ForecastingHorizon",
+        "fh",
+    }
+)
+
+# Every module a user or a provider author imports from. Anything reachable by
+# name from one of these is public, and rule 6 is about exactly that.
+PUBLIC_MODULES = (
+    "openforecast",
+    "openforecast.artifacts",
+    "openforecast.data",
+    "openforecast.models",
+    "openforecast.protocol",
+    "openforecast.recipes",
+    "openforecast.registry",
+    "openforecast.runtime",
+    "openforecast.tasks",
+    "openforecast.views",
+)
+
+# Keys of a JSON Schema whose values are prose rather than names. A docstring
+# explaining that `input_size` is *rejected* is documentation of the rule, not a
+# violation of it, and pydantic puts class docstrings here.
+PROSE_KEYS = frozenset({"description", "examples"})
+
+
+def _public_names() -> dict[str, list[str]]:
+    """Every name a public object exposes, by where it came from.
+
+    Field names, enum members and enum values, walked through the JSON Schema of
+    every exported model so that nested types are covered too. What a caller
+    reads out of a manifest, a descriptor or a wire message is exactly this set.
+    """
+    found: dict[str, list[str]] = {}
+    for module_path in PUBLIC_MODULES:
+        module = import_module(module_path)
+        for exported in module.__all__:
+            attribute = getattr(module, exported)
+            origin = f"{module_path}.{exported}"
+            found.setdefault(origin, []).append(exported)
+            found[origin].extend(_names_of(attribute))
+    found["forecast columns"] = list(_forecast_columns(("zone", "market")))
+    return found
+
+
+def _names_of(attribute: Any) -> Iterator[str]:
+    if isinstance(attribute, type) and issubclass(attribute, BaseModel):
+        yield from _schema_names(attribute.model_json_schema())
+    elif isinstance(attribute, type) and issubclass(attribute, Enum):
+        for member in attribute:
+            yield member.name
+            if isinstance(member.value, str):
+                yield member.value
+    elif isinstance(attribute, str):
+        yield attribute
+
+
+def _schema_names(node: Any) -> Iterator[str]:
+    """The names a JSON Schema declares, ignoring the prose it carries."""
+    if isinstance(node, dict):
+        for key, value in cast("dict[str, Any]", node).items():
+            if key in PROSE_KEYS:
+                continue
+            if key in {"properties", "$defs", "patternProperties"} and isinstance(value, dict):
+                yield from cast("dict[str, Any]", value)
+            if key in {"required", "enum"} and isinstance(value, list):
+                yield from (item for item in cast("list[Any]", value) if isinstance(item, str))
+            if key in {"title", "const"} and isinstance(value, str):
+                yield value
+            yield from _schema_names(value)
+    elif isinstance(node, list):
+        for item in cast("list[Any]", node):
+            yield from _schema_names(item)
+
+
+def _forecast_columns(instance_keys: tuple[str, ...]) -> tuple[str, ...]:
+    from openforecast.protocol import forecast_columns
+
+    return forecast_columns(instance_keys)
+
+
+def test_no_provider_terminology_reaches_a_public_object() -> None:
+    """Rule 6, over what the public objects actually serialize.
+
+    A source scan cannot answer this one: the rejection list in `recipes/nodes.py`
+    holds these spellings on purpose, and several docstrings quote them in order
+    to say which OpenForecast field to use instead. What matters is that no
+    public object has a field, an enum value or a column *named* one of them.
+    """
+    offenders = {
+        origin: sorted(set(names) & PROVIDER_TERMS)
+        for origin, names in _public_names().items()
+        if set(names) & PROVIDER_TERMS
+    }
+    assert not offenders, (
+        "provider terminology in the public protocol; these spellings are legal "
+        f"inside integrations/ and nowhere else: {offenders}"
+    )
+
+
+def test_the_terminology_scan_reads_the_names_it_claims_to() -> None:
+    """Otherwise a scan that found nothing would be indistinguishable from one that looked."""
+    names = _public_names()
+    everything = {name for found in names.values() for name in found}
+
+    assert {"horizon", "event_time", "origin_time", "context", "targets"} <= everything
+    assert "series" in everything, "the ViewKind members are enum values, not fields"
+    assert names["forecast columns"][:2] == ["zone", "market"]
+
+    class Offending(BaseModel):
+        unique_id: str
+
+    assert set(_names_of(Offending)) & PROVIDER_TERMS == {"unique_id"}
+
+
+def test_the_rejection_list_names_every_term_the_scan_forbids() -> None:
+    """The two lists are the same rule seen from either side.
+
+    `of.Model(params=...)` refuses a provider parameter that names something
+    OpenForecast owns, and the scan above refuses one that reached a public
+    object. A term forbidden by one and unknown to the other would be a hole:
+    the parameters travel to the provider unchanged and are recorded in the
+    manifest, so anything the scan forbids has to be refused on the way in.
+    """
+    from openforecast.recipes.nodes import _OWNED_PARAMETERS  # pyright: ignore[reportPrivateUsage]
+
+    # `ds`, `y` and `unique_id` are column names rather than parameters, and
+    # `ForecastingHorizon` is a type; the rest name a plan field OpenForecast owns.
+    parameters = PROVIDER_TERMS - {"ds", "y", "unique_id", "ForecastingHorizon", "pooling"}
+
+    assert parameters <= set(_OWNED_PARAMETERS)
 
 
 def test_inner_layers_do_not_import_outer_layers() -> None:
