@@ -35,7 +35,9 @@ And its immediate corollary:
    recorded transform or rejects the request.
 6. **Provider-specific terminology must not leak into the public OpenForecast
    protocol.** `unique_id`, `ds`, `y`, `hist_exog_list`, `futr_exog_list` and
-   `stat_exog_list` are legal inside `integrations/`, nowhere else.
+   `stat_exog_list` are legal inside `integrations/`, nowhere else — and so are
+   Darts' `past_covariates`, `future_covariates`, `input_chunk_length` and
+   `output_chunk_length`, which name the same concepts in other words.
 7. **OpenAPI is a projection of OpenForecast semantics, not their source.**
    The dependency direction is semantics → engine → HTTP → OpenAPI → remote
    SDKs, never the reverse.
@@ -148,9 +150,10 @@ has to happen before the provider is started.
 `cases_for` and `refusals_for` take optional model parameters, which reach every
 generated fit unchanged and are validated against the descriptor's own parameter
 schema. They exist for models whose defaults are expensive rather than wrong —
-`nixtla/nhits` runs the suite at two optimization steps — and because they can
-only name parameters the model already advertises, they cannot be used to turn a
-capability on for the duration of the suite.
+`nixtla/nhits` runs the suite at two optimization steps and `darts/tide` at one
+epoch, which is the same statement in each library's own words — and because
+they can only name parameters the model already advertises, they cannot be used
+to turn a capability on for the duration of the suite.
 
 Rule 6 has one deliberate exception in the source: `recipes/nodes.py` contains
 the provider spellings `input_size`, `input_chunk_length`, `hist_exog_list` and

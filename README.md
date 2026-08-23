@@ -29,12 +29,15 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > the artifact lifecycle and local model registry from Step 7, the execution
 > engine and its built-in reference provider from Step 8, the provider
 > subprocess protocol and isolated uv environments from Step 9, the full
-> conformance suite from Step 10, and the Nixtla integration from Steps 11 and
-> 12 — `nixtla/autoarima` and `nixtla/nhits`, in `integrations/nixtla`. `of.fit`
-> and `of.forecast` work end to end today with `builtin/seasonal-naive`,
-> `nixtla/autoarima` and `nixtla/nhits`, in this process or over the subprocess
-> protocol — the last of them trained on real point-in-time vintages, one
-> training sample per historical forecast origin.
+> conformance suite from Step 10, the Nixtla integration from Steps 11 and
+> 12 — `nixtla/autoarima` and `nixtla/nhits`, in `integrations/nixtla` — and the
+> Darts integration from Step 13: `darts/theta`, `darts/tide` and `darts/nhits`,
+> in `integrations/darts`. `of.fit` and `of.forecast` work end to end today with
+> `builtin/seasonal-naive`, both Nixtla models and all three Darts models, in
+> this process or over the subprocess protocol — the global ones trained on real
+> point-in-time vintages, one training sample per historical forecast origin.
+> Switching a point-in-time fit from `nixtla/nhits` to `darts/tide` changes the
+> model reference and nothing else.
 > See [PLAN.md](PLAN.md) for the full 17-step roadmap.
 
 ## The event-time semantic model
@@ -609,12 +612,14 @@ for case in suite.cases_for(descriptor):
 Declaring `view=sequences` therefore buys tests against an event-time frame and
 against real forecast vintages, with the provider asserted to have received a
 `SequenceView` in both — which is the view boundary, checked rather than assumed.
-The built-in reference provider passes every capability it declares, and so does
-the Nixtla integration — `integrations/nixtla` runs this suite against its own
-descriptors, so `nixtla/autoarima` is fitted from an event-time frame and from
-real vintages at a selected origin, and `nixtla/nhits` from an event-time frame
-and from every vintage at once, without any of it being written down. The
-integrations of Steps 13 and 14 are held to the same suite.
+The built-in reference provider passes every capability it declares, and so do
+both integrations — `integrations/nixtla` and `integrations/darts` run this suite
+against their own descriptors, so `nixtla/autoarima` is fitted from an event-time
+frame and from real vintages at a selected origin, and `nixtla/nhits` and
+`darts/tide` from an event-time frame and from every vintage at once, without any
+of it being written down. That the second one costs nothing to hold to the first
+one's contract is what Step 13 was for. The integration of Step 14 is held to the
+same suite.
 
 `cases_for` takes optional parameters, which reach every generated fit and may
 only name parameters the descriptor already advertises. It is for models whose

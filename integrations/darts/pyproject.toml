@@ -1,0 +1,68 @@
+[project]
+name = "openforecast-darts"
+description = "Darts models for OpenForecast, in their own environment"
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["version"]
+dependencies = [
+    # The integration depends on OpenForecast; OpenForecast never depends on it.
+    "openforecast",
+    # `u8darts[torch]` rather than `darts`: the latter is the same library with
+    # every optional backend attached, and the two models exposed here need the
+    # core (statsmodels, for ARIMA) and PyTorch (for NHiTS) and nothing else.
+    "u8darts[torch]>=0.30,<1",
+    # Darts speaks pandas, so the integration does too. Nothing about that
+    # spelling escapes this distribution.
+    "pandas>=2",
+]
+
+[project.urls]
+Homepage = "https://github.com/Garsdal/openforecast"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+# One source of truth: the provider version an artifact records is the version
+# of the distribution that fitted it.
+path = "src/openforecast_darts/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openforecast_darts"]
+
+# A development environment on Linux takes PyTorch without CUDA. The default
+# Linux wheel carries several gigabytes of GPU runtime that a test suite fitting
+# six-step windows on a CI runner will never execute. This is `uv` configuration
+# rather than distribution metadata, so it shapes this checkout and CI and says
+# nothing about what `pip install openforecast-darts` resolves on a GPU box.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+# A checkout builds against the OpenForecast beside it. A published install
+# resolves the published distribution instead.
+openforecast = { path = "../..", editable = true }
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.8",
+    # The conformance suite of the OpenForecast checkout is what an integration
+    # inherits, and it builds its golden datasets with pandas.
+    "pandas>=2",
+    # Named only so the CPU index above reaches it: `[tool.uv.sources]` binds
+    # direct dependencies, and PyTorch arrives through `u8darts[torch]`.
+    "torch",
+]
+
+# Lint and format are the repository's, not this distribution's: the root
+# `ruff check .` covers `integrations/`, and one style across the boundary is
+# the point. Nothing here overrides it.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
