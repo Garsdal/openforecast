@@ -72,6 +72,7 @@ _OWNED_PARAMETERS: dict[str, str] = {
     "input_size": "of.WindowPlan(context=...)",
     "input_chunk_length": "of.WindowPlan(context=...)",
     "context_length": "of.WindowPlan(context=...)",
+    "window_length": "of.WindowPlan(context=...)",
     "output_chunk_length": "the horizon of of.ForecastTask",
     "h": "the horizon of of.ForecastTask",
     "horizon": "the horizon of of.ForecastTask",

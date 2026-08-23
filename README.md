@@ -31,13 +31,15 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > subprocess protocol and isolated uv environments from Step 9, the full
 > conformance suite from Step 10, the Nixtla integration from Steps 11 and
 > 12 — `nixtla/autoarima` and `nixtla/nhits`, in `integrations/nixtla` — and the
-> Darts integration from Step 13: `darts/theta`, `darts/tide` and `darts/nhits`,
-> in `integrations/darts`. `of.fit` and `of.forecast` work end to end today with
-> `builtin/seasonal-naive`, both Nixtla models and all three Darts models, in
-> this process or over the subprocess protocol — the global ones trained on real
+> Darts integration from Step 13 — `darts/theta`, `darts/tide` and
+> `darts/nhits`, in `integrations/darts` — and the sktime integration from
+> Step 14: `sktime/theta` and `sktime/pooled-trees`, in `integrations/sktime`.
+> `of.fit` and `of.forecast` work end to end today with `builtin/seasonal-naive`,
+> both Nixtla models, all three Darts models and both sktime models, in this
+> process or over the subprocess protocol — the global ones trained on real
 > point-in-time vintages, one training sample per historical forecast origin.
-> Switching a point-in-time fit from `nixtla/nhits` to `darts/tide` changes the
-> model reference and nothing else.
+> Switching a point-in-time fit between `nixtla/nhits`, `darts/tide` and
+> `sktime/pooled-trees` changes the model reference and nothing else.
 > See [PLAN.md](PLAN.md) for the full 17-step roadmap.
 
 ## The event-time semantic model
@@ -206,6 +208,7 @@ A model is named by a string:
 nixtla/nhits
 nixtla/autoarima
 darts/nhits
+sktime/pooled-trees
 local/de-price
 local/de-price@01K5Z6QK3M9TQK1W2E3R4T5Y6U
 ```
@@ -280,10 +283,10 @@ models, so an ensemble of pipelines needs no new vocabulary, and
 expresses the tabular reduction that point-in-time LightGBM setups use.
 
 **OpenForecast owns what it can own.** A context length is stated once, as
-`WindowPlan(context=168)`, and compiled into `input_size` for Nixtla or
-`input_chunk_length` for Darts. Passing one of those as a provider parameter is
-an error that names the field to use instead — the same for a horizon, a seed,
-a frequency or a covariate list. Two copies of one number, free to disagree,
+`WindowPlan(context=168)`, and compiled into `input_size` for Nixtla,
+`input_chunk_length` for Darts or `window_length` for sktime. Passing one of
+those as a provider parameter is an error that names the field to use instead —
+the same for a horizon, a seed, a frequency or a covariate list. Two copies of one number, free to disagree,
 with the provider's spelling winning silently, is not a convenience.
 
 **Nothing is imputed silently.** A missing value in point-in-time data is
@@ -474,8 +477,8 @@ wide conveniences arrive with the V1 surface in Step 15.
 
 ## Providers in their own environments
 
-Nixtla wants one version of `torch`, Darts wants another, and OpenForecast
-wants neither. So an integration is not installed into the OpenForecast
+Nixtla wants one version of `torch`, Darts wants another, sktime wants
+scikit-learn and statsmodels, and OpenForecast wants none of it. So an integration is not installed into the OpenForecast
 environment at all: it gets its own, built with `uv`, and it is reached over a
 subprocess protocol.
 
@@ -613,13 +616,15 @@ Declaring `view=sequences` therefore buys tests against an event-time frame and
 against real forecast vintages, with the provider asserted to have received a
 `SequenceView` in both — which is the view boundary, checked rather than assumed.
 The built-in reference provider passes every capability it declares, and so do
-both integrations — `integrations/nixtla` and `integrations/darts` run this suite
-against their own descriptors, so `nixtla/autoarima` is fitted from an event-time
-frame and from real vintages at a selected origin, and `nixtla/nhits` and
-`darts/tide` from an event-time frame and from every vintage at once, without any
-of it being written down. That the second one costs nothing to hold to the first
-one's contract is what Step 13 was for. The integration of Step 14 is held to the
-same suite.
+all three integrations — `integrations/nixtla`, `integrations/darts` and
+`integrations/sktime` run this suite against their own descriptors, so
+`nixtla/autoarima` is fitted from an event-time frame and from real vintages at a
+selected origin, and `nixtla/nhits`, `darts/tide` and `sktime/pooled-trees` from
+an event-time frame and from every vintage at once, without any of it being
+written down. That the second one costs nothing to hold to the first one's
+contract is what Step 13 was for; that the third one does too, from a library
+whose panel and pooling semantics are explicit and whose horizon is not bound at
+fit, is what Step 14 was for.
 
 `cases_for` takes optional parameters, which reach every generated fit and may
 only name parameters the descriptor already advertises. It is for models whose

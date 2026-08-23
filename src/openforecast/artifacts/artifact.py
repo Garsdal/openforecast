@@ -38,6 +38,7 @@ from openforecast.artifacts.manifest import (
     view_schema_payload,
 )
 from openforecast.errors import ArtifactError
+from openforecast.models.contract import TrainingContract
 from openforecast.models.ref import ModelRef
 from openforecast.recipes.nodes import Recipe
 from openforecast.tasks.plan import FitPlan
@@ -88,6 +89,7 @@ class ModelArtifact(BaseModel):
         provider: str,
         provider_version: str,
         openforecast_version: str,
+        contract: TrainingContract | None = None,
         plan: FitPlan | None = None,
         artifact_id: str | None = None,
     ) -> ModelArtifact:
@@ -96,7 +98,9 @@ class ModelArtifact(BaseModel):
         The view is the source of every training fact — sample count, context,
         horizon, origin fidelity — so a manifest cannot claim a fit that was not
         the one materialized. The plan contributes only what it alone knows: the
-        origin selection that was asked for, and the seed.
+        origin selection that was asked for, and the seed. The model's own
+        contract contributes the one thing neither of them can say: whether the
+        horizon the samples span is the only horizon the artifact can answer.
         """
         plan = FitPlan() if plan is None else plan
         training_schema = view_schema_payload(view)
@@ -109,7 +113,9 @@ class ModelArtifact(BaseModel):
             openforecast_version=openforecast_version,
             recipe_hash=content_hash(recipe.model_dump(mode="json")),
             training_schema_hash=content_hash(training_schema),
-            training=TrainingRecord.of_view(view, origins=plan.origins, seed=plan.seed),
+            training=TrainingRecord.of_view(
+                view, contract=contract, origins=plan.origins, seed=plan.seed
+            ),
             data_schema=TrainedSchema.of_view(view.schema),
             missing_value_transforms=missing_value_transforms(recipe),
         )
@@ -124,6 +130,7 @@ class ModelArtifact(BaseModel):
         views: Sequence[FitView],
         data_schema: TrainedSchema,
         openforecast_version: str,
+        contracts: Sequence[TrainingContract] | None = None,
         plan: FitPlan | None = None,
         artifact_id: str | None = None,
     ) -> ModelArtifact:
@@ -138,6 +145,12 @@ class ModelArtifact(BaseModel):
         plan = FitPlan() if plan is None else plan
         if not views:
             raise ArtifactError("a composite artifact holds at least one fitted model")
+        bound = list(contracts) if contracts is not None else [None] * len(views)
+        if len(bound) != len(views):
+            raise ArtifactError(
+                f"a composite artifact records one training contract per fitted view: "
+                f"{len(views)} views, {len(bound)} contracts"
+            )
         training_schema = data_schema.model_dump(mode="json")
         manifest = ModelManifest(
             artifact_id=new_artifact_id() if artifact_id is None else artifact_id,
@@ -148,7 +161,10 @@ class ModelArtifact(BaseModel):
             recipe_hash=content_hash(recipe.model_dump(mode="json")),
             training_schema_hash=content_hash(training_schema),
             members=tuple(
-                TrainingRecord.of_view(view, origins=plan.origins, seed=plan.seed) for view in views
+                TrainingRecord.of_view(
+                    view, contract=contract, origins=plan.origins, seed=plan.seed
+                )
+                for view, contract in zip(views, bound, strict=True)
             ),
             data_schema=data_schema,
             missing_value_transforms=missing_value_transforms(recipe),

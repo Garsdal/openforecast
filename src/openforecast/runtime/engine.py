@@ -59,6 +59,7 @@ from openforecast.errors import (
     UnsupportedPlanError,
 )
 from openforecast.models.catalog import DEFAULT_CATALOG, ModelCatalog
+from openforecast.models.contract import TrainingContract
 from openforecast.models.descriptor import ModelDescriptor
 from openforecast.models.ref import ModelRef
 from openforecast.protocol.vocabulary import ForecastColumn, ViewKind
@@ -186,6 +187,7 @@ class Engine:
             provider=self._providers.get(descriptor.provider),
             view=view,
             transforms=transforms,
+            contract=descriptor.training,
         )
 
     def _describe(
@@ -208,6 +210,7 @@ class Engine:
                 provider=one.provider.name,
                 provider_version=one.provider.version,
                 openforecast_version=_version(),
+                contract=one.contract,
                 plan=plan,
             )
         return ModelArtifact.of_composite(
@@ -218,6 +221,7 @@ class Engine:
                 [TrainedSchema.of_view(prepared.view.schema) for prepared in fitted]
             ),
             openforecast_version=_version(),
+            contracts=[prepared.contract for prepared in fitted],
             plan=plan,
         )
 
@@ -343,6 +347,9 @@ class _Prepared:
     provider: ProviderClient
     view: FitView
     transforms: TransformState
+    #: What the model said it learns from. The manifest needs the one part of it
+    #: the materialized view cannot answer: whether the horizon is bound.
+    contract: TrainingContract
 
 
 @dataclass(frozen=True)

@@ -2,8 +2,9 @@
 
 The manifest is read instead of the provider directory, so every question the
 engine asks of a fitted model has to be answerable here: which view it consumed,
-what horizon it was bound to, whether its origins were real vintages, and
-whether anything touched the missing values on the way in.
+how far its samples reached and whether it is bound to that horizon, whether its
+origins were real vintages, and whether anything touched the missing values on
+the way in.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from openforecast.artifacts import (
     TrainingRecord,
     content_hash,
 )
+from openforecast.models.contract import TrainingContract
 from openforecast.protocol import PROTOCOL_VERSION
 from openforecast.recipes import ColumnSet, ImputeMethod, declared_transforms
 from openforecast.views import OriginFidelity, SourceKind, ViewKind
@@ -74,6 +76,37 @@ def test_a_bound_horizon_serves_only_itself() -> None:
     record = TrainingRecord.of_view(artifacts.sequence_view())
     assert record.serves_horizon(artifacts.HORIZON)
     assert not record.serves_horizon(artifacts.HORIZON + 1)
+
+
+def test_a_record_that_does_not_say_is_read_as_bound() -> None:
+    """The conservative reading: refuse, rather than answer a horizon nobody promised."""
+    record = TrainingRecord.of_view(artifacts.sequence_view())
+
+    assert record.horizon_bound
+    assert record.horizon == artifacts.HORIZON
+
+
+def test_the_horizon_a_sample_spans_is_not_the_horizon_a_model_is_bound_to() -> None:
+    """Two separate facts, and only the model's contract knows the second.
+
+    ``darts/tide`` bakes its horizon into an architecture;
+    ``sktime/pooled-trees`` learns one step from samples of the same shape and
+    rolls. The materialized view cannot tell them apart, so the contract is what
+    is recorded — and a model that binds nothing is not refused for the shape of
+    the data it was fitted on.
+    """
+    view = artifacts.sequence_view()
+
+    rolling = TrainingRecord.of_view(
+        view, contract=TrainingContract.sequences(horizon_bound_at_fit=False)
+    )
+    bound = TrainingRecord.of_view(view, contract=TrainingContract.sequences())
+
+    assert rolling.horizon == bound.horizon == artifacts.HORIZON
+    assert not rolling.horizon_bound
+    assert rolling.serves_horizon(artifacts.HORIZON - 1)
+    assert rolling.serves_horizon(artifacts.HORIZON + 1)
+    assert not bound.serves_horizon(artifacts.HORIZON + 1)
 
 
 def test_a_tabular_fit_records_a_horizon_and_no_context() -> None:

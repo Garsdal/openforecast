@@ -37,7 +37,8 @@ And its immediate corollary:
    protocol.** `unique_id`, `ds`, `y`, `hist_exog_list`, `futr_exog_list` and
    `stat_exog_list` are legal inside `integrations/`, nowhere else — and so are
    Darts' `past_covariates`, `future_covariates`, `input_chunk_length` and
-   `output_chunk_length`, which name the same concepts in other words.
+   `output_chunk_length`, and sktime's `window_length`, `pooling` and
+   `ForecastingHorizon`, which name the same concepts in other words.
 7. **OpenAPI is a projection of OpenForecast semantics, not their source.**
    The dependency direction is semantics → engine → HTTP → OpenAPI → remote
    SDKs, never the reverse.
@@ -150,8 +151,9 @@ has to happen before the provider is started.
 `cases_for` and `refusals_for` take optional model parameters, which reach every
 generated fit unchanged and are validated against the descriptor's own parameter
 schema. They exist for models whose defaults are expensive rather than wrong —
-`nixtla/nhits` runs the suite at two optimization steps and `darts/tide` at one
-epoch, which is the same statement in each library's own words — and because
+`nixtla/nhits` runs the suite at two optimization steps, `darts/tide` at one
+epoch and `sktime/pooled-trees` at five boosting iterations, which is the same
+statement in three libraries' own words — and because
 they can only name parameters the model already advertises, they cannot be used
 to turn a capability on for the duration of the suite.
 
