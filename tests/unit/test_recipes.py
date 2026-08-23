@@ -73,7 +73,10 @@ def test_a_malformed_reference_is_rejected_where_it_is_written() -> None:
         ("input_size", "WindowPlan"),
         ("input_chunk_length", "WindowPlan"),
         ("context_length", "WindowPlan"),
+        # sktime's spelling of the same concept, withheld for the same reason.
+        ("window_length", "WindowPlan"),
         ("h", "ForecastTask"),
+        ("fh", "ForecastTask"),
         ("horizon", "ForecastTask"),
         ("output_chunk_length", "ForecastTask"),
         ("random_state", "FitPlan"),

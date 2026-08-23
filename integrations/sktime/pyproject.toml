@@ -1,0 +1,58 @@
+[project]
+name = "openforecast-sktime"
+description = "sktime models for OpenForecast, in their own environment"
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["version"]
+dependencies = [
+    # The integration depends on OpenForecast; OpenForecast never depends on it.
+    "openforecast",
+    "sktime>=1.1,<2",
+    # sktime's reduction compose classes wrap a scikit-learn regressor, and the
+    # pooled panel model exposed here names one, so it is a direct dependency
+    # rather than something inherited by accident.
+    "scikit-learn>=1.4",
+    # What ``ThetaForecaster`` is implemented on top of. sktime treats it as a
+    # soft dependency, so the model is only importable if it is asked for.
+    "statsmodels>=0.14",
+    # sktime speaks pandas, so the integration does too. Nothing about that
+    # spelling escapes this distribution.
+    "pandas>=2,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/Garsdal/openforecast"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+# One source of truth: the provider version an artifact records is the version
+# of the distribution that fitted it.
+path = "src/openforecast_sktime/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openforecast_sktime"]
+
+[tool.uv.sources]
+# A checkout builds against the OpenForecast beside it. A published install
+# resolves the published distribution instead.
+openforecast = { path = "../..", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.8",
+    # The conformance suite of the OpenForecast checkout is what an integration
+    # inherits, and it builds its golden datasets with pandas.
+    "pandas>=2,<3",
+]
+
+# Lint and format are the repository's, not this distribution's: the root
+# `ruff check .` covers `integrations/`, and one style across the boundary is
+# the point. Nothing here overrides it.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"

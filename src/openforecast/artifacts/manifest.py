@@ -21,8 +21,13 @@ Two fields carry most of the weight. ``origin_fidelity`` says whether the model
 learned from real vintages or from windows cut out of one freshest series, which
 is the difference between a model that saw the past as it was and one that was
 told the past was cleaner than it was — a difference no metric recovers later.
-``horizon`` says what the model was bound to, so a request at a horizon it
-cannot serve is refused instead of silently truncated.
+``horizon`` says how far each training sample reached, and ``horizon_bound``
+whether the model can be asked about any other — so a request a model cannot
+serve is refused instead of silently truncated, and one it can serve is not
+refused for a horizon that was only ever the shape of its training data. The two
+are separate because they are separate facts: ``darts/tide`` bakes 72 into its
+architecture, while ``sktime/pooled-trees`` learns one step from the same samples
+and rolls, and the sample shape does not say which of those a model is.
 
 A recipe that is not one model — a pipeline, an ensemble — is executed by
 OpenForecast rather than by a provider, and its members may consume different
@@ -49,6 +54,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from openforecast.data.features import FeatureSpec
 from openforecast.data.frequency import Frequency
 from openforecast.errors import ArtifactError, SchemaError
+from openforecast.models.contract import TrainingContract
 from openforecast.models.ref import ModelRef
 from openforecast.protocol.version import PROTOCOL_VERSION
 from openforecast.protocol.vocabulary import ViewKind
@@ -180,9 +186,13 @@ class TrainingRecord(BaseModel):
 
     #: Sized by the fit plan's window, and only for a view that has samples.
     context: int | None = Field(default=None, ge=1)
-    #: What the model was bound to when it binds one, so an incompatible request
-    #: can be refused rather than truncated.
+    #: How far each training sample reached past its origin. A property of the
+    #: materialization, which is why every view that has samples records one.
     horizon: int | None = Field(default=None, ge=1)
+    #: Whether that horizon is also the only one the model can answer. A property
+    #: of the model's own contract rather than of the data, and conservative by
+    #: default: a record that does not say is read as bound.
+    horizon_bound: bool = True
     #: Training units: series, sequences or rows, depending on the view.
     samples: int = Field(ge=1)
 
@@ -217,6 +227,7 @@ class TrainingRecord(BaseModel):
         cls,
         view: FitView,
         *,
+        contract: TrainingContract | None = None,
         origins: OriginSelection | None = None,
         seed: int | None = None,
     ) -> TrainingRecord:
@@ -226,6 +237,11 @@ class TrainingRecord(BaseModel):
         describe a fit that did not happen: the sample count, the context and
         horizon, and the fidelity of the origins all come from the materialized
         view rather than from what was requested.
+
+        ``contract`` is the one thing the view cannot answer — whether the model
+        is bound to the horizon its samples happen to span. Left out, the record
+        says bound, which is the answer that refuses rather than the one that
+        forecasts something nobody promised.
         """
         return cls(
             view=view.kind,
@@ -234,6 +250,7 @@ class TrainingRecord(BaseModel):
             origins=AllOrigins() if origins is None else origins,
             context=view.schema.context if isinstance(view, SequenceView) else None,
             horizon=None if isinstance(view, SeriesView) else view.schema.horizon,
+            horizon_bound=contract is None or contract.horizon_bound_at_fit,
             samples=_sample_count(view),
             materializer_version=view.provenance.materializer_version,
             seed=seed,
@@ -249,9 +266,10 @@ class TrainingRecord(BaseModel):
 
         A model that bound no horizon at fit time serves any; one that bound a
         horizon serves exactly that one. Which of the two a model is, is its
-        contract's business — this only knows what was recorded.
+        contract's business — this only knows what the contract said when the
+        record was written.
         """
-        return self.horizon is None or self.horizon == horizon
+        return not self.horizon_bound or self.horizon is None or self.horizon == horizon
 
 
 class ModelManifest(BaseModel):

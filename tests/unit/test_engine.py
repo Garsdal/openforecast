@@ -255,6 +255,33 @@ def test_a_horizon_a_model_was_not_fitted_for_is_refused(engine: Engine) -> None
         engine.forecast(handle, frame(), horizon=3)
 
 
+def test_a_model_that_binds_no_horizon_is_asked_for_any(tmp_path: Path) -> None:
+    """The shape of the training samples is not a promise about the horizon.
+
+    A sequence model that learns one step and rolls — a pooled reduction, say —
+    is fitted from samples that span a horizon and is bound to none of it. So the
+    manifest records the two separately, and the engine refuses on the binding
+    rather than on the sample shape.
+    """
+    rolling = providers.descriptor(
+        "rolling", training=TrainingContract.sequences(horizon_bound_at_fit=False)
+    )
+    engine = Engine(
+        store=ArtifactStore(tmp_path),
+        catalog=ModelCatalog((rolling,)),
+        providers=ProviderRegistry([providers.StubProvider(models=(rolling,))]),
+    )
+
+    handle = engine.fit(
+        "stub/rolling", frame(), horizon=2, plan=of.FitPlan(window=of.WindowPlan(context=3))
+    )
+
+    assert handle.training.horizon == 2
+    assert not handle.training.horizon_bound
+    assert handle.serves_horizon(3)
+    assert engine.forecast(handle, frame(), horizon=3).table.num_rows > 0
+
+
 def test_a_context_declaring_other_targets_is_refused(engine: Engine) -> None:
     """A model answers what it was fitted for, or it is not the model to ask."""
     handle = engine.fit(SERIES, frame())
