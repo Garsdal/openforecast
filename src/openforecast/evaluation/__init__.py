@@ -1,7 +1,7 @@
-"""Benchmarking, point-in-time evaluation, and the foundation of `openforecast/auto`.
+"""Backtesting, point-in-time evaluation, and the foundation of `openforecast/auto`.
 
 ```python
-result = of.benchmark(
+result = of.backtest(
     models=["builtin/seasonal-naive", "nixtla/autoarima", "nixtla/nhits"],
     data=data,
     validation=of.RollingOrigin(horizon=24, windows=5),
@@ -14,7 +14,7 @@ result.best("mae")
 
 This is where the universal abstraction stops being a way to call other people's
 libraries and starts being worth something on its own: the same models, over the
-same origins, scored the same way, with no provider-specific benchmarking code
+same origins, scored the same way, with no provider-specific backtesting code
 anywhere. Everything here is built on ``ModelRecipe``, ``ForecastDataset`` /
 ``TimeSeriesFrame``, the ``ViewPlanner``, ``FitPlan``, ``ForecastTask`` and
 ``Forecast`` — and on ``of.fit`` and ``of.forecast``, which is why it lives in
@@ -25,7 +25,7 @@ Four modules, in the order the concepts arrive:
 ```text
 metrics.py       what a forecast is scored by
 validation.py    which historical origins, and what "correct" means there
-benchmark.py     the loop over of.fit and of.forecast, and one Arrow result
+backtest.py     the loop over of.fit and of.forecast, and one Arrow result
 eligibility.py   which models could be fitted at all — the auto foundation
 result.py        the result table and the projections people read it as
 ```
@@ -35,10 +35,10 @@ evaluating at a historical origin uses the vintage that actually existed, and th
 later ones are not merely unused but absent from the object the model is handed.
 """
 
-from openforecast.evaluation.benchmark import Candidate, benchmark, plan_for
+from openforecast.evaluation.backtest import Candidate, backtest, plan_for
 from openforecast.evaluation.eligibility import Eligibility, eligible_models
 from openforecast.evaluation.metrics import MAE, MAPE, RMSE, Bias, Metric, MetricKind
-from openforecast.evaluation.result import BENCHMARK_COLUMNS, BenchmarkColumn, BenchmarkResult
+from openforecast.evaluation.result import BACKTEST_COLUMNS, BacktestColumn, BacktestResult
 from openforecast.evaluation.validation import (
     Fold,
     ForecastOriginValidation,
@@ -48,9 +48,9 @@ from openforecast.evaluation.validation import (
 )
 
 __all__ = [
-    "BENCHMARK_COLUMNS",
-    "BenchmarkColumn",
-    "BenchmarkResult",
+    "BACKTEST_COLUMNS",
+    "BacktestColumn",
+    "BacktestResult",
     "Bias",
     "Candidate",
     "Eligibility",
@@ -64,7 +64,7 @@ __all__ = [
     "RollingOrigin",
     "Validation",
     "ValidationMode",
-    "benchmark",
+    "backtest",
     "eligible_models",
     "plan_for",
 ]

@@ -11,7 +11,7 @@ import openforecast as of
 # The semantic data layer of Steps 2 and 3, the ``of.models`` namespace of
 # Step 5, the recipes, plans and tasks of Step 6, the engine of Step 8 —
 # ``of.fit``, ``of.forecast``, the client behind them and what they hand back —
-# and the benchmarking of Step 17, which is built on those two calls and adds
+# and the backtesting of Step 17, which is built on those two calls and adds
 # the vocabulary for comparing what comes out of them.
 # Asserted exactly so that nothing reaches the public surface by accident. The
 # execution views are not here on purpose: they are a provider boundary,
@@ -21,7 +21,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "AllOrigins",
     "ArtifactError",
     "AtOrigin",
-    "BenchmarkResult",
+    "BacktestResult",
     "Bias",
     "Candidate",
     "ColumnSet",
@@ -88,7 +88,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "WeightedMean",
     "WindowPlan",
     "__version__",
-    "benchmark",
+    "backtest",
     "eligible_models",
     "fit",
     "forecast",
@@ -463,13 +463,13 @@ def test_the_step_sixteen_surface_is_exactly_what_is_defined() -> None:
     assert builtins.list(server.__all__) == sorted(server.__all__)
 
 
-# Benchmarking and point-in-time evaluation, Step 17. ``Fold``, ``plan_for`` and
+# Backtesting and point-in-time evaluation, Step 17. ``Fold``, ``plan_for`` and
 # the result-table vocabulary are reachable here but not from the top level: they
-# are how a benchmark is built rather than what a caller writes.
+# are how a backtest is built rather than what a caller writes.
 EXPECTED_EVALUATION_SURFACE = {
-    "BENCHMARK_COLUMNS",
-    "BenchmarkColumn",
-    "BenchmarkResult",
+    "BACKTEST_COLUMNS",
+    "BacktestColumn",
+    "BacktestResult",
     "Bias",
     "Candidate",
     "Eligibility",
@@ -483,7 +483,7 @@ EXPECTED_EVALUATION_SURFACE = {
     "RollingOrigin",
     "Validation",
     "ValidationMode",
-    "benchmark",
+    "backtest",
     "eligible_models",
     "plan_for",
 }
@@ -496,11 +496,11 @@ def test_the_step_seventeen_surface_is_exactly_what_is_defined() -> None:
     assert builtins.list(evaluation.__all__) == sorted(evaluation.__all__)
 
 
-def test_benchmarking_adds_no_dependency_and_no_provider_vocabulary() -> None:
+def test_backtesting_adds_no_dependency_and_no_provider_vocabulary() -> None:
     """It is a loop over the public API, so it needs nothing the API does not."""
     import openforecast.evaluation as evaluation
 
-    assert evaluation.benchmark is of.benchmark
+    assert evaluation.backtest is of.backtest
     assert evaluation.eligible_models is of.eligible_models
 
 

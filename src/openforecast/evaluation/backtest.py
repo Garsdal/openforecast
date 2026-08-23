@@ -1,7 +1,7 @@
-"""``of.benchmark``: the same models, the same origins, one comparable number.
+"""``of.backtest``: the same models, the same origins, one comparable number.
 
 ```python
-result = of.benchmark(
+result = of.backtest(
     models=[
         "builtin/seasonal-naive",
         "nixtla/autoarima",
@@ -19,7 +19,7 @@ result.leaderboard("mae")
 Point-in-time data is the same call with the validation that fits it:
 
 ```python
-result = of.benchmark(
+result = of.backtest(
     models=["nixtla/nhits", "darts/nhits"],
     data=pit_dataset,
     validation=of.ForecastOriginValidation(
@@ -30,13 +30,13 @@ result = of.benchmark(
 )
 ```
 
-## Why there is no benchmarking implementation in here
+## Why there is no backtesting implementation in here
 
 Everything below is a loop over ``client.fit`` and ``client.forecast``. There is
 no Nixtla backtester, no Darts historical-forecasts call, no sktime evaluation
 harness — and not because they were reimplemented, but because there is nothing
 left for them to do. The semantic layer already answers every question a
-benchmark asks:
+backtest asks:
 
 ```text
 which origins exist            the validation strategy, over the source data
@@ -45,15 +45,15 @@ what to materialize            the ViewPlanner, from each model's contract
 what happened                  the truth frame
 ```
 
-So a benchmark is provider-independent for the same reason a fit is: it never
+So a backtest is provider-independent for the same reason a fit is: it never
 learns who executes a model. That also means it works over any transport — a
-benchmark against ``of.OpenForecast(transport=of.HttpTransport(...))`` fits and
+backtest against ``of.OpenForecast(transport=of.HttpTransport(...))`` fits and
 forecasts on the service and scores here.
 
 ## What it fits
 
 One artifact per candidate and fold, published like any other, and its pinned
-reference is recorded in the result. A benchmark that scored models without
+reference is recorded in the result. A backtest that scored models without
 leaving anything behind would make its own winner unreproducible: the point of
 ``artifact`` in the table is that the number came from *that* revision, and you
 can forecast with it.
@@ -91,7 +91,7 @@ from openforecast.client import OpenForecast, default_client
 from openforecast.data._arrow import build_table, column_values, is_missing, key_rows
 from openforecast.errors import DataError, RecipeError
 from openforecast.evaluation.metrics import Metric
-from openforecast.evaluation.result import BenchmarkColumn, BenchmarkResult
+from openforecast.evaluation.result import BacktestColumn, BacktestResult
 from openforecast.evaluation.validation import Fold, Validation, truth_lookup
 from openforecast.models.descriptor import ModelDescriptor
 from openforecast.models.ref import ModelRef
@@ -101,17 +101,17 @@ from openforecast.runtime.engine import ModelInput, normalize_recipe
 from openforecast.runtime.forecast import Forecast
 from openforecast.tasks.plan import FitPlan
 
-__all__ = ["Candidate", "benchmark", "plan_for"]
+__all__ = ["Candidate", "backtest", "plan_for"]
 
-#: The prefix every artifact a benchmark publishes is named under, so that a
+#: The prefix every artifact a backtest publishes is named under, so that a
 #: store's aliases say where they came from.
-ARTIFACT_PREFIX = "benchmark"
+ARTIFACT_PREFIX = "backtest"
 
 _NOT_A_NAME = re.compile(r"[^a-z0-9]+")
 
 
 class Candidate(BaseModel):
-    """One entry of a benchmark, when the model reference alone is not enough.
+    """One entry of a backtest, when the model reference alone is not enough.
 
     ```python
     of.Candidate("nixtla/nhits", plan=of.FitPlan(window=of.WindowPlan(context=336)))
@@ -130,7 +130,7 @@ class Candidate(BaseModel):
     #: What this candidate is called in the result table. Defaults to the model
     #: reference, or to the references a composite recipe names.
     name: str | None = None
-    #: Overrides the benchmark's own plan entirely, template and all.
+    #: Overrides the backtest's own plan entirely, template and all.
     plan: FitPlan | None = None
 
     def __init__(self, model: ModelInput | None = None, /, **data: Any) -> None:
@@ -151,7 +151,7 @@ class Candidate(BaseModel):
         return "+".join(str(ref) for ref in estimator_refs(self.model))
 
 
-def benchmark(
+def backtest(
     models: Sequence[ModelInput | Candidate],
     data: object,
     *,
@@ -159,16 +159,16 @@ def benchmark(
     metrics: Sequence[Metric],
     plan: FitPlan | None = None,
     client: OpenForecast | None = None,
-) -> BenchmarkResult:
+) -> BacktestResult:
     """Fit and score every model at every origin ``validation`` selects.
 
     Leaving ``client`` out uses the same default client ``of.fit`` and
-    ``of.forecast`` do, so a benchmark writes its artifacts where everything else
-    does. Passing one pointed at a service benchmarks there.
+    ``of.forecast`` do, so a backtest writes its artifacts where everything else
+    does. Passing one pointed at a service backtests there.
     """
     executor = default_client() if client is None else client
     if not metrics:
-        raise RecipeError("a benchmark needs at least one metric: of.benchmark(metrics=[of.MAE()])")
+        raise RecipeError("a backtest needs at least one metric: of.backtest(metrics=[of.MAE()])")
     candidates = _candidates(models)
     folds = validation.folds(data)
 
@@ -177,7 +177,7 @@ def benchmark(
         fitted = plan_for(candidate, executor, plan)
         for fold in folds:
             rows.extend(_measure(executor, candidate, fitted, fold, validation.horizon, metrics))
-    return BenchmarkResult(_table(rows), metrics=metrics)
+    return BacktestResult(_table(rows), metrics=metrics)
 
 
 def plan_for(
@@ -185,7 +185,7 @@ def plan_for(
 ) -> FitPlan | None:
     """The plan this candidate is actually fitted with.
 
-    A candidate's own plan wins outright. Otherwise the benchmark's template is
+    A candidate's own plan wins outright. Otherwise the backtest's template is
     adapted to what the candidate's models can bind: a context window sizes the
     samples of a sequence model and is not a field a series or tabular model has,
     so it is dropped for a candidate holding none — which is what makes one
@@ -321,7 +321,7 @@ def _fidelity(handle: ModelHandle) -> str:
 def _candidates(models: Sequence[ModelInput | Candidate]) -> tuple[Candidate, ...]:
     """Every entry as a candidate, with labels that identify one model each."""
     if not models:
-        raise RecipeError("a benchmark needs at least one model to compare")
+        raise RecipeError("a backtest needs at least one model to compare")
     candidates = tuple(
         entry if isinstance(entry, Candidate) else Candidate(_fittable(entry)) for entry in models
     )
@@ -340,9 +340,9 @@ def _candidates(models: Sequence[ModelInput | Candidate]) -> tuple[Candidate, ..
 
 
 def _fittable(entry: ModelInput) -> ModelInput:
-    """A benchmark compares models, and a fitted artifact is not one.
+    """A backtest compares models, and a fitted artifact is not one.
 
-    ``local/de-price@01K...`` is the *result* of a fit. Benchmarking it would
+    ``local/de-price@01K...`` is the *result* of a fit. Backtesting it would
     have to either refit the recipe it records — on data it was not fitted on,
     under a name that is not its own — or score one artifact against origins it
     never saw. Both are questions worth asking, and neither is the one this
@@ -350,7 +350,7 @@ def _fittable(entry: ModelInput) -> ModelInput:
     """
     if isinstance(entry, ModelHandle):
         raise RecipeError(
-            f"{entry.ref} is a fitted artifact, not a candidate; benchmark the recipe it "
+            f"{entry.ref} is a fitted artifact, not a candidate; backtest the recipe it "
             f"records, and every fold will fit it on the data of that origin"
         )
     return entry
@@ -361,7 +361,7 @@ def _reject_pinned(candidate: Candidate) -> None:
     pinned = [str(ref) for ref in estimator_refs(candidate.model) if ref.is_pinned]
     if pinned:
         raise RecipeError(
-            f"{pinned} pin fitted revisions; benchmark the models they were fitted from, "
+            f"{pinned} pin fitted revisions; backtest the models they were fitted from, "
             f"and every fold will fit one of its own"
         )
 
@@ -388,22 +388,22 @@ def _descriptor(client: OpenForecast, ref: ModelRef) -> ModelDescriptor:
 
 def _table(rows: Sequence[_Row]) -> pa.Table:
     columns: dict[str, tuple[list[Any], pa.DataType]] = {
-        BenchmarkColumn.MODEL.value: ([row.model for row in rows], pa.string()),
-        BenchmarkColumn.FOLD.value: ([row.fold for row in rows], pa.int64()),
-        BenchmarkColumn.ORIGIN.value: ([row.origin for row in rows], pa.timestamp("us")),
-        BenchmarkColumn.METRIC.value: ([row.metric for row in rows], pa.string()),
-        BenchmarkColumn.VALUE.value: ([row.value for row in rows], pa.float64()),
-        BenchmarkColumn.PAIRS.value: ([row.pairs for row in rows], pa.int64()),
-        BenchmarkColumn.FIT_SECONDS.value: ([row.fit_seconds for row in rows], pa.float64()),
-        BenchmarkColumn.FORECAST_SECONDS.value: (
+        BacktestColumn.MODEL.value: ([row.model for row in rows], pa.string()),
+        BacktestColumn.FOLD.value: ([row.fold for row in rows], pa.int64()),
+        BacktestColumn.ORIGIN.value: ([row.origin for row in rows], pa.timestamp("us")),
+        BacktestColumn.METRIC.value: ([row.metric for row in rows], pa.string()),
+        BacktestColumn.VALUE.value: ([row.value for row in rows], pa.float64()),
+        BacktestColumn.PAIRS.value: ([row.pairs for row in rows], pa.int64()),
+        BacktestColumn.FIT_SECONDS.value: ([row.fit_seconds for row in rows], pa.float64()),
+        BacktestColumn.FORECAST_SECONDS.value: (
             [row.forecast_seconds for row in rows],
             pa.float64(),
         ),
-        BenchmarkColumn.ORIGIN_FIDELITY.value: (
+        BacktestColumn.ORIGIN_FIDELITY.value: (
             [row.origin_fidelity for row in rows],
             pa.string(),
         ),
-        BenchmarkColumn.PROVIDER.value: ([row.provider for row in rows], pa.string()),
-        BenchmarkColumn.ARTIFACT.value: ([row.artifact for row in rows], pa.string()),
+        BacktestColumn.PROVIDER.value: ([row.provider for row in rows], pa.string()),
+        BacktestColumn.ARTIFACT.value: ([row.artifact for row in rows], pa.string()),
     }
     return build_table(columns)

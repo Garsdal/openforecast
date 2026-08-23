@@ -1,13 +1,13 @@
 """Step 17's "done when", through the public API and the built-in provider.
 
-> Benchmarking is entirely built on ``ModelRecipe``, ``ForecastDataset`` /
+> Backtesting is entirely built on ``ModelRecipe``, ``ForecastDataset`` /
 > ``TimeSeriesFrame``, the ``ViewPlanner``, ``FitPlan``, ``ForecastTask`` and
-> ``Forecast``, with no Nixtla/Darts/sktime-specific benchmarking
+> ``Forecast``, with no Nixtla/Darts/sktime-specific backtesting
 > implementation.
 
-So everything here goes through ``of.benchmark`` and ``of.eligible_models``, and
+So everything here goes through ``of.backtest`` and ``of.eligible_models``, and
 the only model involved is the reference provider — which is the point rather
-than a limitation: if benchmarking needed anything a provider has to supply, it
+than a limitation: if backtesting needed anything a provider has to supply, it
 could not be proved with a model that supplies nothing.
 
 The numbers are exact rather than approximate. ``builtin/seasonal-naive`` with
@@ -89,11 +89,11 @@ def values(table: Any, column: str) -> list[Any]:
     return found
 
 
-# -- benchmarking event-time data -------------------------------------------
+# -- backtesting event-time data -------------------------------------------
 
 
 def test_it_scores_every_model_at_every_origin(client: of.OpenForecast) -> None:
-    result = of.benchmark(
+    result = of.backtest(
         models=[MODEL, of.Candidate(of.Model(MODEL, params={"season_length": 2}), name="sn-2")],
         data=frame(),
         validation=of.RollingOrigin(horizon=3, windows=2),
@@ -109,7 +109,7 @@ def test_it_scores_every_model_at_every_origin(client: of.OpenForecast) -> None:
 
 def test_the_measurements_are_the_arithmetic_they_should_be(client: of.OpenForecast) -> None:
     """Repeating the last value on data rising by one: errors of 1, 2, 3."""
-    result = of.benchmark(
+    result = of.backtest(
         models=[MODEL],
         data=frame(),
         validation=of.RollingOrigin(horizon=3, windows=1),
@@ -126,7 +126,7 @@ def test_the_measurements_are_the_arithmetic_they_should_be(client: of.OpenForec
 
 
 def test_every_row_says_what_would_make_it_incomparable(client: of.OpenForecast) -> None:
-    result = of.benchmark(
+    result = of.backtest(
         models=[MODEL],
         data=frame(),
         validation=of.RollingOrigin(horizon=2, windows=1),
@@ -139,9 +139,9 @@ def test_every_row_says_what_would_make_it_incomparable(client: of.OpenForecast)
     assert values(result.table, "fit_seconds")[0] >= 0.0
 
 
-def test_a_benchmark_leaves_an_artifact_you_can_forecast_with(client: of.OpenForecast) -> None:
+def test_a_backtest_leaves_an_artifact_you_can_forecast_with(client: of.OpenForecast) -> None:
     """The `artifact` column is a reference, not a receipt."""
-    result = of.benchmark(
+    result = of.backtest(
         models=[MODEL],
         data=frame(),
         validation=of.RollingOrigin(horizon=2, windows=1),
@@ -178,7 +178,7 @@ def test_an_unanswerable_event_time_is_dropped_rather_than_scored(
         targets=["load"],
     )
 
-    result = of.benchmark(
+    result = of.backtest(
         models=[of.Model(MODEL, params={"season_length": 4})],
         data=data,
         validation=of.RollingOrigin(horizon=4, windows=1),
@@ -191,7 +191,7 @@ def test_an_unanswerable_event_time_is_dropped_rather_than_scored(
 
 
 def test_a_panel_is_scored_over_every_instance(client: of.OpenForecast) -> None:
-    result = of.benchmark(
+    result = of.backtest(
         models=[MODEL],
         data=frame(zones=("DE", "FR")),
         validation=of.RollingOrigin(horizon=2, windows=1),
@@ -203,13 +203,13 @@ def test_a_panel_is_scored_over_every_instance(client: of.OpenForecast) -> None:
     assert values(result.table, "value") == [pytest.approx(1.5)]
 
 
-# -- benchmarking real vintages ---------------------------------------------
+# -- backtesting real vintages ---------------------------------------------
 
 
-def test_point_in_time_data_is_benchmarked_at_the_origins_it_holds(
+def test_point_in_time_data_is_backtested_at_the_origins_it_holds(
     client: of.OpenForecast,
 ) -> None:
-    result = of.benchmark(
+    result = of.backtest(
         models=[MODEL],
         data=dataset(),
         validation=of.ForecastOriginValidation(
@@ -233,7 +233,7 @@ def test_a_fit_at_a_historical_origin_never_saw_a_later_vintage(
     the fold selected the *latest* one — which has to be the fold's own origin
     rather than the freshest vintage in the dataset.
     """
-    result = of.benchmark(
+    result = of.backtest(
         models=[MODEL],
         data=dataset(),
         validation=of.ForecastOriginValidation(horizon=2, origins=of.OriginsBetween(at(8), at(10))),
@@ -263,13 +263,13 @@ def test_the_same_models_can_be_compared_across_the_two_fidelities(
     """Simulated availability against true point-in-time availability.
 
     The comparison Step 17 asks for, and the reason ``origin_fidelity`` is a
-    column: the same model, the same origins and the same horizon, benchmarked
+    column: the same model, the same origins and the same horizon, backtested
     once against vintages and once against the truth frame on its own.
     """
     data = dataset()
     origins = of.OriginsBetween(at(8), at(10))
 
-    observed = of.benchmark(
+    observed = of.backtest(
         models=[MODEL],
         data=data,
         validation=of.ForecastOriginValidation(horizon=2, origins=origins),
@@ -277,7 +277,7 @@ def test_the_same_models_can_be_compared_across_the_two_fidelities(
         plan=of.FitPlan(origins=of.LatestOrigin()),
         client=client,
     )
-    simulated = of.benchmark(
+    simulated = of.backtest(
         models=[MODEL],
         # Cut to 12:00 so that the rolling windows land on the same three
         # origins the vintages were selected at: a rolling origin counts back
@@ -296,13 +296,13 @@ def test_the_same_models_can_be_compared_across_the_two_fidelities(
     assert values(observed.table, "value") == values(simulated.table, "value")
 
 
-# -- what a benchmark refuses -----------------------------------------------
+# -- what a backtest refuses -----------------------------------------------
 
 
 def test_two_candidates_with_the_same_name_are_refused(client: of.OpenForecast) -> None:
     """Their rows could not be told apart, so neither could their conclusions."""
     with pytest.raises(RecipeError, match="name more than one candidate"):
-        of.benchmark(
+        of.backtest(
             models=[MODEL, of.Model(MODEL, params={"season_length": 2})],
             data=frame(),
             validation=of.RollingOrigin(horizon=2, windows=1),
@@ -315,7 +315,7 @@ def test_a_fitted_artifact_is_not_a_candidate(client: of.OpenForecast) -> None:
     handle = client.fit(MODEL, frame(), name="already-fitted")
 
     with pytest.raises(RecipeError, match="fitted artifact, not a candidate"):
-        of.benchmark(
+        of.backtest(
             models=[handle],
             data=frame(),
             validation=of.RollingOrigin(horizon=2, windows=1),
@@ -329,7 +329,7 @@ def test_a_pinned_revision_is_not_a_candidate_either(client: of.OpenForecast) ->
     handle = client.fit(MODEL, frame(), name="pinned")
 
     with pytest.raises(RecipeError, match="pin fitted revisions"):
-        of.benchmark(
+        of.backtest(
             models=[str(handle.ref)],
             data=frame(),
             validation=of.RollingOrigin(horizon=2, windows=1),
@@ -338,9 +338,9 @@ def test_a_pinned_revision_is_not_a_candidate_either(client: of.OpenForecast) ->
         )
 
 
-def test_a_benchmark_without_a_metric_measures_nothing(client: of.OpenForecast) -> None:
+def test_a_backtest_without_a_metric_measures_nothing(client: of.OpenForecast) -> None:
     with pytest.raises(RecipeError, match="at least one metric"):
-        of.benchmark(
+        of.backtest(
             models=[MODEL],
             data=frame(),
             validation=of.RollingOrigin(horizon=2, windows=1),
@@ -354,7 +354,7 @@ def test_a_horizon_the_truth_does_not_reach_is_reported_rather_than_scored(
 ) -> None:
     """Scoring the part that exists is fine; scoring nothing at all is not."""
     with pytest.raises(DataError, match="nothing to score"):
-        of.benchmark(
+        of.backtest(
             models=[MODEL],
             data=dataset(origins=6),
             validation=of.ForecastOriginValidation(horizon=2, origins=of.AtOrigin(at(5))),
@@ -373,7 +373,7 @@ def test_a_window_is_not_carried_to_a_model_that_cannot_bind_one(
     """What makes one ``plan=`` comparable across model families.
 
     ``of.fit`` refuses a ``WindowPlan`` handed to a series model, correctly. A
-    benchmark's plan is a template over candidates that deliberately do not
+    backtest's plan is a template over candidates that deliberately do not
     share a contract, so the window reaches the ones that size samples with it.
     """
     plan = of.FitPlan(window=of.WindowPlan(context=4))
@@ -381,7 +381,7 @@ def test_a_window_is_not_carried_to_a_model_that_cannot_bind_one(
     with pytest.raises(RecipeError, match="sizes no context window"):
         client.fit(MODEL, frame(), horizon=2, plan=plan)
 
-    result = of.benchmark(
+    result = of.backtest(
         models=[MODEL],
         data=frame(),
         validation=of.RollingOrigin(horizon=2, windows=1),
@@ -394,7 +394,7 @@ def test_a_window_is_not_carried_to_a_model_that_cannot_bind_one(
 
 
 def test_a_candidate_can_state_the_plan_it_needs(client: of.OpenForecast) -> None:
-    result = of.benchmark(
+    result = of.backtest(
         models=[
             of.Candidate(MODEL, name="every-origin", plan=of.FitPlan(origins=of.AllOrigins())),
         ],

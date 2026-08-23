@@ -1,6 +1,6 @@
-"""``BenchmarkResult``: the table, and the projections people read it as.
+"""``BacktestResult``: the table, and the projections people read it as.
 
-Built here from rows rather than from a benchmark, so that the ranking rules are
+Built here from rows rather than from a backtest, so that the ranking rules are
 tested on numbers chosen to exercise them — including a bias whose best value is
 zero rather than lowest.
 """
@@ -15,12 +15,12 @@ import pytest
 
 import openforecast as of
 from openforecast.errors import DataError, RecipeError
-from openforecast.evaluation.result import BENCHMARK_COLUMNS, BenchmarkResult
+from openforecast.evaluation.result import BACKTEST_COLUMNS, BacktestResult
 
 ORIGIN = datetime(2026, 1, 1, 12)
 
 
-def result(*rows: tuple[str, int, str, float]) -> BenchmarkResult:
+def result(*rows: tuple[str, int, str, float]) -> BacktestResult:
     """A result over ``(model, fold, metric, value)``, with plausible everything else."""
     columns: dict[str, pa.Array[Any]] = {
         "model": pa.array([model for model, _, _, _ in rows], type=pa.string()),
@@ -35,7 +35,7 @@ def result(*rows: tuple[str, int, str, float]) -> BenchmarkResult:
         "provider": pa.array(["builtin"] * len(rows), type=pa.string()),
         "artifact": pa.array(["local/x@01K"] * len(rows), type=pa.string()),
     }
-    return BenchmarkResult(pa.table(columns), metrics=[of.MAE(), of.Bias()])
+    return BacktestResult(pa.table(columns), metrics=[of.MAE(), of.Bias()])
 
 
 def values(table: pa.Table, column: str) -> list[Any]:
@@ -47,12 +47,12 @@ def values(table: pa.Table, column: str) -> list[Any]:
 
 
 def test_the_columns_are_canonical_and_in_order() -> None:
-    assert result(("a", 0, "mae", 1.0)).table.column_names == list(BENCHMARK_COLUMNS)
+    assert result(("a", 0, "mae", 1.0)).table.column_names == list(BACKTEST_COLUMNS)
 
 
-def test_a_table_that_is_not_a_benchmark_result_is_refused() -> None:
+def test_a_table_that_is_not_a_backtest_result_is_refused() -> None:
     with pytest.raises(DataError, match="missing the columns"):
-        BenchmarkResult(pa.table({"model": pa.array(["a"])}), metrics=[of.MAE()])
+        BacktestResult(pa.table({"model": pa.array(["a"])}), metrics=[of.MAE()])
 
 
 def test_it_reports_what_it_measured() -> None:
@@ -129,7 +129,7 @@ def test_a_model_that_was_only_scored_on_some_folds_says_how_many() -> None:
 def test_it_prints_the_ranking_when_there_is_one_metric() -> None:
     printed = str(result(("a", 0, "mae", 4.0), ("b", 0, "mae", 1.0)))
 
-    assert printed == "BenchmarkResult(mae: b 1, a 4)"
+    assert printed == "BacktestResult(mae: b 1, a 4)"
 
 
 def test_it_prints_its_shape_when_there_are_several() -> None:
@@ -142,4 +142,4 @@ def test_it_prints_its_shape_when_there_are_several() -> None:
 def test_the_long_table_converts_to_pandas_without_pandas_being_a_dependency() -> None:
     frame = result(("a", 0, "mae", 1.0)).to_pandas()
 
-    assert list(frame.columns) == list(BENCHMARK_COLUMNS)
+    assert list(frame.columns) == list(BACKTEST_COLUMNS)

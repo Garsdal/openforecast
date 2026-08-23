@@ -2,7 +2,7 @@
 
 The two truncations are what make a historical origin something a model can be
 fitted at without being told about the future, and they are tested here rather
-than through a benchmark because a leak in either would be invisible in a metric.
+than through a backtest because a leak in either would be invisible in a metric.
 
 The point-in-time cases lean on the golden property of ``tests.factories``: a
 known feature's value names the origin that produced it, so a value from a later
@@ -153,7 +153,7 @@ def test_only_the_vintages_issued_by_then_remain() -> None:
 
 
 def test_a_later_vintage_is_absent_rather_than_unused() -> None:
-    """The guarantee benchmarking rests on, stated as a property of the object.
+    """The guarantee backtesting rests on, stated as a property of the object.
 
     ``wind_fc`` names the origin that produced it, so a value from the 03:00
     vintage is recognizable. Nothing downstream can reach one, because the

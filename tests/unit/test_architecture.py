@@ -83,7 +83,7 @@ LAYERS: tuple[tuple[str, ...], ...] = (
         "openforecast.providers",
     ),
     # The outermost layer. ``evaluation/`` is here rather than beside ``tasks/``
-    # because benchmarking is a *user* of ``of.fit`` and ``of.forecast``: it
+    # because backtesting is a *user* of ``of.fit`` and ``of.forecast``: it
     # drives the client rather than being something the engine can reach for.
     (
         "openforecast.client",
@@ -399,7 +399,7 @@ PUBLIC_MODULES = (
     "openforecast",
     "openforecast.artifacts",
     "openforecast.data",
-    # A benchmark result is a public object too: a caller reading one should no
+    # A backtest result is a public object too: a caller reading one should no
     # more have to know which library executed the model than a caller reading a
     # manifest does.
     "openforecast.evaluation",

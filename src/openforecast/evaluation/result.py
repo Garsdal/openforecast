@@ -1,4 +1,4 @@
-"""``BenchmarkResult``: what a benchmark measured, in one long Arrow table.
+"""``BacktestResult``: what a backtest measured, in one long Arrow table.
 
 ```text
 model                fold origin  metric value pairs fit_seconds forecast_seconds ...
@@ -10,7 +10,7 @@ nixtla/autoarima        0  06:00   mae    2.1   48    1.930       0.041
 
 One row per model, fold and metric — long for the same reason a forecast is:
 the columns do not change with what was asked for, so one reader reads every
-benchmark. A wide table with a column per metric would change shape with the
+backtest. A wide table with a column per metric would change shape with the
 argument list.
 
 Three columns are not measurements and are there anyway, because a number
@@ -25,12 +25,12 @@ artifact         the pinned revision that produced these numbers
 ``origin_fidelity`` is the one that changes conclusions. A model scored against
 simulated historical availability was told the past was cleaner than it was, and
 no metric in the table recovers that; carrying it per row is what makes
-benchmarking the two against each other a thing a caller can do rather than a
+backtesting the two against each other a thing a caller can do rather than a
 caveat they have to remember. ``artifact`` is what makes a result reproducible
-rather than reported: the winner of a benchmark is a reference you can forecast
+rather than reported: the winner of a backtest is a reference you can forecast
 with, not a name you have to fit again.
 
-:meth:`BenchmarkResult.leaderboard` is a projection of the table, in the same
+:meth:`BacktestResult.leaderboard` is a projection of the table, in the same
 sense ``Forecast.to_wide`` is: it averages the folds, and averaging is a choice
 about how to read measurements rather than a fact about them.
 """
@@ -49,13 +49,13 @@ from openforecast.data._arrow import build_table, column_values
 from openforecast.errors import DataError, RecipeError
 from openforecast.evaluation.metrics import Metric
 
-__all__ = ["BENCHMARK_COLUMNS", "BenchmarkColumn", "BenchmarkResult"]
+__all__ = ["BACKTEST_COLUMNS", "BacktestColumn", "BacktestResult"]
 
 
-class BenchmarkColumn(StrEnum):
-    """The columns of a benchmark result, whatever was benchmarked."""
+class BacktestColumn(StrEnum):
+    """The columns of a backtest result, whatever was backtested."""
 
-    #: The candidate, under the label it was benchmarked as.
+    #: The candidate, under the label it was backtested as.
     MODEL = "model"
     FOLD = "fold"
     #: The historical origin the fold was evaluated at.
@@ -76,28 +76,28 @@ class BenchmarkColumn(StrEnum):
 
 
 #: The canonical column order.
-BENCHMARK_COLUMNS = tuple(column.value for column in BenchmarkColumn)
+BACKTEST_COLUMNS = tuple(column.value for column in BacktestColumn)
 
 #: What a leaderboard holds: the model, the metric, the mean over folds, and how
 #: many folds that was, with the mean cost of getting there.
 LEADERBOARD_COLUMNS = (
-    BenchmarkColumn.MODEL.value,
-    BenchmarkColumn.METRIC.value,
-    BenchmarkColumn.VALUE.value,
+    BacktestColumn.MODEL.value,
+    BacktestColumn.METRIC.value,
+    BacktestColumn.VALUE.value,
     "folds",
-    BenchmarkColumn.FIT_SECONDS.value,
-    BenchmarkColumn.FORECAST_SECONDS.value,
+    BacktestColumn.FIT_SECONDS.value,
+    BacktestColumn.FORECAST_SECONDS.value,
 )
 
 
-class BenchmarkResult:
-    """The measurements of one benchmark, and the projections people read them as."""
+class BacktestResult:
+    """The measurements of one backtest, and the projections people read them as."""
 
     def __init__(self, table: pa.Table, metrics: Sequence[Metric]) -> None:
-        missing = [name for name in BENCHMARK_COLUMNS if name not in table.column_names]
+        missing = [name for name in BACKTEST_COLUMNS if name not in table.column_names]
         if missing:
-            raise DataError(f"a benchmark result is missing the columns {missing}")
-        self._table = table.select(list(BENCHMARK_COLUMNS))
+            raise DataError(f"a backtest result is missing the columns {missing}")
+        self._table = table.select(list(BACKTEST_COLUMNS))
         self._metrics = {metric.name: metric for metric in metrics}
 
     # -- accessors ---------------------------------------------------------
@@ -109,17 +109,17 @@ class BenchmarkResult:
 
     @property
     def models(self) -> tuple[str, ...]:
-        """The candidates, in the order they were benchmarked."""
-        return self._distinct(BenchmarkColumn.MODEL)
+        """The candidates, in the order they were backtested."""
+        return self._distinct(BacktestColumn.MODEL)
 
     @property
     def metrics(self) -> tuple[str, ...]:
-        return self._distinct(BenchmarkColumn.METRIC)
+        return self._distinct(BacktestColumn.METRIC)
 
     @property
     def origins(self) -> tuple[datetime, ...]:
         """The evaluation origins, in ascending order."""
-        values: list[datetime] = column_values(self._table, BenchmarkColumn.ORIGIN.value)
+        values: list[datetime] = column_values(self._table, BacktestColumn.ORIGIN.value)
         return tuple(sorted(set(values)))
 
     @property
@@ -133,7 +133,7 @@ class BenchmarkResult:
 
         Best first, where "best" is the metric's own idea of it: lowest for an
         error, closest to zero for a bias. A metric is required when the
-        benchmark measured several, because ranking by whichever came first
+        backtest measured several, because ranking by whichever came first
         would answer a question nobody asked.
         """
         name = self._one_metric(metric)
@@ -141,15 +141,15 @@ class BenchmarkResult:
         ranker = self._metrics[name]
         ordered = sorted(rows, key=lambda entry: ranker.rank(entry.value))
         columns: dict[str, tuple[list[Any], pa.DataType]] = {
-            BenchmarkColumn.MODEL.value: ([entry.model for entry in ordered], pa.string()),
-            BenchmarkColumn.METRIC.value: ([name] * len(ordered), pa.string()),
-            BenchmarkColumn.VALUE.value: ([entry.value for entry in ordered], pa.float64()),
+            BacktestColumn.MODEL.value: ([entry.model for entry in ordered], pa.string()),
+            BacktestColumn.METRIC.value: ([name] * len(ordered), pa.string()),
+            BacktestColumn.VALUE.value: ([entry.value for entry in ordered], pa.float64()),
             "folds": ([entry.folds for entry in ordered], pa.int64()),
-            BenchmarkColumn.FIT_SECONDS.value: (
+            BacktestColumn.FIT_SECONDS.value: (
                 [entry.fit_seconds for entry in ordered],
                 pa.float64(),
             ),
-            BenchmarkColumn.FORECAST_SECONDS.value: (
+            BacktestColumn.FORECAST_SECONDS.value: (
                 [entry.forecast_seconds for entry in ordered],
                 pa.float64(),
             ),
@@ -159,11 +159,11 @@ class BenchmarkResult:
     def best(self, metric: str | Metric | None = None) -> str:
         """The label of the model that ranked first — the winner, as a string.
 
-        A label rather than an artifact, because a benchmark fits one artifact
+        A label rather than an artifact, because a backtest fits one artifact
         per fold and there is no single one of them that "won"; which revision
         to keep is a question about the folds, and :attr:`table` holds them.
         """
-        return str(column_values(self.leaderboard(metric), BenchmarkColumn.MODEL.value)[0])
+        return str(column_values(self.leaderboard(metric), BacktestColumn.MODEL.value)[0])
 
     def to_pandas(self) -> Any:
         """The long result as a pandas ``DataFrame``.
@@ -175,7 +175,7 @@ class BenchmarkResult:
 
     # -- internals ---------------------------------------------------------
 
-    def _distinct(self, column: BenchmarkColumn) -> tuple[str, ...]:
+    def _distinct(self, column: BacktestColumn) -> tuple[str, ...]:
         values: list[str] = column_values(self._table, column.value)
         return tuple(dict.fromkeys(values))
 
@@ -184,14 +184,14 @@ class BenchmarkResult:
         if metric is None:
             if len(available) != 1:
                 raise RecipeError(
-                    f"this benchmark measured {list(available)}, so a ranking has to say "
+                    f"this backtest measured {list(available)}, so a ranking has to say "
                     f"which one: leaderboard(metric='{available[0]}')"
                 )
             return available[0]
         name = metric if isinstance(metric, str) else metric.name
         if name not in available:
             raise RecipeError(
-                f"this benchmark did not measure {name!r}; it measured {list(available)}"
+                f"this backtest did not measure {name!r}; it measured {list(available)}"
             )
         return name
 
@@ -199,11 +199,11 @@ class BenchmarkResult:
         """One summary per model, over the folds that metric was measured on."""
         grouped: dict[str, list[tuple[float, float, float]]] = {}
         for model, name, value, fit, predict in zip(
-            column_values(self._table, BenchmarkColumn.MODEL.value),
-            column_values(self._table, BenchmarkColumn.METRIC.value),
-            column_values(self._table, BenchmarkColumn.VALUE.value),
-            column_values(self._table, BenchmarkColumn.FIT_SECONDS.value),
-            column_values(self._table, BenchmarkColumn.FORECAST_SECONDS.value),
+            column_values(self._table, BacktestColumn.MODEL.value),
+            column_values(self._table, BacktestColumn.METRIC.value),
+            column_values(self._table, BacktestColumn.VALUE.value),
+            column_values(self._table, BacktestColumn.FIT_SECONDS.value),
+            column_values(self._table, BacktestColumn.FORECAST_SECONDS.value),
             strict=True,
         ):
             if name == metric:
@@ -223,7 +223,7 @@ class BenchmarkResult:
 
     def __repr__(self) -> str:
         return (
-            f"BenchmarkResult(models={len(self.models)}, folds={len(self.origins)}, "
+            f"BacktestResult(models={len(self.models)}, folds={len(self.origins)}, "
             f"metrics={list(self.metrics)}, rows={self._table.num_rows})"
         )
 
@@ -235,12 +235,12 @@ class BenchmarkResult:
         ranked = ", ".join(
             f"{model} {value:g}"
             for model, value in zip(
-                column_values(board, BenchmarkColumn.MODEL.value),
-                column_values(board, BenchmarkColumn.VALUE.value),
+                column_values(board, BacktestColumn.MODEL.value),
+                column_values(board, BacktestColumn.VALUE.value),
                 strict=True,
             )
         )
-        return f"BenchmarkResult({self.metrics[0]}: {ranked})"
+        return f"BacktestResult({self.metrics[0]}: {ranked})"
 
 
 @dataclass(frozen=True)

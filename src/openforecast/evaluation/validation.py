@@ -1,4 +1,4 @@
-"""Which historical origins a benchmark evaluates at, and what "correct" means there.
+"""Which historical origins a backtest evaluates at, and what "correct" means there.
 
 ```python
 of.RollingOrigin(horizon=24, windows=5)
@@ -42,7 +42,7 @@ is nothing for a model, a provider or a bug in this module to reach for.
 The event-time counterpart is the same arrangement with the weaker guarantee it
 can actually make: ``TimeSeriesFrame.up_to`` truncates the history, so no
 outcome after the origin is reachable, but the feature values are still today's.
-That difference survives into every benchmark row as ``origin_fidelity``, which
+That difference survives into every backtest row as ``origin_fidelity``, which
 is what makes "simulated availability versus true point-in-time availability" a
 comparison a caller can run rather than a caveat they have to remember.
 """
@@ -159,7 +159,7 @@ class RollingOrigin(_Validation):
             raise DataError(
                 "a rolling origin cuts historical origins out of one event-time history, and "
                 "this data holds real forecast vintages; evaluate them with "
-                "of.ForecastOriginValidation(origins=..., horizon=...), or benchmark "
+                "of.ForecastOriginValidation(origins=..., horizon=...), or backtest "
                 "dataset.truth to compare against simulated availability"
             )
         if not isinstance(data, TimeSeriesFrame):

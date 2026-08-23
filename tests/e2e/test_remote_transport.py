@@ -232,23 +232,23 @@ def test_a_remote_alias_follows_the_latest_fit(remote: of.OpenForecast) -> None:
     assert remote.artifact("local/rolling").ref == second.ref
 
 
-def test_a_benchmark_runs_over_a_transport_without_knowing_it(
+def test_a_backtest_runs_over_a_transport_without_knowing_it(
     local: of.OpenForecast, remote: of.OpenForecast
 ) -> None:
-    """Step 17 over Step 16: benchmarking is a loop over fit and forecast.
+    """Step 17 over Step 16: backtesting is a loop over fit and forecast.
 
     So it inherits the property this module exists to assert. The models are
     fitted and forecast on the service and scored here, and the measurements have
-    to be the ones a local benchmark of the same data produces — everything that
+    to be the ones a local backtest of the same data produces — everything that
     differs between the two runs is a timing or an artifact reference.
     """
     data = frame()
     validation = of.RollingOrigin(horizon=2, windows=2)
 
-    here = of.benchmark(
+    here = of.backtest(
         models=[MODEL], data=data, validation=validation, metrics=[of.MAE()], client=local
     )
-    there = of.benchmark(
+    there = of.backtest(
         models=[MODEL], data=data, validation=validation, metrics=[of.MAE()], client=remote
     )
 

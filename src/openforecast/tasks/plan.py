@@ -155,7 +155,7 @@ class FitPlan(BaseModel):
             raise UnsupportedPlanError(
                 "hyperparameter search is not implemented yet; the field is reserved so "
                 "that the protocol does not change when it lands. Fit the configurations "
-                "you want to compare and use of.benchmark to rank them."
+                "you want to compare and use of.backtest to rank them."
             )
         return self
 

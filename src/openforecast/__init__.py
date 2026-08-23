@@ -51,7 +51,7 @@ Since Step 17 the same vocabulary also compares models rather than only running
 them:
 
 ```python
-result = of.benchmark(
+result = of.backtest(
     models=["builtin/seasonal-naive", "nixtla/autoarima", "nixtla/nhits"],
     data=dataset,
     validation=of.ForecastOriginValidation(origins=of.AllOrigins(stride=24), horizon=72),
@@ -62,7 +62,7 @@ result.leaderboard("mae")
 ```
 
 Which is a loop over ``of.fit`` and ``of.forecast`` and nothing else — no
-provider knows it is being benchmarked, and for a ``ForecastDataset`` each origin
+provider knows it is being backtested, and for a ``ForecastDataset`` each origin
 is evaluated on the vintage that actually existed. That is what
 :mod:`openforecast.evaluation` is, along with ``of.eligible_models``, which
 answers which models this data could fit at all.
@@ -109,7 +109,7 @@ from openforecast.evaluation import (
     MAE,
     MAPE,
     RMSE,
-    BenchmarkResult,
+    BacktestResult,
     Bias,
     Candidate,
     Eligibility,
@@ -117,7 +117,7 @@ from openforecast.evaluation import (
     Metric,
     RollingOrigin,
     Validation,
-    benchmark,
+    backtest,
     eligible_models,
 )
 from openforecast.recipes import (
@@ -161,7 +161,7 @@ __all__ = [
     "AllOrigins",
     "ArtifactError",
     "AtOrigin",
-    "BenchmarkResult",
+    "BacktestResult",
     "Bias",
     "Candidate",
     "ColumnSet",
@@ -228,7 +228,7 @@ __all__ = [
     "WeightedMean",
     "WindowPlan",
     "__version__",
-    "benchmark",
+    "backtest",
     "eligible_models",
     "fit",
     "forecast",
