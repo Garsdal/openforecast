@@ -293,9 +293,9 @@ def _entry(name: str, module: str) -> list[str]:
         lines += ["```python", signature, "```", ""]
     # A value's docstring is its *type's* docstring, which describes the class
     # rather than this instance of it; the type is the useful fact instead.
-    doc = None if kind == "value" else inspect.getdoc(obj)
-    if doc and not _inherited_doc(obj, doc):
-        lines += [doc.strip(), ""]
+    doc = None if kind == "value" else _own_doc(obj)
+    if doc:
+        lines += [doc, ""]
     lines += _body(obj, kind)
     return lines
 
@@ -435,14 +435,29 @@ def _first_line(doc: str | None) -> str:
     return _cell(doc.strip().split("\n", 1)[0])
 
 
-def _inherited_doc(obj: object, doc: str) -> bool:
-    """Whether a docstring came from a base class rather than from this object.
+def _own_doc(obj: object) -> str | None:
+    """An object's own docstring, dedented, or nothing if it has none of its own.
 
-    ``inspect.getdoc`` walks the MRO, so an undocumented model would otherwise be
-    documented with ``BaseModel``'s prose, and an undocumented error with
-    ``Exception``'s.
+    A class is asked for ``vars(cls)["__doc__"]`` rather than for ``cls.__doc__``,
+    which walks the MRO: an undocumented model would otherwise be documented with
+    ``BaseModel``'s prose and an undocumented error with ``Exception``'s.
+
+    Reading the raw attribute is also what makes the pages the same on every
+    interpreter. Python 3.13 dedents docstrings at compile time and earlier
+    versions do not, so a generator that compared ``__doc__`` against
+    ``inspect.getdoc`` — one indented, the other not — decided that almost every
+    docstring was inherited on 3.11 and 3.12, and produced pages that could not be
+    diffed against the committed ones. ``cleandoc`` is what both versions agree
+    on, and is a no-op on the already-dedented form.
     """
-    return isinstance(obj, type) and doc.strip() != (obj.__doc__ or "").strip()
+    if isinstance(obj, type):
+        own = vars(obj).get("__doc__")
+        raw = own if isinstance(own, str) else None
+    else:
+        raw = inspect.getdoc(obj)
+    if raw is None or not raw.strip():
+        return None
+    return inspect.cleandoc(raw).strip()
 
 
 def _name_of(annotation: object) -> str:

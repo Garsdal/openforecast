@@ -19,7 +19,13 @@ from pathlib import Path
 import pytest
 
 import openforecast as of
-from openforecast.docs.reference import PAGES, REFERENCE_ROOT, pages, write
+from openforecast.docs.reference import (
+    PAGES,
+    REFERENCE_ROOT,
+    _own_doc,  # pyright: ignore[reportPrivateUsage]
+    pages,
+    write,
+)
 from openforecast.models.catalog import ModelCatalog
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -114,6 +120,39 @@ def test_a_pydantic_model_is_documented_by_its_fields(rendered: dict[str, str]) 
     assert "## `WindowPlan`" in tasks
     assert "| `context` | `int` | *required* |" in tasks
     assert "How much history one training sample conditions on." in tasks
+
+
+def test_prose_is_rendered_the_same_on_every_interpreter(rendered: dict[str, str]) -> None:
+    """Python 3.13 dedents ``__doc__`` at compile time and 3.11 and 3.12 do not.
+
+    A generator that compared the raw attribute against ``inspect.getdoc`` — one
+    indented, the other not — concluded that almost every docstring was inherited
+    on the older interpreters and dropped it, so the committed pages could only be
+    reproduced on 3.13. These are the two halves of the rule, asserted without
+    reference to which interpreter is running.
+    """
+
+    class Documented:
+        """A first line.
+
+        And an indented continuation.
+        """
+
+    class Undocumented(Documented):
+        pass
+
+    assert _own_doc(Documented) == "A first line.\n\nAnd an indented continuation."
+    assert _own_doc(Undocumented) is None
+
+    # And the same rule over the real pages: a docstring that exists is shown in
+    # full, and no continuation line arrives still indented.
+    for page, prose in (
+        ("tasks.md", "Steps of the data's frequency, not a duration"),
+        ("errors.md", "Raised before any data is looked at"),
+        ("data.md", "The tables are stored in canonical column order"),
+    ):
+        assert prose in rendered[page]
+        assert f"    {prose}" not in rendered[page]
 
 
 def test_an_error_documents_the_code_a_caller_branches_on(rendered: dict[str, str]) -> None:
