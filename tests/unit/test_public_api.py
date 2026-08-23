@@ -34,12 +34,14 @@ EXPECTED_PUBLIC_SURFACE = {
     "Frequency",
     "FrequencyError",
     "FrequencyUnit",
+    "HttpTransport",
     "Impute",
     "ImputeMethod",
     "IncompatibleForecastTask",
     "InconsistentTruthError",
     "LatestOrigin",
     "LeadTimeFeature",
+    "LocalTransport",
     "Mean",
     "MissingIndicator",
     "Model",
@@ -67,6 +69,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "StandardScaler",
     "TimeSeriesFrame",
     "TimeSeriesSchema",
+    "Transport",
     "UnknownModelError",
     "UnsupportedPlanError",
     "WeightedMean",
@@ -400,7 +403,7 @@ EXPECTED_PROVIDER_SURFACE = {
     [
         ("runtime", EXPECTED_RUNTIME_SURFACE),
         ("providers", EXPECTED_PROVIDER_SURFACE),
-        ("client", {"OpenForecast", "fit", "forecast"}),
+        ("client", {"Models", "OpenForecast", "fit", "forecast"}),
     ],
 )
 def test_the_step_eight_surfaces_are_exactly_what_is_defined(name: str, expected: set[str]) -> None:
@@ -410,18 +413,59 @@ def test_the_step_eight_surfaces_are_exactly_what_is_defined(name: str, expected
     assert builtins.list(module.__all__) == sorted(module.__all__)
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "server",
-    ],
-)
-def test_unimplemented_subpackages_are_importable_but_empty(name: str) -> None:
-    """The skeleton is real packages, not stub APIs."""
-    module = import_module(f"openforecast.{name}")
+# The remote surface of Step 16: the request and response models the HTTP
+# projection is generated from, and the two transports a client is configured
+# with. The FastAPI application and the OpenAPI generator are deliberately not
+# here — they need the ``openforecast[server]`` extra, and importing this
+# package must not require a web framework.
+EXPECTED_SERVER_SURFACE = {
+    "DEFAULT_PORT",
+    "DataKind",
+    "DataPayload",
+    "ErrorBody",
+    "ErrorInfo",
+    "FitBody",
+    "ForecastBody",
+    "ForecastContextPayload",
+    "ForecastDatasetPayload",
+    "ForecastPayload",
+    "HttpTransport",
+    "LocalTransport",
+    "ModelListing",
+    "PointInTimePayload",
+    "TimeSeriesPayload",
+    "Transport",
+    "decode_data",
+    "encode_data",
+    "status_for",
+}
 
-    assert module.__doc__
-    assert [attribute for attribute in dir(module) if not attribute.startswith("_")] == []
+
+def test_the_step_sixteen_surface_is_exactly_what_is_defined() -> None:
+    from openforecast import server
+
+    assert set(server.__all__) == EXPECTED_SERVER_SURFACE
+    assert builtins.list(server.__all__) == sorted(server.__all__)
+
+
+def test_importing_openforecast_does_not_import_a_web_framework() -> None:
+    """The core install is three libraries, and calling a service adds none.
+
+    ``openforecast.server`` is the *semantics* of the remote surface — Pydantic
+    models and a urllib client. The framework belongs to whoever serves, so a
+    remote-only user installs neither it nor an ASGI server.
+    """
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys, openforecast, openforecast.server;"
+        "print(sorted(name for name in sys.modules if name in {'fastapi', 'starlette', 'uvicorn'}))"
+    )
+    answer = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+    )
+    assert answer.stdout.strip() == "[]"
 
 
 def test_the_cli_exposes_a_parser_and_an_entry_point() -> None:

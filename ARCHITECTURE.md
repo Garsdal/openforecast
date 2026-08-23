@@ -41,7 +41,9 @@ And its immediate corollary:
    `ForecastingHorizon`, which name the same concepts in other words.
 7. **OpenAPI is a projection of OpenForecast semantics, not their source.**
    The dependency direction is semantics → engine → HTTP → OpenAPI → remote
-   SDKs, never the reverse.
+   SDKs, never the reverse. `spec/openapi/openapi.json` is *generated* from the
+   Pydantic request and response models, committed, and diffed in CI, so it
+   cannot drift from the code the generated SDKs are built against.
 
 ## Layering
 
@@ -82,7 +84,12 @@ AST-scans the package and fails on:
   declared dependencies of `pyproject.toml` (rule 1);
 - any runtime dependency beyond `pydantic`, `pyarrow` and `platformdirs`, and
   any import of `pandas` — a DataFrame is accepted at the edge and converted by
-  `pyarrow`, never stored or depended on (rule 1);
+  `pyarrow`, never stored or depended on (rule 1). FastAPI is an *optional*
+  dependency, `openforecast[server]`, so the declared runtime set is unchanged:
+  a test starts a subprocess that imports `openforecast` and
+  `openforecast.server` and asserts that no web framework was loaded, and CI has
+  a job that installs neither the dev group nor the extra and builds a remote
+  client in it;
 - any import that points down the layer stack (rules 1, 2 and 7);
 - provider terminology appearing in semantic protocol types (rule 6);
 - any second definition of `ViewKind`, so the contract that requests a view and
@@ -107,7 +114,9 @@ somebody else's transitive dependency.
 
 The forbidden-terminology scan of rule 6 is the one check that reads objects
 rather than source, because what it has to constrain is what a public object
-*serializes*. It imports every public module, walks the JSON Schema of every
+*serializes*. `openforecast.server` is in its list for exactly that reason: an
+HTTP body is a public object, and a caller reading one should no more have to
+know which library executed the model than a caller reading a manifest does. It imports every public module, walks the JSON Schema of every
 exported model plus the members of every exported enum and the canonical
 forecast columns, and fails if any field name, enum value or column is spelled
 the way a provider spells it. Prose is skipped on purpose: a docstring saying
@@ -454,3 +463,74 @@ of its own, and it keeps the protocol's stream contract — stdout is the answer
 failure. It is built on `argparse`: a CLI framework would be a fourth runtime
 dependency for a projection, and rule 1 makes that an architectural decision
 rather than a convenience.
+
+## The remote surface
+
+Rule 7 says the dependency direction is semantics → engine → HTTP → OpenAPI →
+generated SDKs. Three arrangements make that true rather than intended.
+
+**Where a forecast runs is a client's transport, not a fact about the library.**
+
+```python
+client = of.OpenForecast(transport=of.LocalTransport())
+client = of.OpenForecast(transport=of.HttpTransport("http://localhost:8321"))
+```
+
+`LocalTransport` owns an `Engine` and an artifact store; `HttpTransport` owns a
+URL and knows nothing about either. The client above them turns what the caller
+wrote into the request models in `server/wire.py`, hands them over, and turns
+the answer back into a `Forecast` or a `ModelHandle` — with no branch anywhere
+on where the model ran. The service in `server/app.py` is a router over the
+*same* `Transport`, so "the same semantics remotely" is a property of the code
+rather than a promise, and `tests/e2e/test_remote_transport.py` asserts it the
+way Step 9's suite asserts the subprocess boundary: by comparison. Two clients,
+one local and one over a real socket, are handed the same data and the same
+calls, and the Arrow tables that come back have to be equal.
+
+One thing legitimately changes shape across the boundary, and it is the thing
+Step 7 already decided: **a fitted model is a resource with an identity, not a
+value a caller holds.** A forecast therefore names it by reference —
+`local/de-price@01K...` — and passing back the handle a fit returned means
+sending that reference. The alias, the pinned revision and the handle name the
+same artifact, so this is a spelling of the local API rather than a narrowing of
+it.
+
+**Control is JSON, bulk data is Arrow.** The same split the provider protocol
+makes, for the same reason. A recipe, a plan, a horizon and an output spec are
+small and worth having in a log, so they are Pydantic models and appear in the
+OpenAPI document as themselves; a training set is not, so a dataset crosses as
+the Arrow tables it already holds rather than as a hundred thousand nested JSON
+objects. Today those tables are base64 in one opaque field, which is the interim
+arrangement the step calls for — the honest fix is multipart or an uploaded
+Arrow object the control message points at, and it can land without any control
+model changing, because no row of data is described by one.
+
+A payload is decoded through the *ordinary* constructors, so every invariant a
+frame enforces is enforced again on the far side of the network. A truncated
+table fails to load rather than being fitted as a shorter history, which is the
+same property a view bundle has when it crosses a process.
+
+**The document is generated, committed and diffed.**
+
+```bash
+uv run generate-openapi
+git diff --exit-code spec/openapi/openapi.json
+```
+
+`document()` builds the application over a transport that raises if any route is
+called, so the spec is a pure function of the route signatures and the model
+schemas: no engine is consulted, no provider is started, and regenerating on a
+machine with different providers installed produces the same bytes.
+
+**The framework is optional, and only for serving.** FastAPI buys routing,
+request validation against the models in `server/wire.py`, and an OpenAPI
+document derived from those same models rather than written beside them — which
+is rule 7 mechanically. But rule 1 makes a runtime dependency an architectural
+decision, so it lives behind `openforecast[server]` and only `server/app.py` and
+`server/openapi.py` import it. `HttpTransport` is `urllib`: a client that only
+ever calls a remote service installs OpenForecast and nothing else, which is
+what a transport abstraction is worth in the first place.
+
+`openforecast serve` is the CLI half of it, and it binds to loopback by default.
+A forecasting service has no authentication yet, so the default has to be the
+one that does not publish an unauthenticated service to a network by accident.

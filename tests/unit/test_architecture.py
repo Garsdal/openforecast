@@ -390,6 +390,10 @@ PUBLIC_MODULES = (
     "openforecast.recipes",
     "openforecast.registry",
     "openforecast.runtime",
+    # The remote surface. Rule 6 has to hold over what an HTTP body serializes
+    # for the same reason it holds over a manifest: a caller reading one should
+    # never have to know which library executed the model.
+    "openforecast.server",
     "openforecast.tasks",
     "openforecast.views",
 )

@@ -10,8 +10,18 @@ dependencies = [
     "platformdirs",
 ]
 
+# The HTTP projection of Step 16. The core install stays the three libraries the
+# semantics are built on: `HttpTransport` is urllib, so *calling* a remote
+# service needs nothing extra, and only *serving* one does.
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
+
 [project.scripts]
 openforecast = "openforecast.commands:main"
+generate-openapi = "openforecast.server.openapi:main"
 
 [project.urls]
 Homepage = "https://github.com/Garsdal/openforecast"
@@ -36,6 +46,11 @@ dev = [
     # pandas is a test dependency only: from_pandas converts at the edge.
     "pandas>=3",
     "pandas-stubs>=3",
+    # The server extra, so that the HTTP projection and the committed OpenAPI
+    # document are checked by the ordinary test run rather than only by whoever
+    # installed the extra.
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
 ]
 
 [tool.ruff]

@@ -2,6 +2,7 @@
 
 ```bash
 openforecast providers list
+openforecast serve
 ```
 
 A thin projection over the same objects the Python API uses — never a second
@@ -19,11 +20,11 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import IO
 
 from openforecast import __version__
-from openforecast.commands import providers
+from openforecast.commands import providers, serve
 from openforecast.errors import OpenForecastError
 
 __all__ = ["build_parser", "main"]
@@ -41,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"openforecast {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
     providers.add_parser(commands)
+    serve.add_parser(commands)
     return parser
 
 
@@ -56,7 +58,10 @@ def main(
     stdout = out if out is not None else sys.stdout
     stderr = err if err is not None else sys.stderr
     try:
-        return providers.run(args, stdout)
+        # Each command group registers its own handler, so adding one is adding
+        # a parser rather than editing a chain of comparisons here.
+        handler: Callable[[argparse.Namespace, IO[str]], int] = args.handler
+        return handler(args, stdout)
     except OpenForecastError as error:
         print(f"error: {error}", file=stderr)
         return EXIT_ERROR

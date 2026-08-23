@@ -1,0 +1,2172 @@
+{
+  "components": {
+    "schemas": {
+      "Accelerator": {
+        "enum": [
+          "auto",
+          "cpu",
+          "gpu"
+        ],
+        "title": "Accelerator",
+        "type": "string"
+      },
+      "AllOrigins": {
+        "additionalProperties": false,
+        "description": "Every origin the data holds, optionally thinned by ``stride``.\n\nA stride of 12 on hourly vintages trains on two origins a day. It thins the\nsamples rather than the horizon each sample covers, so the sequences stay\nexactly as long \u2014 this is a way to spend less compute on highly overlapping\norigins, not a way to change what a sample means.",
+        "properties": {
+          "mode": {
+            "const": "all",
+            "default": "all",
+            "title": "Mode",
+            "type": "string"
+          },
+          "stride": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Stride",
+            "type": "integer"
+          }
+        },
+        "title": "AllOrigins",
+        "type": "object"
+      },
+      "AtOrigin": {
+        "additionalProperties": false,
+        "description": "Exactly one named origin.\n\nMatched exactly rather than approximately. Answering for 10:00 when 11:00\nwas asked for would train the model on a vintage the caller never named.",
+        "properties": {
+          "mode": {
+            "const": "at",
+            "default": "at",
+            "title": "Mode",
+            "type": "string"
+          },
+          "origin": {
+            "format": "date-time",
+            "title": "Origin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin"
+        ],
+        "title": "AtOrigin",
+        "type": "object"
+      },
+      "ColumnSet": {
+        "description": "A role, rather than a list of names.\n\n``columns=\"targets\"`` keeps a recipe portable across datasets: the same\npipeline can be fitted on German prices and on Danish load without being\nrewritten, because the role is resolved against whatever schema it meets.",
+        "enum": [
+          "targets",
+          "features"
+        ],
+        "title": "ColumnSet",
+        "type": "string"
+      },
+      "Ensemble": {
+        "additionalProperties": false,
+        "description": "Several recipes, combined into one forecast.\n\nMembers are recipes rather than models, so an ensemble of pipelines \u2014 or of\nensembles \u2014 needs no extra vocabulary. Whether a given combination can\nactually be fitted on the data at hand is a question about the members'\ntraining contracts, and the engine answers it in Step 8; a member's contract\nis not knowable here, where nothing has been resolved yet.",
+        "properties": {
+          "combine": {
+            "default": {
+              "combine": "mean"
+            },
+            "discriminator": {
+              "mapping": {
+                "mean": "#/components/schemas/Mean",
+                "weighted_mean": "#/components/schemas/WeightedMean"
+              },
+              "propertyName": "combine"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Mean"
+              },
+              {
+                "$ref": "#/components/schemas/WeightedMean"
+              }
+            ],
+            "title": "Combine"
+          },
+          "kind": {
+            "const": "ensemble",
+            "default": "ensemble",
+            "title": "Kind",
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "ensemble": "#/components/schemas/Ensemble",
+                  "model": "#/components/schemas/Model",
+                  "pipeline": "#/components/schemas/Pipeline",
+                  "reduction": "#/components/schemas/Reduction"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Model"
+                },
+                {
+                  "$ref": "#/components/schemas/Pipeline"
+                },
+                {
+                  "$ref": "#/components/schemas/Ensemble"
+                },
+                {
+                  "$ref": "#/components/schemas/Reduction"
+                }
+              ]
+            },
+            "title": "Models",
+            "type": "array"
+          }
+        },
+        "required": [
+          "models"
+        ],
+        "title": "Ensemble",
+        "type": "object"
+      },
+      "ErrorBody": {
+        "additionalProperties": false,
+        "description": "The one error envelope, whatever the status code.",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorInfo"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "ErrorBody",
+        "type": "object"
+      },
+      "ErrorInfo": {
+        "additionalProperties": false,
+        "description": "A failure, in terms a caller can act on.\n\n``type`` is the name of the OpenForecast exception the same failure would\nhave raised in process, so a remote client re-raises what a local one would\nand a caller's ``except of.DataError`` does not depend on where the model\nran.",
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "message"
+        ],
+        "title": "ErrorInfo",
+        "type": "object"
+      },
+      "FeatureAvailability": {
+        "enum": [
+          "observed",
+          "known"
+        ],
+        "title": "FeatureAvailability",
+        "type": "string"
+      },
+      "FeatureCapabilities": {
+        "additionalProperties": false,
+        "description": "Which feature roles the model can consume.\n\nNamed after the roles OpenForecast declares, not after any provider's\ncovariate vocabulary; ``hist_exog_list`` and friends are a translation that\nhappens inside an integration.",
+        "properties": {
+          "known": {
+            "default": false,
+            "title": "Known",
+            "type": "boolean"
+          },
+          "observed": {
+            "default": false,
+            "title": "Observed",
+            "type": "boolean"
+          },
+          "static": {
+            "default": false,
+            "title": "Static",
+            "type": "boolean"
+          }
+        },
+        "title": "FeatureCapabilities",
+        "type": "object"
+      },
+      "FeatureKind": {
+        "enum": [
+          "temporal",
+          "static"
+        ],
+        "title": "FeatureKind",
+        "type": "string"
+      },
+      "FeatureSpec": {
+        "additionalProperties": false,
+        "description": "One non-target column, with its semantics.",
+        "properties": {
+          "availability": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeatureAvailability"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FeatureKind",
+            "default": "temporal"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "FeatureSpec",
+        "type": "object"
+      },
+      "FitBody": {
+        "additionalProperties": false,
+        "description": "``POST /v1/fit`` \u2014 the arguments of ``of.fit``, named the same way.\n\n``model`` is a recipe or the reference of a single model, which is the same\nunion the local call accepts: ``of.fit(\"builtin/seasonal-naive\", ...)`` is\nthe short spelling of ``of.fit(of.Model(\"builtin/seasonal-naive\"), ...)``.\nA fitted artifact is not in it, because fitting one again is a new fit and\nthe recipe it records is what would be refitted.",
+        "properties": {
+          "data": {
+            "discriminator": {
+              "mapping": {
+                "forecast_context": "#/components/schemas/ForecastContextPayload",
+                "forecast_dataset": "#/components/schemas/ForecastDatasetPayload",
+                "point_in_time": "#/components/schemas/PointInTimePayload",
+                "time_series": "#/components/schemas/TimeSeriesPayload"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TimeSeriesPayload"
+              },
+              {
+                "$ref": "#/components/schemas/PointInTimePayload"
+              },
+              {
+                "$ref": "#/components/schemas/ForecastDatasetPayload"
+              },
+              {
+                "$ref": "#/components/schemas/ForecastContextPayload"
+              }
+            ],
+            "title": "Data"
+          },
+          "horizon": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Horizon"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "ensemble": "#/components/schemas/Ensemble",
+                    "model": "#/components/schemas/Model",
+                    "pipeline": "#/components/schemas/Pipeline",
+                    "reduction": "#/components/schemas/Reduction"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Model"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Pipeline"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Ensemble"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Reduction"
+                  }
+                ]
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Model"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Params"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FitPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "model",
+          "data"
+        ],
+        "title": "FitBody",
+        "type": "object"
+      },
+      "FitPlan": {
+        "additionalProperties": false,
+        "description": "How to fit: which origins, how much context, how reproducibly, on what.\n\nNot *what* to fit \u2014 that is the recipe \u2014 and not *what to predict*, which is\nthe forecast task. Keeping the three apart is what lets the same recipe be\nfitted at one origin and at every origin without being rewritten.",
+        "properties": {
+          "origins": {
+            "default": {
+              "mode": "all",
+              "stride": 1
+            },
+            "discriminator": {
+              "mapping": {
+                "all": "#/components/schemas/AllOrigins",
+                "at": "#/components/schemas/AtOrigin",
+                "between": "#/components/schemas/OriginsBetween",
+                "latest": "#/components/schemas/LatestOrigin"
+              },
+              "propertyName": "mode"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AllOrigins"
+              },
+              {
+                "$ref": "#/components/schemas/LatestOrigin"
+              },
+              {
+                "$ref": "#/components/schemas/AtOrigin"
+              },
+              {
+                "$ref": "#/components/schemas/OriginsBetween"
+              }
+            ],
+            "title": "Origins"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/Resources",
+            "default": {
+              "accelerator": "auto"
+            }
+          },
+          "search": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WindowPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "FitPlan",
+        "type": "object"
+      },
+      "ForecastBody": {
+        "additionalProperties": false,
+        "description": "``POST /v1/forecast`` \u2014 a fitted reference, one origin, one horizon.\n\n``model`` is a string here where the local call also accepts the handle it\nreturned. That is not a narrowing: a handle *is* a pinned reference plus the\nmanifest the server already has, so sending ``local/de-price@01K...`` asks\nfor the same artifact, and sending ``local/de-price`` follows the alias on\nthe server that owns it.",
+        "properties": {
+          "data": {
+            "discriminator": {
+              "mapping": {
+                "forecast_context": "#/components/schemas/ForecastContextPayload",
+                "forecast_dataset": "#/components/schemas/ForecastDatasetPayload",
+                "point_in_time": "#/components/schemas/PointInTimePayload",
+                "time_series": "#/components/schemas/TimeSeriesPayload"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TimeSeriesPayload"
+              },
+              {
+                "$ref": "#/components/schemas/PointInTimePayload"
+              },
+              {
+                "$ref": "#/components/schemas/ForecastDatasetPayload"
+              },
+              {
+                "$ref": "#/components/schemas/ForecastContextPayload"
+              }
+            ],
+            "title": "Data"
+          },
+          "horizon": {
+            "minimum": 1.0,
+            "title": "Horizon",
+            "type": "integer"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "origin_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Time"
+          },
+          "output": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "model",
+          "data",
+          "horizon"
+        ],
+        "title": "ForecastBody",
+        "type": "object"
+      },
+      "ForecastContextPayload": {
+        "additionalProperties": false,
+        "description": "One inference origin: a frame, and the moment it is split at.",
+        "properties": {
+          "frame": {
+            "$ref": "#/components/schemas/TimeSeriesPayload"
+          },
+          "kind": {
+            "const": "forecast_context",
+            "default": "forecast_context",
+            "title": "Kind",
+            "type": "string"
+          },
+          "origin_time": {
+            "format": "date-time",
+            "title": "Origin Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin_time",
+          "frame"
+        ],
+        "title": "ForecastContextPayload",
+        "type": "object"
+      },
+      "ForecastDatasetPayload": {
+        "additionalProperties": false,
+        "description": "Real vintages and the outcomes they were predicting.",
+        "properties": {
+          "information": {
+            "$ref": "#/components/schemas/PointInTimePayload"
+          },
+          "kind": {
+            "const": "forecast_dataset",
+            "default": "forecast_dataset",
+            "title": "Kind",
+            "type": "string"
+          },
+          "truth": {
+            "$ref": "#/components/schemas/TimeSeriesPayload"
+          }
+        },
+        "required": [
+          "information",
+          "truth"
+        ],
+        "title": "ForecastDatasetPayload",
+        "type": "object"
+      },
+      "ForecastPayload": {
+        "additionalProperties": false,
+        "description": "What a forecast is, in the one long shape it always has.\n\nThe metadata is the control channel and ``table`` is the bulk one: the\ncanonical long forecast \u2014 instance keys, ``event_time``, ``target``,\n``kind``, ``quantile``, ``sample``, ``value`` \u2014 as Arrow IPC. A wide\nforecast is a projection the caller makes locally, so it is never what\ncrosses.",
+        "properties": {
+          "horizon": {
+            "title": "Horizon",
+            "type": "integer"
+          },
+          "instance_keys": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Instance Keys",
+            "type": "array"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "origin_time": {
+            "format": "date-time",
+            "title": "Origin Time",
+            "type": "string"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "model",
+          "origin_time",
+          "horizon",
+          "targets",
+          "table"
+        ],
+        "title": "ForecastPayload",
+        "type": "object"
+      },
+      "Frequency": {
+        "additionalProperties": false,
+        "description": "How far apart consecutive steps of a time axis are.",
+        "properties": {
+          "step": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Step",
+            "type": "integer"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/FrequencyUnit"
+          }
+        },
+        "required": [
+          "unit"
+        ],
+        "title": "Frequency",
+        "type": "object"
+      },
+      "FrequencyUnit": {
+        "enum": [
+          "second",
+          "minute",
+          "hour",
+          "day",
+          "week",
+          "month"
+        ],
+        "title": "FrequencyUnit",
+        "type": "string"
+      },
+      "Impute": {
+        "additionalProperties": false,
+        "description": "Fill missing values with a stated statistic.\n\n``method`` has no default on purpose. Which fill is right depends on what\nthe column means, and a default would be OpenForecast quietly choosing for\nevery dataset that forgot to say.\n\nThe statistic is computed on the fitted data and recorded in the artifact,\nso inference fills the same way training did rather than leaking the context\nit happens to be given.",
+        "properties": {
+          "columns": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ColumnSet"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "Columns"
+          },
+          "kind": {
+            "const": "impute",
+            "default": "impute",
+            "title": "Kind",
+            "type": "string"
+          },
+          "method": {
+            "$ref": "#/components/schemas/ImputeMethod"
+          }
+        },
+        "required": [
+          "columns",
+          "method"
+        ],
+        "title": "Impute",
+        "type": "object"
+      },
+      "ImputeMethod": {
+        "enum": [
+          "mean",
+          "median",
+          "zero"
+        ],
+        "title": "ImputeMethod",
+        "type": "string"
+      },
+      "InstanceCapabilities": {
+        "additionalProperties": false,
+        "description": "How many series at once.",
+        "properties": {
+          "panel": {
+            "default": false,
+            "title": "Panel",
+            "type": "boolean"
+          },
+          "single": {
+            "default": true,
+            "title": "Single",
+            "type": "boolean"
+          }
+        },
+        "title": "InstanceCapabilities",
+        "type": "object"
+      },
+      "LatestOrigin": {
+        "additionalProperties": false,
+        "description": "Only the freshest origin \u2014 the one production inference would run at.",
+        "properties": {
+          "mode": {
+            "const": "latest",
+            "default": "latest",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "LatestOrigin",
+        "type": "object"
+      },
+      "LeadTimeFeature": {
+        "additionalProperties": false,
+        "description": "``event_time - origin_time``, as a feature the model can condition on.\n\nGenuinely useful on point-in-time data: a wind forecast issued six hours\nahead is not the same quality of information as one issued sixty, and a\nmodel given the lead time can learn that. Derived rather than stored, which\nis why asking for it is a recipe step instead of a column in the source data.",
+        "properties": {
+          "kind": {
+            "const": "lead_time_feature",
+            "default": "lead_time_feature",
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "default": "lead_time",
+            "title": "Name",
+            "type": "string"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/FrequencyUnit",
+            "default": "hour"
+          }
+        },
+        "title": "LeadTimeFeature",
+        "type": "object"
+      },
+      "Mean": {
+        "additionalProperties": false,
+        "description": "Average the members equally.",
+        "properties": {
+          "combine": {
+            "const": "mean",
+            "default": "mean",
+            "title": "Combine",
+            "type": "string"
+          }
+        },
+        "title": "Mean",
+        "type": "object"
+      },
+      "MissingIndicator": {
+        "additionalProperties": false,
+        "description": "Add a boolean column recording where a value was missing.\n\nPut it *before* an imputation, never after: an indicator computed on imputed\ndata is constant, and the fact that a feature was not published at an origin\nis exactly what would have been lost.",
+        "properties": {
+          "columns": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ColumnSet"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "Columns"
+          },
+          "kind": {
+            "const": "missing_indicator",
+            "default": "missing_indicator",
+            "title": "Kind",
+            "type": "string"
+          },
+          "suffix": {
+            "default": "_is_missing",
+            "title": "Suffix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "columns"
+        ],
+        "title": "MissingIndicator",
+        "type": "object"
+      },
+      "MissingValueSupport": {
+        "enum": [
+          "native",
+          "requires_transform",
+          "unsupported"
+        ],
+        "title": "MissingValueSupport",
+        "type": "string"
+      },
+      "Model": {
+        "additionalProperties": false,
+        "description": "One model, by reference, with the parameters only its provider understands.\n\n```python\nof.Model(\"nixtla/nhits\", params={\"max_steps\": 500})\n```\n\n``params`` is opaque to OpenForecast and reaches the provider unchanged \u2014\nwhich is exactly why it may not carry anything OpenForecast owns. A context\nlength passed as ``input_size`` would be a second copy of\n``WindowPlan(context=...)``, invisible to the planner that has to materialize\nthe samples, so it is rejected with the field to use instead.",
+        "properties": {
+          "kind": {
+            "const": "model",
+            "default": "model",
+            "title": "Kind",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Params",
+            "type": "object"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/ModelRef"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "title": "Model",
+        "type": "object"
+      },
+      "ModelCapabilities": {
+        "additionalProperties": false,
+        "description": "The full capability declaration of one model.",
+        "properties": {
+          "features": {
+            "$ref": "#/components/schemas/FeatureCapabilities",
+            "default": {
+              "known": false,
+              "observed": false,
+              "static": false
+            }
+          },
+          "instances": {
+            "$ref": "#/components/schemas/InstanceCapabilities",
+            "default": {
+              "panel": false,
+              "single": true
+            }
+          },
+          "missing_values": {
+            "$ref": "#/components/schemas/MissingValueSupport",
+            "default": "unsupported"
+          },
+          "outputs": {
+            "$ref": "#/components/schemas/OutputCapabilities",
+            "default": {
+              "point": true,
+              "quantiles": false,
+              "samples": false
+            }
+          },
+          "targets": {
+            "$ref": "#/components/schemas/TargetCapabilities",
+            "default": {
+              "multivariate": false,
+              "univariate": true
+            }
+          }
+        },
+        "title": "ModelCapabilities",
+        "type": "object"
+      },
+      "ModelDescriptor": {
+        "additionalProperties": false,
+        "description": "One model, as the catalog and the engine see it.",
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/ModelCapabilities",
+            "default": {
+              "features": {
+                "known": false,
+                "observed": false,
+                "static": false
+              },
+              "instances": {
+                "panel": false,
+                "single": true
+              },
+              "missing_values": "unsupported",
+              "outputs": {
+                "point": true,
+                "quantiles": false,
+                "samples": false
+              },
+              "targets": {
+                "multivariate": false,
+                "univariate": true
+              }
+            }
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ModelLifecycle"
+          },
+          "parameters_schema": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Parameters Schema",
+            "type": "object"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/ModelRef"
+          },
+          "training": {
+            "$ref": "#/components/schemas/TrainingContract"
+          }
+        },
+        "required": [
+          "ref",
+          "provider",
+          "display_name",
+          "lifecycle",
+          "training"
+        ],
+        "title": "ModelDescriptor",
+        "type": "object"
+      },
+      "ModelHandle": {
+        "additionalProperties": false,
+        "description": "One published artifact, as everything outside the provider sees it.",
+        "properties": {
+          "manifest": {
+            "$ref": "#/components/schemas/ModelManifest"
+          },
+          "path": {
+            "format": "path",
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "manifest",
+          "path"
+        ],
+        "title": "ModelHandle",
+        "type": "object"
+      },
+      "ModelLifecycle": {
+        "additionalProperties": false,
+        "description": "What has to happen to a model before it can forecast.",
+        "properties": {
+          "requires_fit": {
+            "title": "Requires Fit",
+            "type": "boolean"
+          },
+          "supports_fit": {
+            "title": "Supports Fit",
+            "type": "boolean"
+          },
+          "supports_update": {
+            "default": false,
+            "title": "Supports Update",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "requires_fit",
+          "supports_fit"
+        ],
+        "title": "ModelLifecycle",
+        "type": "object"
+      },
+      "ModelListing": {
+        "additionalProperties": false,
+        "description": "``GET /v1/models`` \u2014 every model the service can fit.",
+        "properties": {
+          "models": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ModelDescriptor"
+            },
+            "title": "Models",
+            "type": "array"
+          }
+        },
+        "title": "ModelListing",
+        "type": "object"
+      },
+      "ModelManifest": {
+        "additionalProperties": false,
+        "description": "The complete, immutable description of one fitted artifact.",
+        "properties": {
+          "artifact_id": {
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "data_schema": {
+            "$ref": "#/components/schemas/TrainedSchema"
+          },
+          "members": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/TrainingRecord"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "missing_value_transforms": {
+            "default": [],
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MissingIndicator"
+                },
+                {
+                  "$ref": "#/components/schemas/Impute"
+                }
+              ]
+            },
+            "title": "Missing Value Transforms",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "openforecast_version": {
+            "title": "Openforecast Version",
+            "type": "string"
+          },
+          "protocol_version": {
+            "default": 1,
+            "title": "Protocol Version",
+            "type": "integer"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "provider_version": {
+            "title": "Provider Version",
+            "type": "string"
+          },
+          "recipe_hash": {
+            "title": "Recipe Hash",
+            "type": "string"
+          },
+          "source_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "training": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrainingRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "training_schema_hash": {
+            "title": "Training Schema Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "name",
+          "provider",
+          "provider_version",
+          "openforecast_version",
+          "recipe_hash",
+          "training_schema_hash",
+          "data_schema"
+        ],
+        "title": "ModelManifest",
+        "type": "object"
+      },
+      "ModelRef": {
+        "additionalProperties": false,
+        "description": "A parsed model reference.\n\nFrozen and hashable, so it can key a catalog: two references that print the\nsame are the same reference.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          }
+        },
+        "required": [
+          "namespace",
+          "name"
+        ],
+        "title": "ModelRef",
+        "type": "object"
+      },
+      "OriginCalendarFeatures": {
+        "additionalProperties": false,
+        "description": "Calendar features of the *origin*, not of the event time.\n\nThe distinction matters on real vintages: a forecast issued at 06:00 for\ntomorrow noon is built from a different information set than one issued at\n18:00 for the same noon, and when a model is learning across origins that is\na systematic effect rather than noise.",
+        "properties": {
+          "hour": {
+            "default": false,
+            "title": "Hour",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "origin_calendar_features",
+            "default": "origin_calendar_features",
+            "title": "Kind",
+            "type": "string"
+          },
+          "month": {
+            "default": false,
+            "title": "Month",
+            "type": "boolean"
+          },
+          "prefix": {
+            "default": "origin",
+            "title": "Prefix",
+            "type": "string"
+          },
+          "weekday": {
+            "default": false,
+            "title": "Weekday",
+            "type": "boolean"
+          }
+        },
+        "title": "OriginCalendarFeatures",
+        "type": "object"
+      },
+      "OriginFidelity": {
+        "enum": [
+          "simulated",
+          "observed"
+        ],
+        "title": "OriginFidelity",
+        "type": "string"
+      },
+      "OriginScope": {
+        "enum": [
+          "single",
+          "multiple"
+        ],
+        "title": "OriginScope",
+        "type": "string"
+      },
+      "OriginsBetween": {
+        "additionalProperties": false,
+        "description": "Every origin in a closed interval, optionally thinned by ``stride``.\n\nThe bounds are inclusive, and an interval the data does not cover is an\nerror rather than an empty fit: it almost always means the caller is\nreasoning about a different dataset than the one they passed.",
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "mode": {
+            "const": "between",
+            "default": "between",
+            "title": "Mode",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "stride": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Stride",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "OriginsBetween",
+        "type": "object"
+      },
+      "OutputCapabilities": {
+        "additionalProperties": false,
+        "description": "What the model can produce.",
+        "properties": {
+          "point": {
+            "default": true,
+            "title": "Point",
+            "type": "boolean"
+          },
+          "quantiles": {
+            "default": false,
+            "title": "Quantiles",
+            "type": "boolean"
+          },
+          "samples": {
+            "default": false,
+            "title": "Samples",
+            "type": "boolean"
+          }
+        },
+        "title": "OutputCapabilities",
+        "type": "object"
+      },
+      "OutputKind": {
+        "enum": [
+          "point",
+          "quantiles",
+          "samples"
+        ],
+        "title": "OutputKind",
+        "type": "string"
+      },
+      "OutputSpec": {
+        "additionalProperties": false,
+        "description": "What kind of forecast to produce.\n\nThe fields are ``levels`` and ``draws`` rather than ``quantiles`` and\n``samples`` because the constructors own those two names \u2014 and the\nconstructors are the interface:\n\n```python\nof.OutputSpec.quantiles([0.1, 0.5, 0.9])   # spec.levels\nof.OutputSpec.samples(100)                 # spec.draws\n```",
+        "properties": {
+          "draws": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draws"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OutputKind",
+            "default": "point"
+          },
+          "levels": {
+            "default": [],
+            "items": {
+              "type": "number"
+            },
+            "title": "Levels",
+            "type": "array"
+          }
+        },
+        "title": "OutputSpec",
+        "type": "object"
+      },
+      "Pipeline": {
+        "additionalProperties": false,
+        "description": "Transforms, then exactly one estimator, in order.\n\n```python\nof.Pipeline(steps=[\n    of.MissingIndicator(columns=\"features\"),\n    of.Impute(columns=\"features\", method=\"median\"),\n    of.Model(\"nixtla/nhits\"),\n])\n```\n\nThe estimator has to come last, and there has to be exactly one: a pipeline\nis a recipe for a forecast, and steps after the thing that forecasts have\nnothing to act on. Transform order is otherwise the caller's, with one\nexception \u2014 an imputation before a missing indicator over the same columns\nwould make the indicator constant, silently discarding the very fact it was\nadded to record.\n\nPipelines do not nest. Flattening one would change nothing about what it\nmeans, so a nested one is a recipe written two ways.",
+        "properties": {
+          "kind": {
+            "const": "pipeline",
+            "default": "pipeline",
+            "title": "Kind",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "ensemble": "#/components/schemas/Ensemble",
+                  "impute": "#/components/schemas/Impute",
+                  "lead_time_feature": "#/components/schemas/LeadTimeFeature",
+                  "missing_indicator": "#/components/schemas/MissingIndicator",
+                  "model": "#/components/schemas/Model",
+                  "origin_calendar_features": "#/components/schemas/OriginCalendarFeatures",
+                  "reduction": "#/components/schemas/Reduction",
+                  "standard_scaler": "#/components/schemas/StandardScaler"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/StandardScaler"
+                },
+                {
+                  "$ref": "#/components/schemas/MissingIndicator"
+                },
+                {
+                  "$ref": "#/components/schemas/Impute"
+                },
+                {
+                  "$ref": "#/components/schemas/LeadTimeFeature"
+                },
+                {
+                  "$ref": "#/components/schemas/OriginCalendarFeatures"
+                },
+                {
+                  "$ref": "#/components/schemas/Model"
+                },
+                {
+                  "$ref": "#/components/schemas/Ensemble"
+                },
+                {
+                  "$ref": "#/components/schemas/Reduction"
+                }
+              ]
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "steps"
+        ],
+        "title": "Pipeline",
+        "type": "object"
+      },
+      "PointInTimePayload": {
+        "additionalProperties": false,
+        "description": "A :class:`~openforecast.data.point_in_time.PointInTimeFrame` on the wire.",
+        "properties": {
+          "data_schema": {
+            "$ref": "#/components/schemas/PointInTimeSchema"
+          },
+          "kind": {
+            "const": "point_in_time",
+            "default": "point_in_time",
+            "title": "Kind",
+            "type": "string"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data_schema",
+          "table"
+        ],
+        "title": "PointInTimePayload",
+        "type": "object"
+      },
+      "PointInTimeSchema": {
+        "additionalProperties": false,
+        "description": "What the columns of a :class:`PointInTimeFrame` mean.\n\nThere are no targets here. A point-in-time frame describes information, not\noutcomes; what actually happened lives in the ``truth`` side of a\n:class:`~openforecast.data.forecast_dataset.ForecastDataset`.\n\n``origin_frequency`` is optional because vintages are often irregular \u2014 a\nday-ahead run at 10:00 and an intraday run at 14:00 sit on no single grid.\nDeclaring it opts into validating that they do.",
+        "properties": {
+          "event_frequency": {
+            "$ref": "#/components/schemas/Frequency"
+          },
+          "event_time": {
+            "title": "Event Time",
+            "type": "string"
+          },
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/FeatureSpec"
+            },
+            "title": "Features",
+            "type": "array"
+          },
+          "instance_keys": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Instance Keys",
+            "type": "array"
+          },
+          "origin_frequency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Frequency"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "origin_time": {
+            "title": "Origin Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin_time",
+          "event_time",
+          "event_frequency",
+          "features"
+        ],
+        "title": "PointInTimeSchema",
+        "type": "object"
+      },
+      "Reduction": {
+        "additionalProperties": false,
+        "description": "Forecasting reduced to tabular regression.\n\n```python\nof.Reduction(estimator=\"lightgbm/regressor\", strategy=\"direct\", lags=[1, 24, 168])\n```\n\nThis is the recipe behind the point-in-time LightGBM setups that motivated\nthe whole design: the ``ViewPlanner`` materializes a ``TabularView`` holding\none row per instance, origin and horizon step, and the estimator never learns\nthat some of those rows came from different vintages of the same event time.\n\nThe protocol is defined here; execution arrives in Step 14. A recipe that\ncannot be executed yet is still worth being able to write down and store,\nwhich is why constructing one is not an error.",
+        "properties": {
+          "estimator": {
+            "$ref": "#/components/schemas/ModelRef"
+          },
+          "kind": {
+            "const": "reduction",
+            "default": "reduction",
+            "title": "Kind",
+            "type": "string"
+          },
+          "lags": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Lags",
+            "type": "array"
+          },
+          "strategy": {
+            "$ref": "#/components/schemas/ReductionStrategy"
+          }
+        },
+        "required": [
+          "estimator",
+          "strategy",
+          "lags"
+        ],
+        "title": "Reduction",
+        "type": "object"
+      },
+      "ReductionStrategy": {
+        "description": "How a horizon is turned into supervised regression problems.",
+        "enum": [
+          "recursive",
+          "direct",
+          "multioutput"
+        ],
+        "title": "ReductionStrategy",
+        "type": "string"
+      },
+      "Resources": {
+        "additionalProperties": false,
+        "description": "What hardware a fit may use.\n\nDeliberately thin. A provider knows how to talk to its own accelerators; the\npoint of naming them here is that the *request* is OpenForecast's, so two\nproviders do not need two different spellings of \"use the GPU\".",
+        "properties": {
+          "accelerator": {
+            "$ref": "#/components/schemas/Accelerator",
+            "default": "auto"
+          },
+          "devices": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Devices"
+          }
+        },
+        "title": "Resources",
+        "type": "object"
+      },
+      "SearchPlan": {
+        "additionalProperties": false,
+        "description": "Hyperparameter search \u2014 reserved, not yet executable.\n\nThe shape is fixed now so that the plan that reaches a provider does not\nhave to change when search lands. Attaching one to a ``FitPlan`` raises\n:class:`~openforecast.errors.UnsupportedPlanError` today, because the\nalternative \u2014 accepting it and fitting once with the first candidate \u2014 would\nlook exactly like a search that ran.",
+        "properties": {
+          "space": {
+            "additionalProperties": {
+              "items": {},
+              "type": "array"
+            },
+            "title": "Space",
+            "type": "object"
+          },
+          "strategy": {
+            "$ref": "#/components/schemas/SearchStrategy"
+          },
+          "trials": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trials"
+          }
+        },
+        "required": [
+          "strategy",
+          "space"
+        ],
+        "title": "SearchPlan",
+        "type": "object"
+      },
+      "SearchStrategy": {
+        "enum": [
+          "grid",
+          "random"
+        ],
+        "title": "SearchStrategy",
+        "type": "string"
+      },
+      "SourceKind": {
+        "description": "Which semantic dataset a view was materialized from.\n\nRecorded for provenance only. A provider never sees it \u2014 that is the whole\npoint of the view boundary \u2014 but an artifact has to be able to say what it\nwas trained on.",
+        "enum": [
+          "time_series",
+          "forecast_dataset",
+          "forecast_context"
+        ],
+        "title": "SourceKind",
+        "type": "string"
+      },
+      "StandardScaler": {
+        "additionalProperties": false,
+        "description": "Center and scale columns, undoing it on the way back out.\n\n``per_instance`` scales every series by its own history, which is what makes\na panel of a 40 GW zone and a 2 GW zone learnable by one global model. Turn\nit off when the levels are comparable and the differences between them are\nthe signal.",
+        "properties": {
+          "columns": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ColumnSet"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "Columns"
+          },
+          "kind": {
+            "const": "standard_scaler",
+            "default": "standard_scaler",
+            "title": "Kind",
+            "type": "string"
+          },
+          "per_instance": {
+            "default": true,
+            "title": "Per Instance",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "columns"
+        ],
+        "title": "StandardScaler",
+        "type": "object"
+      },
+      "TargetCapabilities": {
+        "additionalProperties": false,
+        "description": "How many targets at once.",
+        "properties": {
+          "multivariate": {
+            "default": false,
+            "title": "Multivariate",
+            "type": "boolean"
+          },
+          "univariate": {
+            "default": true,
+            "title": "Univariate",
+            "type": "boolean"
+          }
+        },
+        "title": "TargetCapabilities",
+        "type": "object"
+      },
+      "TimeSeriesPayload": {
+        "additionalProperties": false,
+        "description": "A :class:`~openforecast.data.frame.TimeSeriesFrame` on the wire.",
+        "properties": {
+          "data_schema": {
+            "$ref": "#/components/schemas/TimeSeriesSchema"
+          },
+          "future": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Future"
+          },
+          "history": {
+            "title": "History",
+            "type": "string"
+          },
+          "kind": {
+            "const": "time_series",
+            "default": "time_series",
+            "title": "Kind",
+            "type": "string"
+          },
+          "static": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Static"
+          }
+        },
+        "required": [
+          "data_schema",
+          "history"
+        ],
+        "title": "TimeSeriesPayload",
+        "type": "object"
+      },
+      "TimeSeriesSchema": {
+        "additionalProperties": false,
+        "description": "What the columns of a :class:`~openforecast.data.frame.TimeSeriesFrame` mean.\n\nThe semantic axes are orthogonal and the interesting categories are derived\nfrom them: a panel of several targets is ``is_panel and is_multivariate``,\nnot a ``PANEL_MULTIVARIATE`` enum member.",
+        "properties": {
+          "features": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FeatureSpec"
+            },
+            "title": "Features",
+            "type": "array"
+          },
+          "frequency": {
+            "$ref": "#/components/schemas/Frequency"
+          },
+          "instance_keys": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Instance Keys",
+            "type": "array"
+          },
+          "targets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Targets",
+            "type": "array"
+          },
+          "time": {
+            "title": "Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "time",
+          "frequency",
+          "targets"
+        ],
+        "title": "TimeSeriesSchema",
+        "type": "object"
+      },
+      "TrainedSchema": {
+        "additionalProperties": false,
+        "description": "The data shape a fitted artifact expects to be given again.\n\nA projection of the training view's schema, without the view's own layout:\nwhat the forecast data has to declare for the artifact to be applicable at\nall. Kept in the manifest so that answering \"can this model forecast this\ndataset\" needs no provider and no Arrow file.",
+        "properties": {
+          "features": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FeatureSpec"
+            },
+            "title": "Features",
+            "type": "array"
+          },
+          "frequency": {
+            "$ref": "#/components/schemas/Frequency"
+          },
+          "instance_keys": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Instance Keys",
+            "type": "array"
+          },
+          "targets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "frequency",
+          "targets"
+        ],
+        "title": "TrainedSchema",
+        "type": "object"
+      },
+      "TrainingContract": {
+        "additionalProperties": false,
+        "description": "How OpenForecast must materialize data before this model executes.",
+        "properties": {
+          "context_required": {
+            "default": false,
+            "title": "Context Required",
+            "type": "boolean"
+          },
+          "horizon_bound_at_fit": {
+            "default": false,
+            "title": "Horizon Bound At Fit",
+            "type": "boolean"
+          },
+          "origin_scope": {
+            "$ref": "#/components/schemas/OriginScope"
+          },
+          "supports_unseen_instances": {
+            "default": false,
+            "title": "Supports Unseen Instances",
+            "type": "boolean"
+          },
+          "view": {
+            "$ref": "#/components/schemas/ViewKind"
+          }
+        },
+        "required": [
+          "view",
+          "origin_scope"
+        ],
+        "title": "TrainingContract",
+        "type": "object"
+      },
+      "TrainingRecord": {
+        "additionalProperties": false,
+        "description": "How the model was trained, as opposed to what it was trained from.\n\nEverything here is decided by the ``ViewPlanner`` rather than by the\nprovider, which is why it can be recorded without asking one: the view, how\nmuch context and horizon each sample spanned, how many samples there were,\nfrom which origins, and whether those origins were real.",
+        "properties": {
+          "context": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          },
+          "horizon": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Horizon"
+          },
+          "horizon_bound": {
+            "default": true,
+            "title": "Horizon Bound",
+            "type": "boolean"
+          },
+          "materializer_version": {
+            "default": 1,
+            "title": "Materializer Version",
+            "type": "integer"
+          },
+          "origin_fidelity": {
+            "$ref": "#/components/schemas/OriginFidelity"
+          },
+          "origins": {
+            "default": {
+              "mode": "all",
+              "stride": 1
+            },
+            "discriminator": {
+              "mapping": {
+                "all": "#/components/schemas/AllOrigins",
+                "at": "#/components/schemas/AtOrigin",
+                "between": "#/components/schemas/OriginsBetween",
+                "latest": "#/components/schemas/LatestOrigin"
+              },
+              "propertyName": "mode"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AllOrigins"
+              },
+              {
+                "$ref": "#/components/schemas/LatestOrigin"
+              },
+              {
+                "$ref": "#/components/schemas/AtOrigin"
+              },
+              {
+                "$ref": "#/components/schemas/OriginsBetween"
+              }
+            ],
+            "title": "Origins"
+          },
+          "samples": {
+            "minimum": 1.0,
+            "title": "Samples",
+            "type": "integer"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceKind"
+          },
+          "view": {
+            "$ref": "#/components/schemas/ViewKind"
+          }
+        },
+        "required": [
+          "view",
+          "source",
+          "origin_fidelity",
+          "samples"
+        ],
+        "title": "TrainingRecord",
+        "type": "object"
+      },
+      "ViewKind": {
+        "description": "Which execution view a model consumes.\n\nEach names a training unit rather than a model family:\n\n```text\nseries      one complete time series           ARIMA, ETS, Theta\nsequences   many context -> horizon sequences  NHiTS, TFT, PatchTST\ntabular     individual supervised target rows  LightGBM, XGBoost, CatBoost\n```\n\n``forecast`` is the inference counterpart of all three.",
+        "enum": [
+          "series",
+          "sequences",
+          "tabular",
+          "forecast"
+        ],
+        "title": "ViewKind",
+        "type": "string"
+      },
+      "WeightedMean": {
+        "additionalProperties": false,
+        "description": "Average the members by given weights.\n\n```python\nof.WeightedMean(weights=[0.7, 0.3])\n```\n\nThe weights are relative: they are normalized by their sum, so ``[7, 3]``\nmeans the same thing as ``[0.7, 0.3]``. Every weight must be positive \u2014 a\nzero weight is a member that is fitted and then ignored, which is better\nsaid by leaving it out.",
+        "properties": {
+          "combine": {
+            "const": "weighted_mean",
+            "default": "weighted_mean",
+            "title": "Combine",
+            "type": "string"
+          },
+          "weights": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Weights",
+            "type": "array"
+          }
+        },
+        "required": [
+          "weights"
+        ],
+        "title": "WeightedMean",
+        "type": "object"
+      },
+      "WindowPlan": {
+        "additionalProperties": false,
+        "description": "How much history one training sample conditions on.\n\nSteps of the data's frequency, not a duration: 168 on hourly data is a week,\nand the same number on daily data is half a year. The frequency lives on the\ndata, so saying it again here would let the two disagree.",
+        "properties": {
+          "context": {
+            "minimum": 1.0,
+            "title": "Context",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "context"
+        ],
+        "title": "WindowPlan",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "The unified interface for forecasting. Control travels as JSON and bulk data as Arrow IPC, so a dataset crosses as the Arrow tables it already holds rather than as nested JSON rows.",
+    "title": "OpenForecast",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/artifacts/{ref}": {
+      "get": {
+        "description": "A fitted artifact, described without loading the model behind it.",
+        "operationId": "get_artifact_v1_artifacts__ref__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelHandle"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The reference names nothing."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The request is well-formed and was refused."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A provider failed, or did not answer a forecast."
+          }
+        },
+        "summary": "A fitted artifact, described without loading the model behind it."
+      }
+    },
+    "/v1/fit": {
+      "post": {
+        "description": "Fit, and answer with the immutable artifact that was published.",
+        "operationId": "fit_v1_fit_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FitBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelHandle"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The reference names nothing."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The request is well-formed and was refused."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A provider failed, or did not answer a forecast."
+          }
+        },
+        "summary": "Fit, and answer with the immutable artifact that was published."
+      }
+    },
+    "/v1/forecast": {
+      "post": {
+        "description": "Forecast with a fitted reference, at one origin.",
+        "operationId": "forecast_v1_forecast_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForecastBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForecastPayload"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The reference names nothing."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The request is well-formed and was refused."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A provider failed, or did not answer a forecast."
+          }
+        },
+        "summary": "Forecast with a fitted reference, at one origin."
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "description": "Every model this service can fit.",
+        "operationId": "list_models_v1_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelListing"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The reference names nothing."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The request is well-formed and was refused."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A provider failed, or did not answer a forecast."
+          }
+        },
+        "summary": "Every model this service can fit."
+      }
+    },
+    "/v1/models/{ref}": {
+      "get": {
+        "description": "What one reference resolves to. No provider is started to answer it.",
+        "operationId": "get_model_v1_models__ref__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelDescriptor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The reference names nothing."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The request is well-formed and was refused."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A provider failed, or did not answer a forecast."
+          }
+        },
+        "summary": "What one reference resolves to. No provider is started to answer it."
+      }
+    }
+  }
+}

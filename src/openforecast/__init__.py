@@ -32,6 +32,21 @@ machinery behind it is not user vocabulary: manifests, staging directories and
 aliases live in :mod:`openforecast.artifacts`, and only the errors a caller can
 act on are exported here.
 
+Since Step 16, where that happens is a client's transport rather than a fact
+about the library:
+
+```python
+client = of.OpenForecast(transport=of.LocalTransport())
+client = of.OpenForecast(transport=of.HttpTransport("http://localhost:8321"))
+```
+
+Both answer ``client.models.list()``, ``client.models.get(...)``,
+``client.fit(...)`` and ``client.forecast(...)`` with the same objects, because
+HTTP is a projection of what forecasting means here rather than a second
+architecture. The request and response models it projects to live in
+:mod:`openforecast.server`; the service that answers them is
+``openforecast serve``, behind the ``openforecast[server]`` extra.
+
 The execution views of Step 4 are deliberately not re-exported here either: they
 are a provider-facing boundary, imported from :mod:`openforecast.views`, not
 something a user of the library needs to name.
@@ -90,6 +105,7 @@ from openforecast.recipes import (
 )
 from openforecast.runtime import Forecast
 from openforecast.runtime.providers import install_default_providers as _install_providers
+from openforecast.server import HttpTransport, LocalTransport, Transport
 from openforecast.tasks import (
     Accelerator,
     AllOrigins,
@@ -125,12 +141,14 @@ __all__ = [
     "Frequency",
     "FrequencyError",
     "FrequencyUnit",
+    "HttpTransport",
     "Impute",
     "ImputeMethod",
     "IncompatibleForecastTask",
     "InconsistentTruthError",
     "LatestOrigin",
     "LeadTimeFeature",
+    "LocalTransport",
     "Mean",
     "MissingIndicator",
     "Model",
@@ -158,6 +176,7 @@ __all__ = [
     "StandardScaler",
     "TimeSeriesFrame",
     "TimeSeriesSchema",
+    "Transport",
     "UnknownModelError",
     "UnsupportedPlanError",
     "WeightedMean",

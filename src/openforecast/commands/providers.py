@@ -68,6 +68,7 @@ def add_parser(subparsers: Any) -> argparse.ArgumentParser:
 
     remove = verbs.add_parser("remove", help="delete a provider's environment")
     remove.add_argument("name")
+    parser.set_defaults(handler=run)
     return parser
 
 
