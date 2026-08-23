@@ -105,9 +105,20 @@ AST-scans the package and fails on:
 CI additionally greps `uv tree --no-dev` so that a framework cannot arrive as
 somebody else's transitive dependency.
 
-One check is named here but lands with the code it constrains: the
-forbidden-terminology scan over serialized public objects arrives in Step 15
-(rule 6).
+The forbidden-terminology scan of rule 6 is the one check that reads objects
+rather than source, because what it has to constrain is what a public object
+*serializes*. It imports every public module, walks the JSON Schema of every
+exported model plus the members of every exported enum and the canonical
+forecast columns, and fails if any field name, enum value or column is spelled
+the way a provider spells it. Prose is skipped on purpose: a docstring saying
+that `input_size` is rejected documents the rule rather than breaking it. A
+second test asserts that everything the scan forbids is also refused on the way
+*in* — `of.Model(params=...)` rejects a provider parameter naming something
+OpenForecast owns — since those parameters travel to the provider unchanged and
+are recorded in the manifest. `tests/e2e/test_v1_experience.py` then runs the
+same scan over the values that actually travel: the descriptors the three
+integrations advertise, the parameter schemas they publish, and the manifest a
+fit writes down.
 
 Rule 4 is enforced by the point-in-time semantic model: `at_origin` matches an
 origin exactly rather than approximately, a vintage is filtered before anything
@@ -163,6 +174,17 @@ friends in a *rejection* list. They appear there so that they cannot appear
 anywhere else — passing one as a provider parameter raises an error naming the
 OpenForecast field to use instead. Nothing constructs them, and no public object
 serializes them.
+
+Each integration runs the suite beside its own library, which is the arrangement
+that keeps a provider's environment isolated. `tests/e2e/test_v1_experience.py`
+is the opposite one and the only place the three meet: an OpenForecast install
+that has never heard of any of them, reaching all three over the subprocess
+protocol. It is where "provider-independent" stops being a property of each
+integration in turn and becomes one of the surface — the same dataset, the same
+plan and the same two calls, fitted by three libraries, with an ensemble
+spanning two of them. It needs the environments installed and skips without
+them, so CI installs them in a job of its own and sets `OPENFORECAST_E2E`, which
+turns a skip into a failure.
 
 ## The execution views
 

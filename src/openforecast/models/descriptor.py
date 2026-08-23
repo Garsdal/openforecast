@@ -70,3 +70,13 @@ class ModelDescriptor(BaseModel):
 
     def __str__(self) -> str:
         return str(self.ref)
+
+    def __repr__(self) -> str:
+        """``of.models.list()`` is a discovery call, so it has to be readable.
+
+        The generated pydantic repr spells out every capability of every model,
+        which turns listing a catalog into several screens of text. What a
+        listing is for is the references; the fields are what ``of.models.get``
+        is for.
+        """
+        return f"ModelDescriptor({self.ref})"

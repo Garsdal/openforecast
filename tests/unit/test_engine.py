@@ -408,6 +408,40 @@ def test_a_composite_records_one_training_record_per_leaf(engine: Engine) -> Non
         _ = handle.training
 
 
+def test_an_ensemble_is_only_as_combinable_as_its_least_capable_member(
+    tmp_path: Path,
+) -> None:
+    """Every child contract has to be satisfiable by the data, before anything runs.
+
+    A member that cannot consume the source is not a partial ensemble — the
+    combination would be an average over a model that was never fitted. So the
+    refusal happens while the leaves are being materialized, which is before the
+    first provider is started and long before an artifact exists.
+    """
+    single_only = providers.descriptor(
+        "single-only",
+        capabilities=ModelCapabilities(
+            instances=InstanceCapabilities(single=True, panel=False),
+            targets=TargetCapabilities(univariate=True),
+            features=FeatureCapabilities(known=True),
+            missing_values=MissingValueSupport.NATIVE,
+        ),
+    )
+    provider = providers.StubProvider(models=(providers.descriptor("series"), single_only))
+    store = ArtifactStore(tmp_path)
+    engine = Engine(
+        store=store,
+        catalog=ModelCatalog(provider.descriptors()),
+        providers=ProviderRegistry([provider]),
+    )
+
+    with pytest.raises(DataError, match="panel"):
+        engine.fit(of.Ensemble(models=(of.Model(SERIES), of.Model("stub/single-only"))), frame())
+
+    assert provider.fits == []
+    assert not list((store.root / "models").glob("*"))
+
+
 def test_an_ensemble_averages_its_members(tmp_path: Path) -> None:
     """The combination is OpenForecast's, so no provider sees more than its own."""
     descriptor = providers.descriptor("series")

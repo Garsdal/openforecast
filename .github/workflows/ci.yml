@@ -52,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        integration: [nixtla, darts]
+        integration: [nixtla, darts, sktime]
         python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
@@ -68,3 +68,37 @@ jobs:
       - name: Test ${{ matrix.integration }}
         working-directory: integrations/${{ matrix.integration }}
         run: uv run pytest
+
+  # The job above tests each integration beside its own library. This one is the
+  # opposite: an OpenForecast install that has never heard of any of them,
+  # reaching all three over the subprocess protocol, exactly as a user's would.
+  # It is the only place the three meet, so it is the only place that can show
+  # that switching between them changes a reference and nothing else.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync environment
+        run: uv sync
+
+      # What a user runs. Each builds its own uv environment from the checkout,
+      # and the frameworks inside them never reach the one running the tests.
+      - name: Install the provider environments
+        run: |
+          uv run openforecast providers install nixtla
+          uv run openforecast providers install darts
+          uv run openforecast providers install sktime
+          uv run openforecast providers list
+
+      # OPENFORECAST_E2E turns a missing provider from a skip into a failure:
+      # the environments were just installed, so anything skipped here is a
+      # suite that passed by not running.
+      - name: The public V1 experience, end to end
+        env:
+          OPENFORECAST_E2E: "1"
+        run: uv run pytest tests/e2e/test_v1_experience.py -q

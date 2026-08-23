@@ -33,13 +33,16 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > 12 — `nixtla/autoarima` and `nixtla/nhits`, in `integrations/nixtla` — and the
 > Darts integration from Step 13 — `darts/theta`, `darts/tide` and
 > `darts/nhits`, in `integrations/darts` — and the sktime integration from
-> Step 14: `sktime/theta` and `sktime/pooled-trees`, in `integrations/sktime`.
+> Step 14: `sktime/theta` and `sktime/pooled-trees`, in `integrations/sktime` —
+> and the public V1 surface of Step 15, which is the one below and no longer
+> moves.
 > `of.fit` and `of.forecast` work end to end today with `builtin/seasonal-naive`,
 > both Nixtla models, all three Darts models and both sktime models, in this
 > process or over the subprocess protocol — the global ones trained on real
 > point-in-time vintages, one training sample per historical forecast origin.
 > Switching a point-in-time fit between `nixtla/nhits`, `darts/tide` and
-> `sktime/pooled-trees` changes the model reference and nothing else.
+> `sktime/pooled-trees` changes the model reference and nothing else, which is
+> what `tests/e2e/test_v1_experience.py` runs against all three at once.
 > See [PLAN.md](PLAN.md) for the full 17-step roadmap.
 
 ## The event-time semantic model
@@ -472,8 +475,21 @@ DE   12:00      price  quantile 0.1      null   65
 ```
 
 A wide forecast changes shape with the request — one column per target, or per
-target and quantile, or per sample path — and cannot be read by one reader. The
-wide conveniences arrive with the V1 surface in Step 15.
+target and quantile, or per sample path — and cannot be read by one reader. So
+the long table is what a forecast *is*, and the shapes people actually want are
+projections of it:
+
+```python
+forecast.table          # the long forecast, in canonical column order
+forecast.point()        # the point rows, without the columns describing none
+forecast.quantile(0.5)  # one level, in the same shape
+forecast.to_wide()      # zone, event_time, price_q0.1, price_q0.5, price_q0.9
+forecast.to_pandas()    # the long forecast as a DataFrame
+```
+
+`quantile` refuses a level that was never asked for rather than interpolating
+between the ones that were: a 0.5 derived from a 0.1 and a 0.9 is a different
+number from the one the model would have produced.
 
 ## Providers in their own environments
 
@@ -630,6 +646,22 @@ fit, is what Step 14 was for.
 only name parameters the descriptor already advertises. It is for models whose
 defaults are expensive rather than wrong: a neural model's thousand optimization
 steps say nothing about whether it consumes a panel.
+
+Each integration runs that suite beside its own library.
+`tests/e2e/test_v1_experience.py` is the opposite arrangement and the only place
+the three meet: an OpenForecast install that has never heard of any of them,
+reaching all three over the subprocess protocol, the way a user's does. It
+discovers their models in one catalog, fits `nixtla/autoarima` at one vintage,
+fits `nixtla/nhits`, `darts/tide` and `sktime/pooled-trees` across every
+historical origin of the same dataset with the same plan, ensembles a Nixtla
+model with a Darts one, and checks that nothing any of them calls its own
+reaches a descriptor, a manifest or a forecast. It needs the environments
+installed, so it skips without them:
+
+```bash
+openforecast providers install nixtla    # and darts, and sktime
+uv run pytest tests/e2e/test_v1_experience.py
+```
 
 ## Layering
 
