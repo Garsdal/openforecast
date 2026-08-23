@@ -48,6 +48,12 @@ FORECASTING_FRAMEWORKS = frozenset(
         "utilsforecast",
         "darts",
         "sktime",
+        # Not a forecasting framework, and held to the same rule: the estimator
+        # library the tabular execution path runs on lives in its own
+        # environment, and a `from sklearn...` in here would be OpenForecast
+        # modeling rather than materializing.
+        "sklearn",
+        "scikit_learn",
         "lightgbm",
         "xgboost",
         "torch",

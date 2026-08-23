@@ -38,7 +38,9 @@ And its immediate corollary:
    `stat_exog_list` are legal inside `integrations/`, nowhere else — and so are
    Darts' `past_covariates`, `future_covariates`, `input_chunk_length` and
    `output_chunk_length`, and sktime's `window_length`, `pooling` and
-   `ForecastingHorizon`, which name the same concepts in other words.
+   `ForecastingHorizon`, which name the same concepts in other words. The
+   scikit-learn integration adds nothing to this list, which is itself the point:
+   `X` and `y` are what a `TabularView` already calls its own tables.
 7. **OpenAPI is a projection of OpenForecast semantics, not their source.**
    The dependency direction is semantics → engine → HTTP → OpenAPI → remote
    SDKs, never the reverse. `spec/openapi/openapi.json` is *generated* from the
@@ -172,9 +174,10 @@ has to happen before the provider is started.
 generated fit unchanged and are validated against the descriptor's own parameter
 schema. They exist for models whose defaults are expensive rather than wrong —
 `nixtla/nhits` runs the suite at two optimization steps, `darts/tide` at one
-epoch and `sktime/pooled-trees` at five boosting iterations, which is the same
-statement in three libraries' own words — and because
-they can only name parameters the model already advertises, they cannot be used
+epoch, and `sktime/pooled-trees` and `sklearn/hist-gradient-boosting` at five
+boosting iterations, which is the same statement in four libraries' own words —
+and because they can only name parameters the model already advertises, they
+cannot be used
 to turn a capability on for the duration of the suite.
 
 Rule 6 has one deliberate exception in the source: `recipes/nodes.py` contains
@@ -205,10 +208,29 @@ about the data it is handed:
 | -------------- | ------------------------------------ | ----------------------------- |
 | `SeriesView`   | one complete time series             | ARIMA, ETS, Theta             |
 | `SequenceView` | many context → horizon sequences     | NHiTS, TFT, PatchTST          |
-| `TabularView`  | individual supervised target rows    | LightGBM, XGBoost, CatBoost   |
+| `TabularView`  | individual supervised target rows    | HistGradientBoosting, LightGBM |
 
 `ForecastView` is the inference counterpart of all three: one origin, one
 horizon.
+
+A `TabularView` is where the ownership boundary is sharpest, because a
+supervised row has no time axis from which the semantics could be recovered
+later. One row is one `instance × origin × lead`, and `X`, `y` and `keys` are
+row-aligned: the features knowable at the origin, the outcome of the event time,
+and `row_id, instance keys, origin_time, event_time, horizon_step` beside them
+rather than inside `X`. Two vintages of one event time are two rows with the
+same label, because their information vintages differ — a duplication that looks
+like a bug to anyone who has only seen event-time tables, and is the point.
+
+That view is why a forecasting framework's reduction API is the wrong place to
+execute one. The chain `ForecastDataset → TabularView → framework → framework's
+reduction → estimator` puts the forecast origin, the lead, the vintage and the
+truth alignment in two places, with the framework's version winning silently.
+OpenForecast already knows all four, so the chain is
+`ForecastDataset → ViewPlanner → TabularView → estimator.fit(X, y)`, and
+`integrations/sklearn` is the proof that nothing is missing from it: a library
+that has never heard of a forecast origin executes point-in-time training
+without reinterpreting one.
 
 Two properties make rule 3 hold rather than merely being stated. First, both
 semantic sources materialize into the *same* view types, with
