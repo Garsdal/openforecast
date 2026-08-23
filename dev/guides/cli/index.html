@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://garsdal.github.io/openforecast/dev/guides/fitting/">
+        <link rel="canonical" href="https://garsdal.github.io/openforecast/dev/guides/cli/">
       
       
-        <link rel="prev" href="../point-in-time/">
+        <link rel="prev" href="../ensembles/">
       
       
-        <link rel="next" href="../forecasting/">
+        <link rel="next" href="../../concepts/data-model/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>Fitting - OpenForecast</title>
+        <title>The command line - OpenForecast</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#fitting" class="md-skip">
+        <a href="#the-command-line" class="md-skip">
           Skip to content
         </a>
       
@@ -118,7 +118,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Fitting
+              The command line
             
           </span>
         </div>
@@ -541,37 +541,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Fitting
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../fitting/" class="md-nav__link">
         
   
   
@@ -587,103 +560,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#the-short-form" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The short form
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#naming-a-fit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Naming a fit
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#how-to-fit-it-fitplan" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How to fit it: FitPlan
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-to-fit-recipes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What to fit: recipes
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-a-fit-actually-does" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What a fit actually does
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-comes-back" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What comes back
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#fitting-a-pretrained-model-is-refused" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Fitting a pretrained model is refused
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -805,10 +681,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../cli/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The command line
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -824,6 +727,92 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#getting-data-to-disk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Getting data to disk
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flags-for-the-simple-case-a-config-file-for-the-rest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flags for the simple case, a config file for the rest
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#-json-everywhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --json everywhere
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#streams-and-exit-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streams and exit codes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checking-an-installation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checking an installation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#serving" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Serving
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1600,10 +1589,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#the-short-form" class="md-nav__link">
+  <a href="#getting-data-to-disk" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The short form
+        Getting data to disk
       
     </span>
   </a>
@@ -1611,10 +1600,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#naming-a-fit" class="md-nav__link">
+  <a href="#flags-for-the-simple-case-a-config-file-for-the-rest" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Naming a fit
+        Flags for the simple case, a config file for the rest
       
     </span>
   </a>
@@ -1622,10 +1611,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-to-fit-it-fitplan" class="md-nav__link">
+  <a href="#-json-everywhere" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How to fit it: FitPlan
+        --json everywhere
       
     </span>
   </a>
@@ -1633,10 +1622,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-to-fit-recipes" class="md-nav__link">
+  <a href="#streams-and-exit-codes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What to fit: recipes
+        Streams and exit codes
       
     </span>
   </a>
@@ -1644,10 +1633,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-a-fit-actually-does" class="md-nav__link">
+  <a href="#checking-an-installation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What a fit actually does
+        Checking an installation
       
     </span>
   </a>
@@ -1655,21 +1644,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-comes-back" class="md-nav__link">
+  <a href="#serving" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What comes back
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#fitting-a-pretrained-model-is-refused" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Fitting a pretrained model is refused
+        Serving
       
     </span>
   </a>
@@ -1696,166 +1674,144 @@
   
 
 
-<h1 id="fitting">Fitting<a class="headerlink" href="#fitting" title="Permanent link">&para;</a></h1>
-<p>A fit takes what to fit, the data, and — when the model needs more than the
-defaults — how to fit it. It returns a handle to an immutable artifact.</p>
+<h1 id="the-command-line">The command line<a class="headerlink" href="#the-command-line" title="Permanent link">&para;</a></h1>
+<p>Everything OpenForecast does is reachable from a shell, and the CLI is
+deliberately uncreative: a group and a verb at most, <code>--json</code> on everything that
+produces information, stdout for the answer and stderr for everything else.</p>
+<div class="highlight"><pre><span></span><code>openforecast<span class="w"> </span>models<span class="w"> </span>list
+openforecast<span class="w"> </span>models<span class="w"> </span>get<span class="w"> </span>builtin/seasonal-naive
+
+openforecast<span class="w"> </span>providers<span class="w"> </span>list
+openforecast<span class="w"> </span>providers<span class="w"> </span>install<span class="w"> </span>nixtla
+
+openforecast<span class="w"> </span>fit<span class="w"> </span>--model<span class="w"> </span>builtin/seasonal-naive<span class="w"> </span>--data<span class="w"> </span>./dataset<span class="w"> </span>--name<span class="w"> </span>de-load
+openforecast<span class="w"> </span>forecast<span class="w"> </span>--model<span class="w"> </span>local/de-load<span class="w"> </span>--data<span class="w"> </span>./dataset<span class="w"> </span>--horizon<span class="w"> </span><span class="m">24</span>
+openforecast<span class="w"> </span>backtest<span class="w"> </span>--config<span class="w"> </span>backtest.json
+
+openforecast<span class="w"> </span>doctor
+openforecast<span class="w"> </span>serve
+</code></pre></div>
+<p>Every one of those calls the same Python SDK. There is no second execution path,
+which is why a fit from the shell and a fit from Python land in the same artifact
+store and either can forecast with the other's model.</p>
+<h2 id="getting-data-to-disk">Getting data to disk<a class="headerlink" href="#getting-data-to-disk" title="Permanent link">&para;</a></h2>
+<p>A shell cannot hand over a <code>TimeSeriesFrame</code>, so the CLI reads one that was
+written. That is the library's own <code>write</code>, not a CLI format:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">openforecast</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">of</span>
 
-<span class="n">hours</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">date_range</span><span class="p">(</span><span class="s2">"2026-01-01"</span><span class="p">,</span> <span class="n">periods</span><span class="o">=</span><span class="mi">24</span> <span class="o">*</span> <span class="mi">21</span><span class="p">,</span> <span class="n">freq</span><span class="o">=</span><span class="s2">"1h"</span><span class="p">)</span>
+<span class="n">hours</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">date_range</span><span class="p">(</span><span class="s2">"2026-01-01"</span><span class="p">,</span> <span class="n">periods</span><span class="o">=</span><span class="mi">24</span> <span class="o">*</span> <span class="mi">14</span><span class="p">,</span> <span class="n">freq</span><span class="o">=</span><span class="s2">"1h"</span><span class="p">)</span>
 <span class="n">data</span> <span class="o">=</span> <span class="n">of</span><span class="o">.</span><span class="n">TimeSeriesFrame</span><span class="o">.</span><span class="n">from_pandas</span><span class="p">(</span>
     <span class="n">history</span><span class="o">=</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
         <span class="p">{</span>
             <span class="s2">"timestamp"</span><span class="p">:</span> <span class="n">hours</span><span class="p">,</span>
-            <span class="s2">"zone"</span><span class="p">:</span> <span class="s2">"DE"</span><span class="p">,</span>
             <span class="s2">"load"</span><span class="p">:</span> <span class="p">[</span><span class="mf">50.0</span> <span class="o">+</span> <span class="n">step</span> <span class="o">%</span> <span class="mi">24</span> <span class="k">for</span> <span class="n">step</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">hours</span><span class="p">))],</span>
         <span class="p">}</span>
     <span class="p">),</span>
     <span class="n">time</span><span class="o">=</span><span class="s2">"timestamp"</span><span class="p">,</span>
     <span class="n">frequency</span><span class="o">=</span><span class="s2">"1h"</span><span class="p">,</span>
-    <span class="n">instance_keys</span><span class="o">=</span><span class="p">[</span><span class="s2">"zone"</span><span class="p">],</span>
     <span class="n">targets</span><span class="o">=</span><span class="p">[</span><span class="s2">"load"</span><span class="p">],</span>
 <span class="p">)</span>
 
-<span class="n">client</span> <span class="o">=</span> <span class="n">of</span><span class="o">.</span><span class="n">OpenForecast</span><span class="p">()</span>
+<span class="n">data</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">"./dataset"</span><span class="p">)</span>
 </code></pre></div>
-<h2 id="the-short-form">The short form<a class="headerlink" href="#the-short-form" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="n">model</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="s2">"builtin/seasonal-naive"</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">data</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s2">"season_length"</span><span class="p">:</span> <span class="mi">24</span><span class="p">})</span>
-
-<span class="n">model</span><span class="o">.</span><span class="n">ref</span>                    <span class="c1"># local/...@01K...</span>
-<span class="n">model</span><span class="o">.</span><span class="n">manifest</span><span class="o">.</span><span class="n">provider</span>      <span class="c1"># 'builtin'</span>
+<p><code>--data ./dataset</code> then points at that directory. Which of the three written
+datasets it holds — a <code>TimeSeriesFrame</code>, a <code>PointInTimeFrame</code> or a
+<code>ForecastDataset</code> — is read off what is in it rather than declared, because the
+directory already says. Every one of them is loaded through the ordinary
+constructor, so a truncated table fails to load exactly as it would in Python.</p>
+<h2 id="flags-for-the-simple-case-a-config-file-for-the-rest">Flags for the simple case, a config file for the rest<a class="headerlink" href="#flags-for-the-simple-case-a-config-file-for-the-rest" title="Permanent link">&para;</a></h2>
+<p>The flags are the top-level scalars:</p>
+<div class="highlight"><pre><span></span><code>openforecast<span class="w"> </span>fit<span class="w"> </span>--model<span class="w"> </span>builtin/seasonal-naive<span class="w"> </span>--data<span class="w"> </span>./dataset<span class="w"> </span>--horizon<span class="w"> </span><span class="m">24</span>
 </code></pre></div>
-<p><code>params</code> are the provider's own knobs, and only the ones its descriptor
-advertises. A parameter naming something OpenForecast owns — a context length, a
-horizon, a seed, a frequency, a covariate list — is refused with the field to use
-instead. Two copies of one number, free to disagree, with the provider's spelling
-winning silently, is not a convenience.</p>
-<h2 id="naming-a-fit">Naming a fit<a class="headerlink" href="#naming-a-fit" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="n">model</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
-    <span class="s2">"builtin/seasonal-naive"</span><span class="p">,</span>
-    <span class="n">data</span><span class="o">=</span><span class="n">data</span><span class="p">,</span>
-    <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s2">"season_length"</span><span class="p">:</span> <span class="mi">24</span><span class="p">},</span>
-    <span class="n">name</span><span class="o">=</span><span class="s2">"de-load"</span><span class="p">,</span>
-<span class="p">)</span>
-
-<span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">ref</span><span class="p">)</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"local/de-load@"</span><span class="p">)</span>     <span class="c1"># True</span>
+<p>Anything with a recipe, a plan, a validation strategy or a metric in it is a
+JSON file, because a flag syntax for a nested pipeline would be a second way to
+write something the library already has one way to write:</p>
+<div class="highlight"><pre><span></span><code>openforecast<span class="w"> </span>fit<span class="w"> </span>--config<span class="w"> </span>fit.json
 </code></pre></div>
-<p><code>local/de-load</code> is an alias that follows the latest fit; the pinned
-<code>local/de-load@01K...</code> is one revision forever. That is what lets a scheduled job
-name a model once and pick up retrainings — and lets a rollback be a pointer move
-rather than a retrain.</p>
-<h2 id="how-to-fit-it-fitplan">How to fit it: <code>FitPlan</code><a class="headerlink" href="#how-to-fit-it-fitplan" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="n">plan</span> <span class="o">=</span> <span class="n">of</span><span class="o">.</span><span class="n">FitPlan</span><span class="p">(</span>
-    <span class="n">origins</span><span class="o">=</span><span class="n">of</span><span class="o">.</span><span class="n">AllOrigins</span><span class="p">(</span><span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span>
-    <span class="n">window</span><span class="o">=</span><span class="n">of</span><span class="o">.</span><span class="n">WindowPlan</span><span class="p">(</span><span class="n">context</span><span class="o">=</span><span class="mi">168</span><span class="p">),</span>
-    <span class="n">seed</span><span class="o">=</span><span class="mi">42</span><span class="p">,</span>
-<span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pipeline"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"steps"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">      </span><span class="p">{</span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"standard-scaler"</span><span class="p">,</span><span class="w"> </span><span class="nt">"columns"</span><span class="p">:</span><span class="w"> </span><span class="s2">"targets"</span><span class="p">},</span>
+<span class="w">      </span><span class="p">{</span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"model"</span><span class="p">,</span><span class="w"> </span><span class="nt">"ref"</span><span class="p">:</span><span class="w"> </span><span class="s2">"builtin/seasonal-naive"</span><span class="p">,</span><span class="w"> </span><span class="nt">"params"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"season_length"</span><span class="p">:</span><span class="w"> </span><span class="mi">24</span><span class="p">}}</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"data"</span><span class="p">:</span><span class="w"> </span><span class="s2">"./dataset"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"horizon"</span><span class="p">:</span><span class="w"> </span><span class="mi">24</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"de-load"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"plan"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"window"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"context"</span><span class="p">:</span><span class="w"> </span><span class="mi">168</span><span class="p">},</span><span class="w"> </span><span class="nt">"seed"</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">}</span>
+<span class="p">}</span>
 </code></pre></div>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Says</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>origins</code></td>
-<td>which forecast origins to learn from</td>
-</tr>
-<tr>
-<td><code>window</code></td>
-<td>how much history one training sample conditions on</td>
-</tr>
-<tr>
-<td><code>seed</code></td>
-<td>how reproducibly</td>
-</tr>
-<tr>
-<td><code>resources</code></td>
-<td>on what — CPU, GPU, how many devices</td>
-</tr>
-</tbody>
-</table>
-<p>The context length is stated once, in steps of the data's frequency, and compiled
-into <code>input_size</code> for Nixtla, <code>input_chunk_length</code> for Darts or <code>window_length</code>
-for sktime. The four origin selections — <code>of.AllOrigins()</code>, <code>of.LatestOrigin()</code>,
-<code>of.AtOrigin(t)</code>, <code>of.OriginsBetween(start, end, stride=12)</code> — mean the same
-thing on both semantic sources: on a <code>TimeSeriesFrame</code> they pick among the origins
-that can be simulated, on a <code>ForecastDataset</code> among the vintages that exist.</p>
-<h2 id="what-to-fit-recipes">What to fit: recipes<a class="headerlink" href="#what-to-fit-recipes" title="Permanent link">&para;</a></h2>
-<p>A recipe is what you write when a bare reference is not enough. It is a
-serializable AST, and it goes to the same <code>fit</code> call:</p>
-<div class="highlight"><pre><span></span><code><span class="n">recipe</span> <span class="o">=</span> <span class="n">of</span><span class="o">.</span><span class="n">Pipeline</span><span class="p">(</span>
-    <span class="n">steps</span><span class="o">=</span><span class="p">[</span>
-        <span class="n">of</span><span class="o">.</span><span class="n">StandardScaler</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="s2">"targets"</span><span class="p">),</span>
-        <span class="n">of</span><span class="o">.</span><span class="n">Model</span><span class="p">(</span><span class="s2">"builtin/seasonal-naive"</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s2">"season_length"</span><span class="p">:</span> <span class="mi">24</span><span class="p">}),</span>
-    <span class="p">]</span>
-<span class="p">)</span>
-
-<span class="n">model</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">recipe</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">data</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"de-load-scaled"</span><span class="p">)</span>
+<p>The file is the arguments of <code>of.fit</code> as JSON: every nested field is the same
+Pydantic type the SDK uses, so <code>plan</code> is a <code>FitPlan</code>, <code>model</code> is a <code>Recipe</code> or a
+model reference, and a key nobody recognizes is refused by name rather than
+ignored. Paths inside it resolve against the working directory, like every other
+path on a command line — <code>--config</code> does not change what <code>./dataset</code> means.</p>
+<p>The two forms are not mixed. Passing <code>--config</code> <em>and</em> a flag it configures is an
+error, so there is no precedence rule to remember.</p>
+<p>A backtest has no flag-only form at all, since its validation strategy and its
+metrics are nested objects:</p>
+<div class="highlight"><pre><span></span><code>openforecast<span class="w"> </span>backtest<span class="w"> </span>--config<span class="w"> </span>backtest.json<span class="w"> </span>--json
 </code></pre></div>
-<p>Pipelines and ensembles are executed by OpenForecast rather than by any provider,
-and every transform is recorded in the manifest — visible to whoever reads the
-forecast later. See <a href="../ensembles/">Pipelines and ensembles</a> for combining models,
-and <code>of.parse_recipe</code> for reading one back from JSON.</p>
-<p>The missing-value steps are part of the same vocabulary and are recorded in the
-artifact, but they are not executable yet — a pipeline that silently skipped one
-would be indistinguishable from one that ran it, so asking for it raises
-<code>UnsupportedPlanError</code> rather than fitting without it:</p>
-<!-- docs-exec: skip — `MissingIndicator` is declared and recorded, and not executable yet -->
-
-<div class="highlight"><pre><span></span><code><span class="n">model</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span>
-    <span class="n">of</span><span class="o">.</span><span class="n">Pipeline</span><span class="p">(</span>
-        <span class="n">steps</span><span class="o">=</span><span class="p">[</span>
-            <span class="n">of</span><span class="o">.</span><span class="n">MissingIndicator</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="s2">"features"</span><span class="p">),</span>
-            <span class="n">of</span><span class="o">.</span><span class="n">Impute</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="s2">"features"</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">"median"</span><span class="p">),</span>
-            <span class="n">of</span><span class="o">.</span><span class="n">Model</span><span class="p">(</span><span class="s2">"builtin/seasonal-naive"</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s2">"season_length"</span><span class="p">:</span> <span class="mi">24</span><span class="p">}),</span>
-        <span class="p">]</span>
-    <span class="p">),</span>
-    <span class="n">data</span><span class="o">=</span><span class="n">data</span><span class="p">,</span>
-<span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"models"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="s2">"builtin/seasonal-naive"</span><span class="p">,</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"builtin/seasonal-naive"</span><span class="p">,</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"with-a-longer-context"</span><span class="p">,</span>
+<span class="w">     </span><span class="nt">"plan"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"window"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"context"</span><span class="p">:</span><span class="w"> </span><span class="mi">336</span><span class="p">}}}</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"data"</span><span class="p">:</span><span class="w"> </span><span class="s2">"./dataset"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"validation"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"mode"</span><span class="p">:</span><span class="w"> </span><span class="s2">"rolling"</span><span class="p">,</span><span class="w"> </span><span class="nt">"horizon"</span><span class="p">:</span><span class="w"> </span><span class="mi">24</span><span class="p">,</span><span class="w"> </span><span class="nt">"windows"</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"metrics"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"metric"</span><span class="p">:</span><span class="w"> </span><span class="s2">"mae"</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="nt">"metric"</span><span class="p">:</span><span class="w"> </span><span class="s2">"bias"</span><span class="p">}]</span>
+<span class="p">}</span>
 </code></pre></div>
-<p>Putting the indicator <em>after</em> the imputation is refused whichever way that lands,
-because it would come out constant.</p>
-<h2 id="what-a-fit-actually-does">What a fit actually does<a class="headerlink" href="#what-a-fit-actually-does" title="Permanent link">&para;</a></h2>
-<p>Five steps, none of which branch on who provides the model:</p>
-<ol>
-<li>the recipe is normalized</li>
-<li>every reference is resolved to a descriptor</li>
-<li>the <code>ViewPlanner</code> materializes the view that descriptor's contract names</li>
-<li>the view is checked against what the model declared it can consume</li>
-<li>a provider is started — into a staging directory that is published if, and
-   only if, the fit succeeded</li>
-</ol>
-<p>Nothing is published until the fit succeeds, because a half-written artifact that
-is nevertheless resolvable would not fail: it would forecast.</p>
-<h2 id="what-comes-back">What comes back<a class="headerlink" href="#what-comes-back" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="n">plain</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="s2">"builtin/seasonal-naive"</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">data</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s2">"season_length"</span><span class="p">:</span> <span class="mi">24</span><span class="p">})</span>
-<span class="n">manifest</span> <span class="o">=</span> <span class="n">plain</span><span class="o">.</span><span class="n">manifest</span>
-
-<span class="n">manifest</span><span class="o">.</span><span class="n">training</span><span class="o">.</span><span class="n">view</span>              <span class="c1"># which execution view was materialized</span>
-<span class="n">manifest</span><span class="o">.</span><span class="n">training</span><span class="o">.</span><span class="n">origin_fidelity</span>   <span class="c1"># observed vintages, or simulated windows</span>
-<span class="n">manifest</span><span class="o">.</span><span class="n">training</span><span class="o">.</span><span class="n">samples</span>           <span class="c1"># how many training units there were</span>
-<span class="n">manifest</span><span class="o">.</span><span class="n">openforecast_version</span>
+<h2 id="-json-everywhere"><code>--json</code> everywhere<a class="headerlink" href="#-json-everywhere" title="Permanent link">&para;</a></h2>
+<p>Every information-producing command prints either an aligned table for a person
+or one JSON document for something that parses:</p>
+<div class="highlight"><pre><span></span><code>openforecast<span class="w"> </span>models<span class="w"> </span>list<span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">'.models[].display_name'</span>
+openforecast<span class="w"> </span>forecast<span class="w"> </span>--config<span class="w"> </span>forecast.json<span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">'.rows | length'</span>
+openforecast<span class="w"> </span>backtest<span class="w"> </span>--config<span class="w"> </span>backtest.json<span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">'.leaderboards.mae[0].model'</span>
 </code></pre></div>
-<p>Every one of those is read off the materialized view rather than reported by the
-provider, so a manifest cannot describe a fit that did not happen. <code>ModelHandle</code>
-is a reference plus that manifest and deliberately nothing else — listing ten
-artifacts should not deserialize ten neural networks. A pipeline or an ensemble
-records one training record per leaf instead, in <code>manifest.training_records</code>,
-because two members may consume different views and there is no single
-materialization such an artifact could honestly claim.</p>
-<h2 id="fitting-a-pretrained-model-is-refused">Fitting a pretrained model is refused<a class="headerlink" href="#fitting-a-pretrained-model-is-refused" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="k">try</span><span class="p">:</span>
-    <span class="n">client</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="s2">"amazon/chronos-2"</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">data</span><span class="p">)</span>
-<span class="k">except</span> <span class="n">of</span><span class="o">.</span><span class="n">ModelError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
-    <span class="n">error</span><span class="o">.</span><span class="n">code</span>      <span class="c1"># 'UNKNOWN_MODEL_ERROR' without the environment installed,</span>
-                    <span class="c1"># 'MODEL_DOES_NOT_SUPPORT_FIT' with it</span>
+<p>The JSON is the complete answer — a forecast's <code>rows</code> holds every row, where the
+table rendering shows a preview and says how many it is not showing. A model
+prints as the <code>ModelDescriptor</code> the HTTP projection returns for
+<code>GET /v1/models</code>, so an agent reading a model over the CLI and one reading it
+over the network are reading one schema rather than two spellings of it.</p>
+<h2 id="streams-and-exit-codes">Streams and exit codes<a class="headerlink" href="#streams-and-exit-codes" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>stdout    the requested output, and nothing else
+stderr    logs, progress, warnings, and the message when something fails
+0         the command did what it was asked
+non-zero  it did not
 </code></pre></div>
-<p>A zero-shot model has no training contract to satisfy, so it forecasts from its
-own reference directly — see <a href="../../concepts/model-lifecycle/">Model lifecycles</a>.</p>
+<p>Failure is never prose on stdout. A command that cannot do what it was asked
+writes one sentence to stderr and exits non-zero:</p>
+<div class="highlight"><pre><span></span><code>openforecast<span class="w"> </span>models<span class="w"> </span>get<span class="w"> </span>nixtla/nhits
+<span class="c1"># error: nixtla/nhits is not a model this build can execute ...</span>
+</code></pre></div>
+<p>That is what makes a pipeline reliable: <code>openforecast models list --json | jq</code>
+either parses or the exit code says why not.</p>
+<h2 id="checking-an-installation">Checking an installation<a class="headerlink" href="#checking-an-installation" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>openforecast<span class="w"> </span>doctor
+openforecast<span class="w"> </span>doctor<span class="w"> </span>--json
+</code></pre></div>
+<p>One command for the questions a broken setup raises before the breakage does:
+which Python this is, where artifacts are written and whether that is writable,
+whether <code>uv</code> is present so a provider can be installed, which provider
+environments exist and whether their interpreters are still there, how many
+models the catalog holds, and whether the HTTP extra is installed.</p>
+<p>Something broken is a <code>fail</code> and the command exits non-zero — a container health
+check is an exit status, not a grep. Something merely absent is a <code>warn</code> and does
+not fail: an installation with no providers is a working installation of the
+built-in models.</p>
+<h2 id="serving">Serving<a class="headerlink" href="#serving" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>openforecast<span class="w"> </span>serve
+openforecast<span class="w"> </span>serve<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8321</span>
+</code></pre></div>
+<p>The HTTP projection over this build's own engine, behind the
+<code>openforecast[server]</code> extra. It binds to loopback by default, because a
+forecasting service has no authentication yet and <code>--host 0.0.0.0</code> should be a
+decision somebody makes out loud.</p>
 
 
 
