@@ -2,11 +2,24 @@
 
 The unified interface for forecasting.
 
-You describe your data and the model you want in OpenForecast's own vocabulary,
-and the library compiles that into whatever the underlying forecasting library
-expects — statistical, neural, tree-based or a zero-shot foundation model —
-behind one stable surface. Point-in-time data is first-class rather than bolted
-on: if you have real historical forecast vintages, you train on them directly.
+Pick any forecasting model — statistical, neural, gradient-boosted or a zero-shot
+foundation model, from whichever open-source library implements it — and run it
+on your own series with one call. OpenForecast does the rest: it installs the
+library in its own environment, works out what that model needs to be handed,
+materializes it from your data, and hands back the same kind of forecast whoever
+answered. Choosing a different model is a different string.
+
+| Namespace | Models |
+| --- | --- |
+| `nixtla` | `autoarima`, `nhits` |
+| `darts` | `theta`, `tide`, `nhits` |
+| `sktime` | `theta`, `pooled-trees` |
+| `sklearn` | `hist-gradient-boosting` |
+| `amazon` | `chronos-2` — zero-shot, never fitted |
+| `builtin` | `seasonal-naive` — ships with every install |
+
+`of.eligible_models(data, horizon=24)` answers which of them your data can
+actually fit, and why the others cannot, before anything is trained.
 
 **[Documentation](https://garsdal.github.io/openforecast/)** ·
 [Quickstart](https://garsdal.github.io/openforecast/getting-started/quickstart/) ·
@@ -22,36 +35,41 @@ uv add openforecast && uv run openforecast doctor
 or `pip install openforecast && openforecast doctor`. That is the whole install:
 the core dependencies are `pydantic`, `pyarrow` and `platformdirs`, and no
 forecasting framework is among them. `doctor` answers whether this installation
-can forecast, as an exit code, which makes it a reasonable first call. Then read
-the
-[quickstart](https://garsdal.github.io/openforecast/getting-started/quickstart/),
-or run any of the seven complete scripts in [`examples/`](examples/):
+can forecast, as an exit code, which makes it a reasonable first call. Then run
+any of the seven complete scripts in [`examples/`](examples/) — each generates its
+own small dataset, so none of them needs anything downloaded:
 
 ```bash
 uv run examples/01_quickstart.py
 ```
 
-## One ensemble, three libraries, one leaderboard
+## One model, or several from different libraries at once
+
+```bash
+openforecast providers install nixtla     # and darts, sktime, sklearn, amazon
+```
 
 <!-- docs-exec: skip — needs the nixtla, sklearn and amazon provider environments -->
 
 ```python
 import openforecast as of
 
-# Real forecast vintages: what was actually known at each origin, kept apart.
-# Nothing is deduplicated on the event time, forward-filled or imputed — a
-# missing value means the feature had not been published yet.
-data = of.ForecastDataset.from_pandas(
-    df,
-    origin_time="ref_time",
-    event_time="target_time",
-    instance_keys=["zone"],
-    targets=["price"],
-    known_features=["wind_fc", "load_fc"],
-    event_frequency="1h",
-    origin_frequency="1h",
-)
+model = of.fit("nixtla/nhits", data=data, horizon=24)
+forecast = of.forecast(model, data=data, horizon=24)
+```
 
+`data` is a `TimeSeriesFrame` or a `ForecastDataset`, built once from a DataFrame
+by naming which of its columns is the time axis, which identifies a series and
+which are the targets. That is the one thing you have to say about your data, and
+the [quickstart](https://garsdal.github.io/openforecast/getting-started/quickstart/)
+says it in a handful of lines; every call below takes the same object.
+
+Because one model is one reference, several are a list — combined into an
+ensemble, or raced against each other:
+
+<!-- docs-exec: skip — needs the nixtla, sklearn and amazon provider environments -->
+
+```python
 # One ensemble across two libraries with two different training units. The
 # neural model declares a sequence contract and is handed context -> horizon
 # windows; the gradient booster declares a tabular one and is handed one
@@ -73,9 +91,8 @@ model = of.fit(
 )
 
 # The ensemble, its two members, and a zero-shot foundation model that is never
-# fitted at all — on one leaderboard, over real historical origins. At each
-# origin the features come from that vintage; later ones are absent from the
-# object the model is handed rather than merely unused.
+# fitted at all — four candidates from three libraries and two lifecycles, on one
+# leaderboard, scored the same way over the same origins.
 result = of.backtest(
     models=[
         model.ref,                          # the pinned fit above: scored, not refitted
@@ -84,7 +101,7 @@ result = of.backtest(
         "amazon/chronos-2",                 # pretrained: forecasts as it stands
     ],
     data=data,
-    validation=of.ForecastOriginValidation(origins=of.AllOrigins(stride=24), horizon=24),
+    validation=of.RollingOrigin(horizon=24, windows=5),
     metrics=[of.MAE(), of.Bias()],
 )
 
@@ -92,18 +109,27 @@ result.leaderboard("mae")
 result.metrics_by(["horizon_step", "zone"])   # does it degrade after 12, and where?
 ```
 
-`origin_fidelity` in that result says `observed` rather than `simulated`, because
-the origins were real. Switching any candidate to `darts/tide` or
-`sktime/pooled-trees` changes the string and nothing else.
+Swapping any candidate for `darts/tide` or `sktime/pooled-trees` changes that
+string and nothing else — not the data, not the plan, not how the result is read.
+
+**If you have real forecast vintages, train on them.** A `ForecastDataset` holds
+what was actually known at each origin, and it goes to the same calls with
+`validation=of.ForecastOriginValidation(...)`: at each origin the features come
+from *that* vintage, and later ones are absent from the object the model is handed
+rather than merely unused. The artifact records whether its origins were
+`observed` or `simulated`, so "true availability versus simulated availability"
+is a comparison you can run rather than a caveat to remember. See
+[Point-in-time data](https://garsdal.github.io/openforecast/guides/point-in-time/).
 
 ## What is different about it
 
 - **One name per intent.** `fit`, `forecast`, `backtest`, `eligible_models` — the
   same four on the client, the package, the CLI and over HTTP. A test fails if a
   second way to do any of them appears.
-- **Point-in-time is a representation, not a convention.** Vintages have their
-  own type, leakage rules are enforced in one place, and an artifact records
-  whether its origins were observed or simulated.
+- **The model is matched to the series, not the other way round.**
+  `of.eligible_models` says which models this data can fit and names the reason
+  the others cannot — and nothing is imputed, deduplicated or forward-filled to
+  make one of them work.
 - **Providers are quarantined.** The core never imports a forecasting framework;
   each integration has its own environment and only ever sees a provider-neutral
   execution view.
