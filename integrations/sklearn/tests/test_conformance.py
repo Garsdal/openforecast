@@ -50,9 +50,7 @@ PARAMETERS: dict[str, dict[str, object]] = {
 # the hand-tuned entries whose stronger capability declarations are exercised
 # exhaustively on every run.
 DESCRIPTORS = tuple(
-    descriptor
-    for descriptor in PROVIDER.descriptors()
-    if descriptor.ref.name in PARAMETERS
+    descriptor for descriptor in PROVIDER.descriptors() if descriptor.ref.name in PARAMETERS
 )
 
 CASES = [

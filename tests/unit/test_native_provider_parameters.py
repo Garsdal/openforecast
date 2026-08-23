@@ -71,9 +71,11 @@ def test_a_signature_becomes_one_closed_parameter_schema() -> None:
 def test_the_same_declaration_validates_before_native_construction() -> None:
     declared = named(parameters_from_signature(NativeEstimator).parameters)
 
-    assert checked(
-        {"count": 2, "mode": "exact", "layers": [4]}, declared, "native"
-    ) == {"count": 2, "mode": "exact", "layers": [4]}
+    assert checked({"count": 2, "mode": "exact", "layers": [4]}, declared, "native") == {
+        "count": 2,
+        "mode": "exact",
+        "layers": [4],
+    }
     with pytest.raises(RecipeError, match="requires parameter"):
         checked({}, declared, "native")
     with pytest.raises(RecipeError, match="takes no parameter"):

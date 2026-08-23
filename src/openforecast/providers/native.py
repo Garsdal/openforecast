@@ -99,9 +99,7 @@ class Parameter:
                 f"{model} takes {self.name} of at least {self.minimum}; got {value!r}"
             )
         if self.maximum is not None and numeric is not None and numeric > self.maximum:
-            raise RecipeError(
-                f"{model} takes {self.name} of at most {self.maximum}; got {value!r}"
-            )
+            raise RecipeError(f"{model} takes {self.name} of at most {self.maximum}; got {value!r}")
         if self.choices and value not in self.choices:
             raise RecipeError(f"{model} takes {self.name} in {list(self.choices)}; got {value!r}")
 
@@ -198,9 +196,7 @@ def checked(
     if unknown:
         raise RecipeError(f"{model} takes no parameter {unknown}; it takes {sorted(declared)}")
     missing = sorted(
-        name
-        for name, parameter in declared.items()
-        if parameter.required and name not in params
+        name for name, parameter in declared.items() if parameter.required and name not in params
     )
     if missing:
         raise RecipeError(f"{model} requires parameter {missing}")

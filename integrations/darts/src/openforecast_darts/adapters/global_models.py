@@ -263,9 +263,7 @@ class DartsGlobalAdapter:
         metadata = view.metadata
         wanted = (int(persisted["context"]), int(persisted["horizon"]))
         given = (metadata.context, metadata.horizon)
-        mismatch = given[0] != wanted[0] or (
-            self._horizon_bound_at_fit and given[1] != wanted[1]
-        )
+        mismatch = given[0] != wanted[0] or (self._horizon_bound_at_fit and given[1] != wanted[1])
         if mismatch:
             raise DataError(
                 f"{self._name} was fitted on {wanted[0]} context steps and a horizon of "

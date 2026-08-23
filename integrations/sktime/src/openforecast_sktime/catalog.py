@@ -74,9 +74,7 @@ def _adapters() -> Mapping[str, Adapter]:
         required_packages = (
             [dependencies] if isinstance(dependencies, str) else list(dependencies or ())
         )
-        if required_packages and not _check_soft_dependencies(
-            *required_packages, severity="none"
-        ):
+        if required_packages and not _check_soft_dependencies(*required_packages, severity="none"):
             continue
         target_scitype = model_type.get_class_tag("scitype:y", "univariate")
         if target_scitype == "multivariate":

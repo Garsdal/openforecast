@@ -46,9 +46,7 @@ PARAMETERS: dict[str, dict[str, object]] = {
 }
 
 DESCRIPTORS = tuple(
-    descriptor
-    for descriptor in PROVIDER.descriptors()
-    if descriptor.ref.name in PARAMETERS
+    descriptor for descriptor in PROVIDER.descriptors() if descriptor.ref.name in PARAMETERS
 )
 
 CASES = [
