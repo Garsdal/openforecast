@@ -223,7 +223,7 @@ class ArtifactStore:
         """The whole artifact — manifest, recipe and training schema — re-validated.
 
         What a fit reads back when it has to know exactly what was fitted: the
-        engine reloading an artifact to forecast, or a benchmark comparing what
+        engine reloading an artifact to forecast, or a backtest comparing what
         two artifacts did. The hashes in the manifest are checked here, so an
         artifact that was edited on disk fails to load rather than forecasting.
         """

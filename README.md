@@ -37,7 +37,7 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > and the public V1 surface of Step 15, which is the one below and no longer
 > moves — the HTTP/OpenAPI projection of Step 16: `openforecast serve`,
 > `HttpTransport`, and a generated `spec/openapi/openapi.json` — the
-> benchmarking and point-in-time evaluation of Step 17: `of.benchmark`,
+> backtesting and point-in-time evaluation of Step 17: `of.backtest`,
 > `of.RollingOrigin`, `of.ForecastOriginValidation` and `of.eligible_models` —
 > and the native `TabularView` execution of Step 18:
 > `sklearn/hist-gradient-boosting`, in `integrations/sklearn`, which fits
@@ -681,12 +681,12 @@ pip install openforecast                # to call one
 `HttpTransport` is `urllib`, so the core install stays `pydantic`, `pyarrow` and
 `platformdirs`, and a remote-only user never installs a web framework.
 
-## Benchmarking and point-in-time evaluation
+## Backtesting and point-in-time evaluation
 
 The same models, over the same origins, scored the same way:
 
 ```python
-result = of.benchmark(
+result = of.backtest(
     models=[
         "builtin/seasonal-naive",
         "nixtla/autoarima",
@@ -703,9 +703,9 @@ result.best("mae")
 ```
 
 The defining property of the implementation is negative: there is no
-benchmarking code in it. No Nixtla backtester, no Darts `historical_forecasts`,
-no sktime evaluation harness — `of.benchmark` is a loop over `of.fit` and
-`of.forecast`, because every question a benchmark asks was already answered by
+backtesting code in it. No Nixtla backtester, no Darts `historical_forecasts`,
+no sktime evaluation harness — `of.backtest` is a loop over `of.fit` and
+`of.forecast`, because every question a backtest asks was already answered by
 the semantic layer. Which is also why it works over any transport: point a
 client at a service and the models are fitted and forecast there.
 
@@ -713,7 +713,7 @@ Point-in-time data is the same call with the validation that fits it, and this
 is the part worth the whole design:
 
 ```python
-result = of.benchmark(
+result = of.backtest(
     models=["nixtla/nhits", "darts/nhits"],
     data=pit_dataset,
     validation=of.ForecastOriginValidation(
@@ -734,12 +734,12 @@ dataset.up_to(moment)    # the vintages issued by then: observed origins
 ```
 
 A fold holds the result of one of those, so there is nothing for a bug in the
-benchmark loop to reach for. `up_to` on an event-time frame keeps the known
+backtest loop to reach for. `up_to` on an event-time frame keeps the known
 features of the truncated rows — a known feature's later values are knowable in
 advance, which is what the role means — and moves nothing else.
 
-The result is one long Arrow table, and three of its columns are not
-measurements:
+The result holds two long Arrow tables. The metrics, three of whose columns are
+not measurements:
 
 ```text
 model  fold  origin  metric  value  pairs  fit_seconds  forecast_seconds
@@ -747,13 +747,55 @@ model  fold  origin  metric  value  pairs  fit_seconds  forecast_seconds
 ```
 
 `origin_fidelity` is `simulated` or `observed`, read off the artifact the fold
-published rather than declared by the benchmark — which makes "simulated
+published rather than declared by the backtest — which makes "simulated
 historical availability versus true point-in-time availability" a comparison you
 can run rather than a caveat you have to remember. `artifact` is the pinned
-revision the numbers came from, so a benchmark's winner is a reference you can
+revision the numbers came from, so a backtest's winner is a reference you can
 forecast with. `pairs` says how many outcomes a value was computed over, so a
 fold scored on a third of its horizon is visible in the table rather than only in
 the metric.
+
+And the predictions those numbers were computed from:
+
+```text
+model  fold  instance keys...  origin_time  event_time  horizon_step
+       target  prediction  actual
+```
+
+Kept rather than dropped, because the metrics are derivable from these and not
+the reverse — so the question everyone asks after a backtest is a projection
+rather than a second run:
+
+```python
+result.predictions                          # every point, Arrow-backed
+result.metrics_by("horizon_step")           # does it degrade after 48?
+result.metrics_by(["horizon_step", "zone"])
+```
+
+The group keys are columns of the prediction table, including your own instance
+keys, and an unknown one is an error naming the columns that exist. That is the
+whole slicing story; there is no DSL. It is also the larger table by far —
+origins × horizon × instances × targets rows per model.
+
+A candidate that is already a revision is evaluated rather than refitted, which
+is how you ask whether the model in production has drifted over the last quarter:
+
+```python
+result = of.backtest(
+    models=["local/de-price@01K...", "nixtla/nhits"],
+    data=pit_dataset,
+    validation=of.ForecastOriginValidation(origins=of.AllOrigins(stride=24), horizon=72),
+    metrics=[of.MAE()],
+)
+```
+
+Read from the candidate rather than from a mode argument: a pinned revision
+names one immutable fit, so it forecasts at every origin with `fit_seconds`
+null, while a recipe or a bare reference is fitted per fold. One caveat comes
+with mixing them in one table — a frozen artifact was fitted on data that may
+postdate the early origins, so its numbers are optimistic beside a candidate
+fitted per fold. That is reported rather than refused, the same way
+`origin_fidelity` is.
 
 `of.eligible_models` is the screening half of `openforecast/auto`:
 
@@ -880,9 +922,9 @@ Imports flow in one direction only:
    client.py  commands/  server/  evaluation/
 ```
 
-`evaluation/` is in the outermost layer because benchmarking is a *user* of
+`evaluation/` is in the outermost layer because backtesting is a *user* of
 `of.fit` and `of.forecast` rather than something the engine can reach for, which
-is exactly why no provider knows it is being benchmarked.
+is exactly why no provider knows it is being backtested.
 
 These rules are tests, not documentation: `tests/unit/test_architecture.py`
 AST-scans the package and fails on any forbidden import, any forecasting
@@ -927,7 +969,7 @@ src/openforecast/
     protocol/    the provider wire protocol: messages, errors, versions
     commands/    the CLI, including `openforecast serve`
     server/      the HTTP projection: wire models, transports, the FastAPI app
-    evaluation/  benchmarking, PIT validation strategies, metrics, results
+    evaluation/  backtesting, PIT validation strategies, metrics, results
     client.py    the user-facing client
 
 integrations/    provider distributions, each independently versioned

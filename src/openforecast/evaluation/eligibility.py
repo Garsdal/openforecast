@@ -10,15 +10,15 @@ nixtla/nhits            ineligible: this model learns from context -> horizon se
 darts/tide              ineligible: darts/tide cannot be given the features ['wind_fc'] ...
 ```
 
-``openforecast/auto`` — one reference that inspects the data, benchmarks what
+``openforecast/auto`` — one reference that inspects the data, backtests what
 could run on it, and fits the winner — needs five things, and four of them now
 exist:
 
 ```text
 inspect data semantics      the semantic layer, since Steps 2 and 3
 determine eligible models    here
-benchmark them               of.benchmark
-rank the results             BenchmarkResult.leaderboard
+backtest them               of.backtest
+rank the results             BacktestResult.leaderboard
 fit the winner or ensemble   of.fit, on the recipe that won
 persist the selected recipe  deferred: an artifact recording a *choice* is not
                              the same object as one recording a fit
@@ -105,7 +105,7 @@ def eligible_models(
     it of the whole catalog. ``horizon`` is required by every model that does not
     train on complete series, since the horizon is what bounds their samples.
 
-    ``plan`` is adapted per model the way a benchmark's is — a context window
+    ``plan`` is adapted per model the way a backtest's is — a context window
     reaches the models that size samples with one and no others — so one plan can
     be asked of a whole catalog.
     """
@@ -144,7 +144,7 @@ def _eligibility(
 def _plan_for(descriptor: ModelDescriptor, plan: FitPlan | None) -> FitPlan | None:
     """The plan as this model's contract can receive it.
 
-    The same adaptation :func:`~openforecast.evaluation.benchmark.plan_for`
+    The same adaptation :func:`~openforecast.evaluation.backtest.plan_for`
     makes, and for the same reason: a window is a field only a sequence model
     binds, so carrying it to the others would report every one of them as
     ineligible for the plan rather than for the data.

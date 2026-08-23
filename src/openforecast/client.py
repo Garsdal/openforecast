@@ -44,8 +44,8 @@ owns it.
 The outermost layer, by design: everything may be imported from here. The one
 thing that imports it is :mod:`openforecast.evaluation`, which sits in the same
 layer and is a *user* of this module rather than something beneath it — a
-benchmark is a loop over ``fit`` and ``forecast``, which is exactly why nothing
-inside the engine knows it is being benchmarked.
+backtest is a loop over ``fit`` and ``forecast``, which is exactly why nothing
+inside the engine knows it is being backtested.
 """
 
 from __future__ import annotations

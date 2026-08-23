@@ -51,7 +51,7 @@ Since Step 17 the same vocabulary also compares models rather than only running
 them:
 
 ```python
-result = of.benchmark(
+result = of.backtest(
     models=["builtin/seasonal-naive", "nixtla/autoarima", "nixtla/nhits"],
     data=dataset,
     validation=of.ForecastOriginValidation(origins=of.AllOrigins(stride=24), horizon=72),
@@ -62,10 +62,13 @@ result.leaderboard("mae")
 ```
 
 Which is a loop over ``of.fit`` and ``of.forecast`` and nothing else — no
-provider knows it is being benchmarked, and for a ``ForecastDataset`` each origin
-is evaluated on the vintage that actually existed. That is what
-:mod:`openforecast.evaluation` is, along with ``of.eligible_models``, which
-answers which models this data could fit at all.
+provider knows it is being backtested, and for a ``ForecastDataset`` each origin
+is evaluated on the vintage that actually existed. What comes back holds every
+point prediction as well as the metrics over them, so
+``result.metrics_by("horizon_step")`` is a projection rather than a second run,
+and a candidate that is already a pinned revision is evaluated over history
+rather than refitted. That is what :mod:`openforecast.evaluation` is, along with
+``of.eligible_models``, which answers which models this data could fit at all.
 
 The execution views of Step 4 are deliberately not re-exported here either: they
 are a provider-facing boundary, imported from :mod:`openforecast.views`, not
@@ -109,7 +112,7 @@ from openforecast.evaluation import (
     MAE,
     MAPE,
     RMSE,
-    BenchmarkResult,
+    BacktestResult,
     Bias,
     Candidate,
     Eligibility,
@@ -117,7 +120,7 @@ from openforecast.evaluation import (
     Metric,
     RollingOrigin,
     Validation,
-    benchmark,
+    backtest,
     eligible_models,
 )
 from openforecast.recipes import (
@@ -161,7 +164,7 @@ __all__ = [
     "AllOrigins",
     "ArtifactError",
     "AtOrigin",
-    "BenchmarkResult",
+    "BacktestResult",
     "Bias",
     "Candidate",
     "ColumnSet",
@@ -228,7 +231,7 @@ __all__ = [
     "WeightedMean",
     "WindowPlan",
     "__version__",
-    "benchmark",
+    "backtest",
     "eligible_models",
     "fit",
     "forecast",

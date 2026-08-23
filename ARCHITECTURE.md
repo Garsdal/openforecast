@@ -117,7 +117,7 @@ somebody else's transitive dependency.
 The forbidden-terminology scan of rule 6 is the one check that reads objects
 rather than source, because what it has to constrain is what a public object
 *serializes*. `openforecast.server` and `openforecast.evaluation` are in its list
-for exactly that reason: an HTTP body and a benchmark result are public objects, and a caller reading one should no more have to
+for exactly that reason: an HTTP body and a backtest result are public objects, and a caller reading one should no more have to
 know which library executed the model than a caller reading a manifest does. It imports every public module, walks the JSON Schema of every
 exported model plus the members of every exported enum and the canonical
 forecast columns, and fails if any field name, enum value or column is spelled
@@ -157,8 +157,17 @@ issued it — so a leaked vintage can be identified rather than merely suspected
 datasets.py   the golden semantic datasets, and the builders behind them
 test_views.py both sources into all three fit views — the six materializations
 test_point_in_time.py   leakage, sample counts, missingness, equivalence
+test_backtest_leakage.py  the same leakage guarantee, through of.backtest
 suite.py      the provider contract, generated from what a descriptor declares
 ```
+
+The two leakage tests assert one property at two boundaries.
+`test_point_in_time.py` poisons a vintage and materializes the earlier origin
+directly, which holds the `ViewPlanner`. `test_backtest_leakage.py` runs a
+backtest at that origin and searches every table of every view the provider was
+handed, which holds the whole path a caller actually takes — a planner change
+reaching one vintage past the origin fails there rather than surfacing as a
+slightly different metric.
 
 `suite.py` is the part integrations inherit. A descriptor states which view its
 model trains on, which shapes and feature roles it accepts, whether it learns
@@ -557,14 +566,14 @@ what a transport abstraction is worth in the first place.
 A forecasting service has no authentication yet, so the default has to be the
 one that does not publish an unauthenticated service to a network by accident.
 
-## Benchmarking and point-in-time evaluation
+## Backtesting and point-in-time evaluation
 
 `evaluation/` is where the abstraction stops being a way to call other people's
 libraries and starts being worth something on its own. Its defining property is
-negative: **there is no benchmarking implementation in it.** No Nixtla
+negative: **there is no backtesting implementation in it.** No Nixtla
 backtester, no Darts `historical_forecasts`, no sktime evaluation harness — and
 not because they were reimplemented, but because there is nothing left for them
-to do. Every question a benchmark asks was already answered by a layer above:
+to do. Every question a backtest asks was already answered by a layer above:
 
 ```text
 which origins exist        the validation strategy, over the source data
@@ -574,9 +583,9 @@ what happened               the truth frame
 ```
 
 So it lives in the outermost layer and imports `client.py`. That is the one
-inward edge into the client, and it is the honest direction: benchmarking is a
+inward edge into the client, and it is the honest direction: backtesting is a
 *user* of `of.fit` and `of.forecast`, which is why no provider — and nothing in
-the engine — knows it is being benchmarked, and why a benchmark against
+the engine — knows it is being backtested, and why a backtest against
 `HttpTransport` runs on the service without a line of its own.
 
 **A historical origin is an object, not an offset.** The leakage guarantee is
@@ -601,14 +610,36 @@ source rather than inventing a vintage or an origin that never existed.
 
 **Every row says what would make it incomparable.** `origin_fidelity`,
 `provider` and `artifact` are read off the artifact the fold actually published,
-never declared by the benchmark, and `pairs` says how many outcomes a value was
+never declared by the backtest, and `pairs` says how many outcomes a value was
 computed over — so a fold scored on a third of its horizon is visible in the
 result rather than only in the metric. `origin_fidelity` is the one that changes
 conclusions, and carrying it per row is what turns "simulated availability versus
 true point-in-time availability" into a comparison a caller can run rather than a
 caveat they have to remember.
 
-One knob is deliberately a template rather than a literal. A benchmark's `plan=`
+**The predictions are the primitive; the metrics are the summary.** A
+`BacktestResult` holds both tables, and it keeps the larger one — one row per
+model, fold, instance, event time and target — because the metric rows are
+derivable from it and not the reverse. So `metrics_by("horizon_step")` regroups
+what was already measured rather than re-running anything, and the group keys
+are prediction columns, including the caller's own instance keys. A result that
+kept only the means would make *does it degrade after horizon 48?* unanswerable
+from the object it handed back, which is the most common question there is after
+a backtest.
+
+**A frozen artifact is evaluated, not refused.** A pinned revision names one
+immutable fit, so it forecasts at every origin and `fit_seconds` is null; a
+recipe or a bare reference is fitted per fold. Both are the same loop with the
+fit made conditional, and which one a candidate is comes from what it *is*
+rather than from a mode argument. The caveat — a frozen artifact was fitted on
+data that may postdate the early origins, so its numbers are optimistic beside a
+per-fold fit — is reported rather than enforced, for the same reason
+`origin_fidelity` is: it is the caller's judgement, and refusing the run would
+remove the one way to ask whether the model in production has drifted. What is
+still refused is a pinned revision *inside* a recipe that is fitted per fold:
+there is no way to fit a step that is already fitted.
+
+One knob is deliberately a template rather than a literal. A backtest's `plan=`
 has to reach candidates that do not share a contract, and a `WindowPlan` is a
 field only a sequence model binds — `of.fit` refuses one handed to ARIMA, and
 correctly, since somebody wrote it expecting an effect. So `plan_for` drops the
@@ -625,5 +656,5 @@ values" fall out as the sentences the fit would have failed with rather than
 being written down a second time as heuristics. `openforecast/auto` itself is not
 registered: a descriptor for it would have to name a view and a horizon before
 the data has been seen, and the honest version is a policy over these pieces —
-benchmark, rank, fit the winner — rather than a model reference standing in front
+backtest, rank, fit the winner — rather than a model reference standing in front
 of nothing.

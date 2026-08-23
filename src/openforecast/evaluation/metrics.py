@@ -13,7 +13,7 @@ down — in a result table, in a request, in a report — and a name that a read
 has to look up in a table of accepted spellings is a name that will eventually be
 misspelled. ``{"metric": "mae"}`` reads back as ``MAE()``.
 
-They score *point* forecasts, which is what :func:`~openforecast.evaluation.benchmark.benchmark`
+They score *point* forecasts, which is what :func:`~openforecast.evaluation.backtest.backtest`
 asks models for. Scoring a predictive distribution needs the probabilistic
 output protocol to be normalized across providers first — a quantile means the
 same thing everywhere before a pinball loss over it means anything — so those
@@ -62,7 +62,7 @@ class _Metric(BaseModel, ABC):
 
     @property
     def name(self) -> str:
-        """The spelling that appears in a benchmark's ``metric`` column."""
+        """The spelling that appears in a backtest's ``metric`` column."""
         return str(self.kind)
 
     @property
@@ -130,7 +130,7 @@ class MAPE(_Metric):
     Refused rather than approximated where an outcome is zero: the percentage
     error of a zero outcome is not a large number, it is not a number. Skipping
     those rows would silently score a different subset of the horizon for one
-    model than for another, which is exactly the comparison a benchmark exists to
+    model than for another, which is exactly the comparison a backtest exists to
     make sound.
     """
 
