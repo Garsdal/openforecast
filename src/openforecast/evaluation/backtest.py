@@ -1,4 +1,4 @@
-"""``of.backtest``: the same models, the same origins, one comparable number.
+"""``of.backtest``: evaluate models against history, at the origins it holds.
 
 ```python
 result = of.backtest(
@@ -30,6 +30,10 @@ result = of.backtest(
 )
 ```
 
+``models`` stays plural for a backtest of one: a single model over a stride of
+origins passes a list of one, and a ``model=`` singular alias would be a second
+door onto the same room.
+
 ## Why there is no backtesting implementation in here
 
 Everything below is a loop over ``client.fit`` and ``client.forecast``. There is
@@ -50,13 +54,25 @@ learns who executes a model. That also means it works over any transport — a
 backtest against ``of.OpenForecast(transport=of.HttpTransport(...))`` fits and
 forecasts on the service and scores here.
 
-## What it fits
+## What it fits, and what it does not
 
 One artifact per candidate and fold, published like any other, and its pinned
 reference is recorded in the result. A backtest that scored models without
 leaving anything behind would make its own winner unreproducible: the point of
 ``artifact`` in the table is that the number came from *that* revision, and you
 can forecast with it.
+
+A candidate that *is* already a revision — ``local/de-price@01K...``, or the
+handle a fit returned — is evaluated rather than refitted, which is how you ask
+whether the model in production has drifted:
+
+```text
+pinned revision      forecast at every origin, fit_seconds is null
+recipe / bare ref    fit per fold
+```
+
+Read from what the candidate is rather than from a mode argument, since a
+revision names one immutable fit and there is nothing else it could mean.
 
 ## The plan a candidate is fitted with
 
@@ -88,10 +104,17 @@ from pydantic import BaseModel, ConfigDict
 
 from openforecast.artifacts.handle import ModelHandle
 from openforecast.client import OpenForecast, default_client
-from openforecast.data._arrow import build_table, column_values, is_missing, key_rows
+from openforecast.data._arrow import (
+    InstanceKey,
+    build_table,
+    column_type,
+    column_values,
+    is_missing,
+    key_rows,
+)
 from openforecast.errors import DataError, RecipeError
 from openforecast.evaluation.metrics import Metric
-from openforecast.evaluation.result import BacktestColumn, BacktestResult
+from openforecast.evaluation.result import BacktestColumn, BacktestResult, PredictionColumn
 from openforecast.evaluation.validation import Fold, Validation, truth_lookup
 from openforecast.models.descriptor import ModelDescriptor
 from openforecast.models.ref import ModelRef
@@ -138,7 +161,7 @@ class Candidate(BaseModel):
         if model is not None:
             if "model" in data:
                 raise RecipeError("model was given both positionally and by keyword")
-            data["model"] = normalize_recipe(model)
+            data["model"] = normalize_recipe(_as_reference(model))
         super().__init__(**data)
 
     @property
@@ -150,6 +173,13 @@ class Candidate(BaseModel):
             return str(self.model.ref)
         return "+".join(str(ref) for ref in estimator_refs(self.model))
 
+    @property
+    def revision(self) -> ModelRef | None:
+        """The frozen revision this candidate *is*, if it is one rather than a recipe."""
+        if isinstance(self.model, Model) and self.model.ref.is_pinned:
+            return self.model.ref
+        return None
+
 
 def backtest(
     models: Sequence[ModelInput | Candidate],
@@ -160,11 +190,24 @@ def backtest(
     plan: FitPlan | None = None,
     client: OpenForecast | None = None,
 ) -> BacktestResult:
-    """Fit and score every model at every origin ``validation`` selects.
+    """Evaluate every model at every origin ``validation`` selects.
+
+    A trainable candidate is fitted on the data of each origin and forecasts
+    from it; a pinned revision skips the fit and forecasts as it stands. Both
+    end up in one result, and one caveat comes with mixing them: a frozen
+    artifact was fitted on data that may postdate the early origins, so its
+    numbers are optimistic beside a candidate fitted per fold. That is reported
+    — ``fit_seconds`` is null and ``artifact`` names the revision — rather than
+    refused, the same way ``origin_fidelity`` is.
 
     Leaving ``client`` out uses the same default client ``of.fit`` and
     ``of.forecast`` do, so a backtest writes its artifacts where everything else
     does. Passing one pointed at a service backtests there.
+
+    The result holds every point prediction as well as the metrics over them,
+    which is what makes ``result.metrics_by("horizon_step")`` a projection
+    rather than a second run. It is also the larger of the two tables by far:
+    origins × horizon × instances × targets rows per model.
     """
     executor = default_client() if client is None else client
     if not metrics:
@@ -173,11 +216,19 @@ def backtest(
     folds = validation.folds(data)
 
     rows: list[_Row] = []
+    predictions: list[_Prediction] = []
+    keys: dict[str, pa.DataType] = {}
     for candidate in candidates:
-        fitted = plan_for(candidate, executor, plan)
+        frozen = _frozen(candidate, executor)
+        fit_plan = None if frozen is not None else plan_for(candidate, executor, plan)
         for fold in folds:
-            rows.extend(_measure(executor, candidate, fitted, fold, validation.horizon, metrics))
-    return BacktestResult(_table(rows), metrics=metrics)
+            measured = _measure(
+                executor, candidate, fit_plan, fold, validation.horizon, metrics, frozen
+            )
+            rows.extend(measured.rows)
+            predictions.extend(measured.predictions)
+            keys.update(measured.key_types)
+    return BacktestResult(_table(rows), _predictions_table(predictions, keys), scored_by=metrics)
 
 
 def plan_for(
@@ -215,11 +266,50 @@ class _Row:
     metric: str
     value: float
     pairs: int
-    fit_seconds: float
+    #: Null for a frozen revision: there was no fit, which is not a fit of zero
+    #: seconds.
+    fit_seconds: float | None
     forecast_seconds: float
     origin_fidelity: str
     provider: str
     artifact: str
+
+
+@dataclass(frozen=True)
+class _Prediction:
+    """One forecast point, and the outcome it is about to be scored against."""
+
+    model: str
+    fold: int
+    keys: InstanceKey
+    origin_time: datetime
+    event_time: datetime
+    horizon_step: int
+    target: str
+    prediction: float | None
+    actual: float | None
+
+    @property
+    def pair(self) -> tuple[float, float] | None:
+        """``(outcome, forecast)`` when both are numbers, and ``None`` otherwise.
+
+        Null and NaN are the two spellings of "no value here", and either on
+        either side means this event time cannot be scored.
+        """
+        outcome, forecast = self.actual, self.prediction
+        if outcome is None or forecast is None or is_missing(outcome) or is_missing(forecast):
+            return None
+        return outcome, forecast
+
+
+@dataclass(frozen=True)
+class _Measurement:
+    """What one candidate at one origin produced: the scores and the predictions."""
+
+    rows: tuple[_Row, ...]
+    predictions: tuple[_Prediction, ...]
+    #: The Arrow type of each instance key column, as the forecast carried it.
+    key_types: dict[str, pa.DataType]
 
 
 def _measure(
@@ -229,31 +319,43 @@ def _measure(
     fold: Fold,
     horizon: int,
     metrics: Sequence[Metric],
-) -> list[_Row]:
-    """Fit this candidate at one origin, forecast from it, and score the answer."""
-    started = perf_counter()
-    handle: ModelHandle = client.fit(
-        candidate.model,
-        fold.train,
-        horizon=horizon,
-        plan=plan,
-        name=_artifact_name(candidate, fold),
-    )
-    fit_seconds = perf_counter() - started
+    frozen: ModelHandle | None,
+) -> _Measurement:
+    """Forecast this candidate at one origin and score the answer.
+
+    Fitting first, unless the candidate is a frozen revision — which is the
+    whole of the difference between evaluating an artifact and backtesting a
+    recipe.
+    """
+    if frozen is None:
+        started = perf_counter()
+        handle = client.fit(
+            candidate.model,
+            fold.train,
+            horizon=horizon,
+            plan=plan,
+            name=_artifact_name(candidate, fold),
+        )
+        fit_seconds: float | None = perf_counter() - started
+    else:
+        handle, fit_seconds = frozen, None
 
     started = perf_counter()
     forecast = client.forecast(handle.ref, fold.context, horizon=horizon)
     forecast_seconds = perf_counter() - started
 
-    actual, predicted = _pairs(candidate, fold, forecast)
-    return [
+    predictions = _predictions(candidate, fold, forecast)
+    scored = [pair for entry in predictions if (pair := entry.pair) is not None]
+    actual = [outcome for outcome, _ in scored]
+    predicted = [value for _, value in scored]
+    rows = tuple(
         _Row(
             model=candidate.label,
             fold=fold.index,
             origin=fold.origin,
             metric=metric.name,
             value=metric.compute(actual, predicted),
-            pairs=len(actual),
+            pairs=len(scored),
             fit_seconds=fit_seconds,
             forecast_seconds=forecast_seconds,
             origin_fidelity=_fidelity(handle),
@@ -261,22 +363,28 @@ def _measure(
             artifact=str(handle.ref),
         )
         for metric in metrics
-    ]
+    )
+    point = forecast.point()
+    return _Measurement(
+        rows=rows,
+        predictions=predictions,
+        key_types={name: column_type(point, name) for name in forecast.instance_keys},
+    )
 
 
-def _pairs(candidate: Candidate, fold: Fold, forecast: Forecast) -> tuple[list[float], list[float]]:
-    """The outcomes and the forecasts of them, aligned and both present.
+def _predictions(candidate: Candidate, fold: Fold, forecast: Forecast) -> tuple[_Prediction, ...]:
+    """Every forecast point of one fold, beside what actually happened.
 
-    A forecast event time whose outcome was never published is dropped rather
-    than scored as a zero error, and how many survived is recorded per row as
-    ``pairs`` — a fold scored on a third of its horizon should be visible in the
-    result rather than only in the metric.
+    A forecast event time whose outcome was never published is kept with a null
+    ``actual`` rather than dropped or scored as a zero error, and how many
+    survived into the metric is recorded per row as ``pairs`` — a fold scored on
+    a third of its horizon should be visible in the result rather than only in
+    the metric.
 
-    A *missing forecast* is dropped for the same reason and is the case worth
-    naming: a model that answers a NaN has said it does not know, and letting
-    that through would make the metric NaN — one unanswerable event time
-    destroying the score of a whole fold, with nothing in the result saying which
-    one it was.
+    A *missing forecast* is treated the same way and is the case worth naming: a
+    model that answers a NaN has said it does not know, and letting that through
+    would make the metric NaN — one unanswerable event time destroying the score
+    of a whole fold, with nothing in the result saying which one it was.
     """
     known = truth_lookup(fold.truth, forecast.instance_keys)
     point = forecast.point()
@@ -284,24 +392,29 @@ def _pairs(candidate: Candidate, fold: Fold, forecast: Forecast) -> tuple[list[f
     times: list[datetime] = column_values(point, ForecastColumn.EVENT_TIME.value)
     targets: list[str] = column_values(point, ForecastColumn.TARGET.value)
     values: list[float | None] = column_values(point, ForecastColumn.VALUE.value)
+    steps = {moment: index + 1 for index, moment in enumerate(forecast.event_times)}
 
-    actual: list[float] = []
-    predicted: list[float] = []
-    for cell, value in zip(zip(keys, times, targets, strict=True), values, strict=True):
-        outcome = known.get(cell)
-        # Null and NaN are the two spellings of "no value here", and both mean
-        # this event time cannot be scored.
-        if outcome is None or value is None or is_missing(outcome) or is_missing(value):
-            continue
-        actual.append(float(outcome))
-        predicted.append(float(value))
-    if not actual:
+    found = tuple(
+        _Prediction(
+            model=candidate.label,
+            fold=fold.index,
+            keys=key,
+            origin_time=fold.origin,
+            event_time=moment,
+            horizon_step=steps[moment],
+            target=target,
+            prediction=value,
+            actual=known.get((key, moment, target)),
+        )
+        for key, moment, target, value in zip(keys, times, targets, values, strict=True)
+    )
+    if all(entry.pair is None for entry in found):
         raise DataError(
             f"nothing to score for {candidate.label} at origin {fold.origin.isoformat()}: the "
             f"forecast covers no event time the truth holds an outcome for. Select origins the "
             f"truth reaches past, or shorten the horizon"
         )
-    return actual, predicted
+    return found
 
 
 def _fidelity(handle: ModelHandle) -> str:
@@ -321,12 +434,12 @@ def _fidelity(handle: ModelHandle) -> str:
 def _candidates(models: Sequence[ModelInput | Candidate]) -> tuple[Candidate, ...]:
     """Every entry as a candidate, with labels that identify one model each."""
     if not models:
-        raise RecipeError("a backtest needs at least one model to compare")
+        raise RecipeError("a backtest needs at least one model to evaluate")
     candidates = tuple(
-        entry if isinstance(entry, Candidate) else Candidate(_fittable(entry)) for entry in models
+        entry if isinstance(entry, Candidate) else Candidate(entry) for entry in models
     )
     for candidate in candidates:
-        _reject_pinned(candidate)
+        _reject_pinned_members(candidate)
     seen: dict[str, int] = {}
     for candidate in candidates:
         seen[candidate.label] = seen.get(candidate.label, 0) + 1
@@ -339,30 +452,61 @@ def _candidates(models: Sequence[ModelInput | Candidate]) -> tuple[Candidate, ..
     return candidates
 
 
-def _fittable(entry: ModelInput) -> ModelInput:
-    """A backtest compares models, and a fitted artifact is not one.
+def _as_reference(entry: ModelInput) -> ModelInput:
+    """A fitted handle, as the candidate it stands for: the revision it names.
 
-    ``local/de-price@01K...`` is the *result* of a fit. Backtesting it would
-    have to either refit the recipe it records — on data it was not fitted on,
-    under a name that is not its own — or score one artifact against origins it
-    never saw. Both are questions worth asking, and neither is the one this
-    function was called to answer.
+    ``of.backtest(models=[handle])`` evaluates that artifact over history rather
+    than refitting the recipe behind it, so the handle is narrowed to its pinned
+    reference here and travels as one from then on.
     """
     if isinstance(entry, ModelHandle):
-        raise RecipeError(
-            f"{entry.ref} is a fitted artifact, not a candidate; backtest the recipe it "
-            f"records, and every fold will fit it on the data of that origin"
-        )
+        return str(entry.ref)
     return entry
 
 
-def _reject_pinned(candidate: Candidate) -> None:
-    """A revision names one fit, and a candidate is fitted once per fold."""
+def _frozen(candidate: Candidate, client: OpenForecast) -> ModelHandle | None:
+    """The artifact this candidate already is, or ``None`` if it is fitted per fold.
+
+    A pinned revision names one immutable fit. Evaluating it over history is a
+    real question — it is how you check whether the model in production has
+    drifted — and it is the only thing a revision can mean here, since there is
+    nothing left to train. What follows from that is that anything configuring a
+    fit is refused rather than silently ignored: a plan that will never be bound
+    and parameters that will never be read are a caller expecting an effect.
+    """
+    revision = candidate.revision
+    if revision is None:
+        return None
+    if candidate.plan is not None:
+        raise RecipeError(
+            f"{revision} is a fitted revision, so it is evaluated rather than fitted and "
+            f"the plan on this candidate would do nothing; backtest the model it was fitted "
+            f"from to fit one per fold"
+        )
+    model = candidate.model
+    if isinstance(model, Model) and model.params:
+        raise RecipeError(
+            f"{revision} is a fitted revision, so the parameters it was fitted with are "
+            f"already part of it and {sorted(model.params)} would do nothing"
+        )
+    return client.artifact(str(revision))
+
+
+def _reject_pinned_members(candidate: Candidate) -> None:
+    """A revision is a whole fitted artifact, so it is not a step inside a recipe.
+
+    A pinned candidate on its own is evaluated as it stands. Pinned *inside* a
+    pipeline or an ensemble is a different thing: the recipe around it is fitted
+    per fold, and there is no way to fit a step that is already fitted.
+    """
+    if candidate.revision is not None:
+        return
     pinned = [str(ref) for ref in estimator_refs(candidate.model) if ref.is_pinned]
     if pinned:
         raise RecipeError(
-            f"{pinned} pin fitted revisions; backtest the models they were fitted from, "
-            f"and every fold will fit one of its own"
+            f"{pinned} pin fitted revisions inside a recipe that is fitted per fold; name "
+            f"the models they were fitted from, or backtest the revision on its own to "
+            f"evaluate it as it stands"
         )
 
 
@@ -383,7 +527,7 @@ def _descriptor(client: OpenForecast, ref: ModelRef) -> ModelDescriptor:
     return client.models.get(str(ref))
 
 
-# -- the result table -------------------------------------------------------
+# -- the result tables ------------------------------------------------------
 
 
 def _table(rows: Sequence[_Row]) -> pa.Table:
@@ -406,4 +550,37 @@ def _table(rows: Sequence[_Row]) -> pa.Table:
         BacktestColumn.PROVIDER.value: ([row.provider for row in rows], pa.string()),
         BacktestColumn.ARTIFACT.value: ([row.artifact for row in rows], pa.string()),
     }
+    return build_table(columns)
+
+
+def _predictions_table(rows: Sequence[_Prediction], key_types: dict[str, pa.DataType]) -> pa.Table:
+    """The predictions, with the instance keys under the caller's own names.
+
+    Their Arrow types are the ones the forecasts came back with rather than
+    inferred here, so a key that is an integer zone id stays one.
+    """
+    columns: dict[str, tuple[list[Any], pa.DataType]] = {
+        PredictionColumn.MODEL.value: ([row.model for row in rows], pa.string()),
+        PredictionColumn.FOLD.value: ([row.fold for row in rows], pa.int64()),
+    }
+    for position, name in enumerate(key_types):
+        columns[name] = ([row.keys[position] for row in rows], key_types[name])
+    columns[PredictionColumn.ORIGIN_TIME.value] = (
+        [row.origin_time for row in rows],
+        pa.timestamp("us"),
+    )
+    columns[PredictionColumn.EVENT_TIME.value] = (
+        [row.event_time for row in rows],
+        pa.timestamp("us"),
+    )
+    columns[PredictionColumn.HORIZON_STEP.value] = (
+        [row.horizon_step for row in rows],
+        pa.int64(),
+    )
+    columns[PredictionColumn.TARGET.value] = ([row.target for row in rows], pa.string())
+    columns[PredictionColumn.PREDICTION.value] = (
+        [row.prediction for row in rows],
+        pa.float64(),
+    )
+    columns[PredictionColumn.ACTUAL.value] = ([row.actual for row in rows], pa.float64())
     return build_table(columns)

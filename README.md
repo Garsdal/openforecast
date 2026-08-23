@@ -738,8 +738,8 @@ backtest loop to reach for. `up_to` on an event-time frame keeps the known
 features of the truncated rows — a known feature's later values are knowable in
 advance, which is what the role means — and moves nothing else.
 
-The result is one long Arrow table, and three of its columns are not
-measurements:
+The result holds two long Arrow tables. The metrics, three of whose columns are
+not measurements:
 
 ```text
 model  fold  origin  metric  value  pairs  fit_seconds  forecast_seconds
@@ -754,6 +754,48 @@ revision the numbers came from, so a backtest's winner is a reference you can
 forecast with. `pairs` says how many outcomes a value was computed over, so a
 fold scored on a third of its horizon is visible in the table rather than only in
 the metric.
+
+And the predictions those numbers were computed from:
+
+```text
+model  fold  instance keys...  origin_time  event_time  horizon_step
+       target  prediction  actual
+```
+
+Kept rather than dropped, because the metrics are derivable from these and not
+the reverse — so the question everyone asks after a backtest is a projection
+rather than a second run:
+
+```python
+result.predictions                          # every point, Arrow-backed
+result.metrics_by("horizon_step")           # does it degrade after 48?
+result.metrics_by(["horizon_step", "zone"])
+```
+
+The group keys are columns of the prediction table, including your own instance
+keys, and an unknown one is an error naming the columns that exist. That is the
+whole slicing story; there is no DSL. It is also the larger table by far —
+origins × horizon × instances × targets rows per model.
+
+A candidate that is already a revision is evaluated rather than refitted, which
+is how you ask whether the model in production has drifted over the last quarter:
+
+```python
+result = of.backtest(
+    models=["local/de-price@01K...", "nixtla/nhits"],
+    data=pit_dataset,
+    validation=of.ForecastOriginValidation(origins=of.AllOrigins(stride=24), horizon=72),
+    metrics=[of.MAE()],
+)
+```
+
+Read from the candidate rather than from a mode argument: a pinned revision
+names one immutable fit, so it forecasts at every origin with `fit_seconds`
+null, while a recipe or a bare reference is fitted per fold. One caveat comes
+with mixing them in one table — a frozen artifact was fitted on data that may
+postdate the early origins, so its numbers are optimistic beside a candidate
+fitted per fold. That is reported rather than refused, the same way
+`origin_fidelity` is.
 
 `of.eligible_models` is the screening half of `openforecast/auto`:
 

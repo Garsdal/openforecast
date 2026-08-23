@@ -157,8 +157,17 @@ issued it — so a leaked vintage can be identified rather than merely suspected
 datasets.py   the golden semantic datasets, and the builders behind them
 test_views.py both sources into all three fit views — the six materializations
 test_point_in_time.py   leakage, sample counts, missingness, equivalence
+test_backtest_leakage.py  the same leakage guarantee, through of.backtest
 suite.py      the provider contract, generated from what a descriptor declares
 ```
+
+The two leakage tests assert one property at two boundaries.
+`test_point_in_time.py` poisons a vintage and materializes the earlier origin
+directly, which holds the `ViewPlanner`. `test_backtest_leakage.py` runs a
+backtest at that origin and searches every table of every view the provider was
+handed, which holds the whole path a caller actually takes — a planner change
+reaching one vintage past the origin fails there rather than surfacing as a
+slightly different metric.
 
 `suite.py` is the part integrations inherit. A descriptor states which view its
 model trains on, which shapes and feature roles it accepts, whether it learns
@@ -607,6 +616,28 @@ result rather than only in the metric. `origin_fidelity` is the one that changes
 conclusions, and carrying it per row is what turns "simulated availability versus
 true point-in-time availability" into a comparison a caller can run rather than a
 caveat they have to remember.
+
+**The predictions are the primitive; the metrics are the summary.** A
+`BacktestResult` holds both tables, and it keeps the larger one — one row per
+model, fold, instance, event time and target — because the metric rows are
+derivable from it and not the reverse. So `metrics_by("horizon_step")` regroups
+what was already measured rather than re-running anything, and the group keys
+are prediction columns, including the caller's own instance keys. A result that
+kept only the means would make *does it degrade after horizon 48?* unanswerable
+from the object it handed back, which is the most common question there is after
+a backtest.
+
+**A frozen artifact is evaluated, not refused.** A pinned revision names one
+immutable fit, so it forecasts at every origin and `fit_seconds` is null; a
+recipe or a bare reference is fitted per fold. Both are the same loop with the
+fit made conditional, and which one a candidate is comes from what it *is*
+rather than from a mode argument. The caveat — a frozen artifact was fitted on
+data that may postdate the early origins, so its numbers are optimistic beside a
+per-fold fit — is reported rather than enforced, for the same reason
+`origin_fidelity` is: it is the caller's judgement, and refusing the run would
+remove the one way to ask whether the model in production has drifted. What is
+still refused is a pinned revision *inside* a recipe that is fitted per fold:
+there is no way to fit a step that is already fitted.
 
 One knob is deliberately a template rather than a literal. A backtest's `plan=`
 has to reach candidates that do not share a contract, and a `WindowPlan` is a

@@ -463,9 +463,10 @@ def test_the_step_sixteen_surface_is_exactly_what_is_defined() -> None:
     assert builtins.list(server.__all__) == sorted(server.__all__)
 
 
-# Backtesting and point-in-time evaluation, Step 17. ``Fold``, ``plan_for`` and
-# the result-table vocabulary are reachable here but not from the top level: they
-# are how a backtest is built rather than what a caller writes.
+# Backtesting and point-in-time evaluation, Steps 17 and 19. ``Fold``,
+# ``plan_for`` and the result-table vocabulary are reachable here but not from
+# the top level: they are how a backtest is built rather than what a caller
+# writes.
 EXPECTED_EVALUATION_SURFACE = {
     "BACKTEST_COLUMNS",
     "BacktestColumn",
@@ -479,6 +480,8 @@ EXPECTED_EVALUATION_SURFACE = {
     "MAPE",
     "Metric",
     "MetricKind",
+    "PREDICTION_COLUMNS",
+    "PredictionColumn",
     "RMSE",
     "RollingOrigin",
     "Validation",

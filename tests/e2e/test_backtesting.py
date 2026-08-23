@@ -102,8 +102,8 @@ def test_it_scores_every_model_at_every_origin(client: of.OpenForecast) -> None:
     )
 
     assert result.models == (MODEL, "sn-2")
-    assert result.metrics == ("mae", "bias")
-    assert result.num_rows == 2 * 2 * 2  # models x folds x metrics
+    assert result.metric_names == ("mae", "bias")
+    assert result.metrics.num_rows == 2 * 2 * 2  # models x folds x metrics
     assert result.origins == (at(9), at(12))
 
 
@@ -116,13 +116,15 @@ def test_the_measurements_are_the_arithmetic_they_should_be(client: of.OpenForec
         metrics=[of.MAE(), of.RMSE(), of.Bias()],
         client=client,
     )
-    scored = dict(zip(values(result.table, "metric"), values(result.table, "value"), strict=True))
+    scored = dict(
+        zip(values(result.metrics, "metric"), values(result.metrics, "value"), strict=True)
+    )
 
     assert scored["mae"] == pytest.approx(2.0)
     assert scored["rmse"] == pytest.approx((14 / 3) ** 0.5)
     # Every forecast is below what happened, so the bias is negative.
     assert scored["bias"] == pytest.approx(-2.0)
-    assert values(result.table, "pairs") == [3, 3, 3]
+    assert values(result.metrics, "pairs") == [3, 3, 3]
 
 
 def test_every_row_says_what_would_make_it_incomparable(client: of.OpenForecast) -> None:
@@ -134,9 +136,9 @@ def test_every_row_says_what_would_make_it_incomparable(client: of.OpenForecast)
         client=client,
     )
 
-    assert values(result.table, "origin_fidelity") == ["simulated"]
-    assert values(result.table, "provider") == ["builtin"]
-    assert values(result.table, "fit_seconds")[0] >= 0.0
+    assert values(result.metrics, "origin_fidelity") == ["simulated"]
+    assert values(result.metrics, "provider") == ["builtin"]
+    assert values(result.metrics, "fit_seconds")[0] >= 0.0
 
 
 def test_a_backtest_leaves_an_artifact_you_can_forecast_with(client: of.OpenForecast) -> None:
@@ -148,7 +150,7 @@ def test_a_backtest_leaves_an_artifact_you_can_forecast_with(client: of.OpenFore
         metrics=[of.MAE()],
         client=client,
     )
-    reference = values(result.table, "artifact")[0]
+    reference = values(result.metrics, "artifact")[0]
 
     forecast = client.forecast(reference, frame().up_to(at(13)), horizon=2)
 
@@ -186,8 +188,8 @@ def test_an_unanswerable_event_time_is_dropped_rather_than_scored(
         client=client,
     )
 
-    assert values(result.table, "pairs") == [3]
-    assert values(result.table, "value") == [pytest.approx(4.0)]
+    assert values(result.metrics, "pairs") == [3]
+    assert values(result.metrics, "value") == [pytest.approx(4.0)]
 
 
 def test_a_panel_is_scored_over_every_instance(client: of.OpenForecast) -> None:
@@ -199,8 +201,98 @@ def test_a_panel_is_scored_over_every_instance(client: of.OpenForecast) -> None:
         client=client,
     )
 
-    assert values(result.table, "pairs") == [4]
-    assert values(result.table, "value") == [pytest.approx(1.5)]
+    assert values(result.metrics, "pairs") == [4]
+    assert values(result.metrics, "value") == [pytest.approx(1.5)]
+
+
+# -- the predictions the metrics came from ----------------------------------
+
+
+def test_the_result_holds_every_prediction_as_well_as_the_metrics(
+    client: of.OpenForecast,
+) -> None:
+    """One row per model, fold, instance, event time and target."""
+    result = of.backtest(
+        models=[MODEL],
+        data=frame(zones=("DE", "FR")),
+        validation=of.RollingOrigin(horizon=3, windows=2),
+        metrics=[of.MAE()],
+        client=client,
+    )
+
+    assert result.instance_keys == ("zone",)
+    assert result.predictions.column_names == [
+        "model",
+        "fold",
+        "zone",
+        "origin_time",
+        "event_time",
+        "horizon_step",
+        "target",
+        "prediction",
+        "actual",
+    ]
+    # folds x instances x horizon x targets.
+    assert result.predictions.num_rows == 2 * 2 * 3 * 1
+    assert set(values(result.predictions, "horizon_step")) == {1, 2, 3}
+    assert set(values(result.predictions, "zone")) == {"DE", "FR"}
+
+
+def test_a_metric_can_be_regrouped_by_horizon_step_without_re_running_anything(
+    client: of.OpenForecast,
+) -> None:
+    """The question a fold-level table cannot answer: does it degrade with horizon?
+
+    Repeating the last observed value on data rising by one is wrong by exactly
+    *k* at step *k*, so the degradation is arithmetic — and pooled over the two
+    folds, because a horizon group holds every origin's step *k*.
+    """
+    result = of.backtest(
+        models=[MODEL],
+        data=frame(),
+        validation=of.RollingOrigin(horizon=3, windows=2),
+        metrics=[of.MAE()],
+        client=client,
+    )
+
+    grouped = result.metrics_by("horizon_step")
+
+    assert values(grouped, "model") == [MODEL] * 3
+    assert values(grouped, "horizon_step") == [1, 2, 3]
+    assert values(grouped, "value") == [1.0, 2.0, 3.0]
+    assert values(grouped, "pairs") == [2, 2, 2]
+
+
+def test_a_grouping_can_name_an_instance_key(client: of.OpenForecast) -> None:
+    """The keys are prediction columns like any other, under the caller's names."""
+    result = of.backtest(
+        models=[MODEL],
+        data=frame(zones=("DE", "FR")),
+        validation=of.RollingOrigin(horizon=2, windows=1),
+        metrics=[of.MAE()],
+        client=client,
+    )
+
+    grouped = result.metrics_by(["zone", "horizon_step"])
+
+    assert values(grouped, "zone") == ["DE", "DE", "FR", "FR"]
+    assert values(grouped, "horizon_step") == [1, 2, 1, 2]
+    assert values(grouped, "value") == [1.0, 2.0, 1.0, 2.0]
+
+
+def test_a_grouping_by_something_the_predictions_do_not_hold_is_refused(
+    client: of.OpenForecast,
+) -> None:
+    result = of.backtest(
+        models=[MODEL],
+        data=frame(),
+        validation=of.RollingOrigin(horizon=2, windows=1),
+        metrics=[of.MAE()],
+        client=client,
+    )
+
+    with pytest.raises(RecipeError, match="not columns of the prediction table"):
+        result.metrics_by("provider")
 
 
 # -- backtesting real vintages ---------------------------------------------
@@ -221,7 +313,7 @@ def test_point_in_time_data_is_backtested_at_the_origins_it_holds(
     )
 
     assert result.origins == (at(8), at(10), at(12))
-    assert values(result.table, "origin_fidelity") == ["observed"] * 3
+    assert values(result.metrics, "origin_fidelity") == ["observed"] * 3
 
 
 def test_a_fit_at_a_historical_origin_never_saw_a_later_vintage(
@@ -243,7 +335,7 @@ def test_a_fit_at_a_historical_origin_never_saw_a_later_vintage(
     )
 
     for origin, reference in zip(
-        values(result.table, "origin"), values(result.table, "artifact"), strict=True
+        values(result.metrics, "origin"), values(result.metrics, "artifact"), strict=True
     ):
         handle = client.artifact(reference)
         forecast = client.forecast(reference, dataset().at_origin(origin), horizon=1)
@@ -288,15 +380,142 @@ def test_the_same_models_can_be_compared_across_the_two_fidelities(
         client=client,
     )
 
-    assert set(values(observed.table, "origin_fidelity")) == {"observed"}
-    assert set(values(simulated.table, "origin_fidelity")) == {"simulated"}
+    assert set(values(observed.metrics, "origin_fidelity")) == {"observed"}
+    assert set(values(simulated.metrics, "origin_fidelity")) == {"simulated"}
     assert observed.origins == simulated.origins
     # This model conditions on no feature, so the two agree on the numbers —
     # which is what makes the fidelity column the only difference between them.
-    assert values(observed.table, "value") == values(simulated.table, "value")
+    assert values(observed.metrics, "value") == values(simulated.metrics, "value")
+
+
+# -- frozen artifacts -------------------------------------------------------
+
+
+def test_a_frozen_revision_is_evaluated_rather_than_refitted(client: of.OpenForecast) -> None:
+    """Whether the model in production has drifted, asked as a backtest.
+
+    The artifact is fitted once, on the history up to 09:00, and then evaluated
+    at a later origin without being refitted. ``builtin/seasonal-naive`` with
+    ``season_length=1`` repeats the last value it *was fitted on* — 9 — so the
+    errors at 13, 14 and 15 are 4, 5 and 6, which is exactly the staleness a
+    frozen revision has and a per-fold fit does not.
+    """
+    frozen = client.fit(MODEL, frame().up_to(at(9)), name="in-production")
+    published = len(client.engine.store.list())
+
+    result = of.backtest(
+        models=[str(frozen.ref)],
+        data=frame(),
+        validation=of.RollingOrigin(horizon=3, windows=1),
+        metrics=[of.MAE()],
+        client=client,
+    )
+
+    assert result.models == (str(frozen.ref),)
+    assert values(result.metrics, "artifact") == [str(frozen.ref)]
+    # No fit happened, which is said by a null rather than by a zero.
+    assert values(result.metrics, "fit_seconds") == [None]
+    assert values(result.metrics, "value") == [pytest.approx(5.0)]
+    # And nothing new was published: there was nothing to publish.
+    assert len(client.engine.store.list()) == published
+
+
+def test_the_handle_a_fit_returned_is_the_revision_it_names(client: of.OpenForecast) -> None:
+    """``of.backtest(models=[handle])`` evaluates that artifact, as the string would."""
+    frozen = client.fit(MODEL, frame().up_to(at(9)), name="in-production")
+
+    result = of.backtest(
+        models=[frozen],
+        data=frame(),
+        validation=of.RollingOrigin(horizon=3, windows=1),
+        metrics=[of.MAE()],
+        client=client,
+    )
+
+    assert result.models == (str(frozen.ref),)
+    assert values(result.metrics, "fit_seconds") == [None]
+
+
+def test_a_frozen_revision_and_a_fitted_candidate_share_one_table(
+    client: of.OpenForecast,
+) -> None:
+    """Mixing them is the caller's judgement, and the table says which was which."""
+    frozen = client.fit(MODEL, frame().up_to(at(9)), name="in-production")
+
+    result = of.backtest(
+        models=[of.Candidate(str(frozen.ref), name="frozen"), of.Candidate(MODEL, name="refitted")],
+        data=frame(),
+        validation=of.RollingOrigin(horizon=3, windows=1),
+        metrics=[of.MAE()],
+        client=client,
+    )
+
+    scored = dict(
+        zip(values(result.metrics, "model"), values(result.metrics, "value"), strict=True)
+    )
+    timed = dict(
+        zip(values(result.metrics, "model"), values(result.metrics, "fit_seconds"), strict=True)
+    )
+
+    assert timed["frozen"] is None
+    assert timed["refitted"] >= 0.0
+    # The stale artifact repeats 9 and the refitted one repeats 12, which is why
+    # the plan says the two numbers are not comparable.
+    assert scored["frozen"] == pytest.approx(5.0)
+    assert scored["refitted"] == pytest.approx(2.0)
+
+
+def test_a_plan_on_a_frozen_candidate_would_do_nothing(client: of.OpenForecast) -> None:
+    """There is no fit for it to configure, so it is refused rather than ignored."""
+    frozen = client.fit(MODEL, frame().up_to(at(9)), name="in-production")
+
+    with pytest.raises(RecipeError, match="the plan on this candidate would do nothing"):
+        of.backtest(
+            models=[of.Candidate(str(frozen.ref), plan=of.FitPlan(origins=of.LatestOrigin()))],
+            data=frame(),
+            validation=of.RollingOrigin(horizon=3, windows=1),
+            metrics=[of.MAE()],
+            client=client,
+        )
+
+
+def test_parameters_on_a_frozen_candidate_would_do_nothing_either(
+    client: of.OpenForecast,
+) -> None:
+    frozen = client.fit(MODEL, frame().up_to(at(9)), name="in-production")
+
+    with pytest.raises(RecipeError, match="already part of it"):
+        of.backtest(
+            models=[of.Model(str(frozen.ref), params={"season_length": 2})],
+            data=frame(),
+            validation=of.RollingOrigin(horizon=3, windows=1),
+            metrics=[of.MAE()],
+            client=client,
+        )
 
 
 # -- what a backtest refuses -----------------------------------------------
+
+
+def test_a_pinned_revision_inside_a_recipe_is_refused(client: of.OpenForecast) -> None:
+    """A revision on its own is evaluated; a revision as a *step* cannot be fitted."""
+    frozen = client.fit(MODEL, frame().up_to(at(9)), name="in-production")
+
+    with pytest.raises(RecipeError, match="inside a recipe that is fitted per fold"):
+        of.backtest(
+            models=[
+                of.Pipeline(
+                    steps=(
+                        of.StandardScaler(columns=of.ColumnSet.TARGETS),
+                        of.Model(str(frozen.ref)),
+                    )
+                )
+            ],
+            data=frame(),
+            validation=of.RollingOrigin(horizon=2, windows=1),
+            metrics=[of.MAE()],
+            client=client,
+        )
 
 
 def test_two_candidates_with_the_same_name_are_refused(client: of.OpenForecast) -> None:
@@ -304,33 +523,6 @@ def test_two_candidates_with_the_same_name_are_refused(client: of.OpenForecast) 
     with pytest.raises(RecipeError, match="name more than one candidate"):
         of.backtest(
             models=[MODEL, of.Model(MODEL, params={"season_length": 2})],
-            data=frame(),
-            validation=of.RollingOrigin(horizon=2, windows=1),
-            metrics=[of.MAE()],
-            client=client,
-        )
-
-
-def test_a_fitted_artifact_is_not_a_candidate(client: of.OpenForecast) -> None:
-    handle = client.fit(MODEL, frame(), name="already-fitted")
-
-    with pytest.raises(RecipeError, match="fitted artifact, not a candidate"):
-        of.backtest(
-            models=[handle],
-            data=frame(),
-            validation=of.RollingOrigin(horizon=2, windows=1),
-            metrics=[of.MAE()],
-            client=client,
-        )
-
-
-def test_a_pinned_revision_is_not_a_candidate_either(client: of.OpenForecast) -> None:
-    """A revision names one fit; a candidate is fitted once per fold."""
-    handle = client.fit(MODEL, frame(), name="pinned")
-
-    with pytest.raises(RecipeError, match="pin fitted revisions"):
-        of.backtest(
-            models=[str(handle.ref)],
             data=frame(),
             validation=of.RollingOrigin(horizon=2, windows=1),
             metrics=[of.MAE()],
@@ -390,7 +582,7 @@ def test_a_window_is_not_carried_to_a_model_that_cannot_bind_one(
         client=client,
     )
 
-    assert result.num_rows == 1
+    assert result.metrics.num_rows == 1
 
 
 def test_a_candidate_can_state_the_plan_it_needs(client: of.OpenForecast) -> None:

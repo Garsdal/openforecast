@@ -253,8 +253,11 @@ def test_a_backtest_runs_over_a_transport_without_knowing_it(
     )
 
     scored = ["model", "fold", "origin", "metric", "value", "pairs", "origin_fidelity", "provider"]
-    assert there.table.select(scored).equals(here.table.select(scored))
+    assert there.metrics.select(scored).equals(here.metrics.select(scored))
     assert there.best("mae") == here.best("mae") == MODEL
+    # And the predictions those numbers came from, which name no artifact and
+    # so are comparable in full.
+    assert there.predictions.equals(here.predictions)
 
 
 # -- the same failures ------------------------------------------------------
