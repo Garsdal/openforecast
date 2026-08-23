@@ -41,7 +41,11 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > `of.RollingOrigin`, `of.ForecastOriginValidation` and `of.eligible_models` —
 > and the native `TabularView` execution of Step 18:
 > `sklearn/hist-gradient-boosting`, in `integrations/sklearn`, which fits
-> `estimator.fit(X, y)` on the supervised rows OpenForecast materializes itself.
+> `estimator.fit(X, y)` on the supervised rows OpenForecast materializes itself —
+> and the probabilistic normalization of Step 20: one `Forecast` for point
+> forecasts, quantiles and sample paths, `of.PinballLoss`, `of.Coverage` and
+> `of.IntervalWidth` over them, and `nixtla/autoarima`'s prediction intervals
+> answering `of.OutputSpec.quantiles([...])`.
 > `of.fit` and `of.forecast` work end to end today with `builtin/seasonal-naive`,
 > both Nixtla models, all three Darts models, both sktime models and the
 > scikit-learn estimator, in this process or over the subprocess protocol — the
@@ -530,6 +534,7 @@ projections of it:
 forecast.table          # the long forecast, in canonical column order
 forecast.point()        # the point rows, without the columns describing none
 forecast.quantile(0.5)  # one level, in the same shape
+forecast.sample(7)      # one draw, in the same shape
 forecast.to_wide()      # zone, event_time, price_q0.1, price_q0.5, price_q0.9
 forecast.to_pandas()    # the long forecast as a DataFrame
 ```
@@ -537,6 +542,55 @@ forecast.to_pandas()    # the long forecast as a DataFrame
 `quantile` refuses a level that was never asked for rather than interpolating
 between the ones that were: a 0.5 derived from a 0.1 and a 0.9 is a different
 number from the one the model would have produced.
+
+## Probabilistic forecasts, normalized
+
+What kind of answer to produce is a request, and what a model can answer is a
+declaration:
+
+```python
+of.OutputSpec.point()
+of.OutputSpec.quantiles([0.1, 0.5, 0.9])
+of.OutputSpec.samples(200)
+```
+
+```yaml
+outputs:
+  point: true
+  quantiles: true
+  samples: false
+```
+
+A request the model does not declare is refused before the provider is started,
+which is the same rule every other capability follows. There are no separate
+result classes for the three: `AutoARIMA`'s prediction intervals, a neural
+model's sample paths and a naive point forecast all arrive as one `Forecast`
+over one long table, so application code downstream of it does not learn which
+provider answered or which of the three forms that provider is native in.
+
+OpenForecast performs exactly one conversion between them, in one direction:
+
+```text
+samples  ->  quantiles      the draws are the distribution; read it
+quantiles -> samples        refused: the paths would have to be invented
+point    ->  anything       refused: there is no distribution to read
+```
+
+and it is asked for rather than assumed, because how many draws a quantile was
+estimated from is part of what it is:
+
+```python
+forecast = of.forecast(
+    model=model, data=context, horizon=72,
+    output=of.OutputSpec.quantiles([0.1, 0.9], from_samples=200),
+)
+```
+
+The reduction happens in OpenForecast with one estimator, which is what makes
+two providers' quantiles comparable rather than each library's own convention.
+A deterministic model is never dressed up as a probabilistic one; a calibration
+layer that turns point forecasts into distributions is a thing a caller can ask
+for explicitly, later, and not something a request quietly triggers.
 
 ## Providers in their own environments
 
@@ -759,11 +813,13 @@ And the predictions those numbers were computed from:
 
 ```text
 model  fold  instance keys...  origin_time  event_time  horizon_step
-       target  prediction  actual
+       target  kind  quantile  sample  prediction  actual
 ```
 
-Kept rather than dropped, because the metrics are derivable from these and not
-the reverse — so the question everyone asks after a backtest is a projection
+Long over the distribution too, for the same reason a forecast is: one row per
+quantile level or sample draw, so the table does not change shape with what was
+asked for. Kept rather than dropped, because the metrics are derivable from these
+and not the reverse — so the question everyone asks after a backtest is a projection
 rather than a second run:
 
 ```python
@@ -796,6 +852,31 @@ with mixing them in one table — a frozen artifact was fitted on data that may
 postdate the early origins, so its numbers are optimistic beside a candidate
 fitted per fold. That is reported rather than refused, the same way
 `origin_fidelity` is.
+
+Scoring a distribution is the same call with the output it needs:
+
+```python
+result = of.backtest(
+    models=["nixtla/autoarima"],
+    data=train,
+    validation=of.RollingOrigin(horizon=72, windows=5),
+    output=of.OutputSpec.quantiles([0.1, 0.5, 0.9]),
+    metrics=[of.MAE(), of.PinballLoss(0.9), of.Coverage(), of.IntervalWidth()],
+)
+```
+
+`of.PinballLoss(0.9)` is the loss the 0.9 quantile is the optimal answer to,
+`of.Coverage()` asks how often the outcome fell inside the 0.1 to 0.9 interval
+and `of.IntervalWidth()` how wide that interval was — the calibration and
+sharpness halves of one question, which is why the first is best *at* its
+nominal level rather than highest, and why the second is only readable beside it.
+A pinball loss reads the 0.9 of a provider's native quantiles and of another
+provider's sample draws identically, and `of.MAE()` scores the median of either;
+neither reading invents anything the model did not say. The metrics are checked
+against the requested output before the first fit, so a coverage of a point
+forecast is refused in the first line of the run rather than after an hour, and a
+metric's name carries its parameter — `pinball[0.9]`, `coverage[0.8]` — because
+two of them in one backtest are two rows of one table.
 
 `of.eligible_models` is the screening half of `openforecast/auto`:
 

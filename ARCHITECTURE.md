@@ -170,9 +170,10 @@ reaching one vintage past the origin fails there rather than surfacing as a
 slightly different metric.
 
 `suite.py` is the part integrations inherit. A descriptor states which view its
-model trains on, which shapes and feature roles it accepts, whether it learns
-across origins and what it does about missing values; the suite turns each of
-those statements into fits that must succeed and requests that must be refused.
+model trains on, which shapes and feature roles it accepts, which output kinds it
+produces, whether it learns across origins and what it does about missing values;
+the suite turns each of those statements into fits that must succeed and requests
+that must be refused.
 A model declaring `view=sequences` is therefore fitted from an event-time frame
 and from real forecast vintages without either being written down, and in both
 cases the provider is asserted to have received a `SequenceView` and nothing
@@ -566,6 +567,50 @@ what a transport abstraction is worth in the first place.
 A forecasting service has no authentication yet, so the default has to be the
 one that does not publish an unauthenticated service to a network by accident.
 
+## Probabilistic output
+
+What kind of answer to produce is a request — `OutputSpec.point()`,
+`OutputSpec.quantiles([...])`, `OutputSpec.samples(n)` — and what a model can
+produce is a declaration, `OutputCapabilities`. The engine checks the one against
+the other before a provider is started, which is the same rule instance counts,
+target counts, feature roles and missing values already follow.
+
+**One `Forecast`, three forms.** There is no `QuantileForecast` and no
+`SampleForecast`. A predictive distribution is more *rows* of the canonical long
+table — one per level, or one per draw, distinguished by `kind`, `quantile` and
+`sample` — so application code downstream reads the same table whichever provider
+answered and whichever form that provider is native in. A wide projection,
+`to_wide()`, changes shape with the request; that is exactly why it is a
+projection and not the representation.
+
+**One conversion, one direction, asked for explicitly.**
+
+```text
+samples   ->  quantiles      the draws are the distribution; read it
+quantiles ->  samples        refused: the paths would have to be invented
+point     ->  anything       refused: there is no distribution to read
+```
+
+`OutputSpec.quantiles([...], from_samples=n)` is how the first is requested: the
+provider is asked for `n` draws and OpenForecast reduces them, because the draw
+count is part of what the quantiles are and because one estimator applied to
+every provider is what makes two providers' quantiles comparable at all. It lives
+in `protocol/quantiles.py` — the innermost layer — since the engine reducing a
+sample forecast and a metric reading a quantile out of draws have to agree about
+what "the 0.9 of these draws" is.
+
+Nothing manufactures a distribution around a point forecast. A deterministic
+model asked for quantiles is refused with a message naming what it does declare,
+and a calibration layer that turns point forecasts into distributions is a thing
+a caller can ask for explicitly, later, rather than something a request quietly
+triggers.
+
+**The conformance suite holds the claim.** A model declaring `quantiles` or
+`samples` is asked for them by the inherited suite, and the answer has to cover
+exactly the instances, event times and targets its point forecast covered, at the
+levels or the draws requested — so "the same `Forecast` whoever produced it" is a
+checked property of every provider rather than a promise in a docstring.
+
 ## Backtesting and point-in-time evaluation
 
 `evaluation/` is where the abstraction stops being a way to call other people's
@@ -638,6 +683,20 @@ per-fold fit — is reported rather than enforced, for the same reason
 remove the one way to ask whether the model in production has drifted. What is
 still refused is a pinned revision *inside* a recipe that is fitted per fold:
 there is no way to fit a step that is already fitted.
+
+**A metric is given a distribution, not a pair of numbers.** The rows about one
+outcome are gathered back into one `Prediction` — a point, the levels the model
+answered, or its draws — before anything is computed, which is what lets one
+metric list score any provider: `PinballLoss(0.9)` reads the 0.9 of native
+quantiles and of sample draws identically, and `MAE()` scores the median of
+either. What a metric cannot read it does not score, and `pairs` reports how many
+outcomes it did — a null value beside a zero count, never a zero score. Whether a
+metric can score the requested output at all is answered from the *request*, so
+`of.backtest` refuses a coverage of a point forecast before the first fit rather
+than after the last one. `Coverage` is best at its nominal level rather than
+highest and `IntervalWidth` is only readable beside it, which is why the first
+ranks by distance and the second exists as its own metric instead of being folded
+into a score.
 
 One knob is deliberately a template rather than a literal. A backtest's `plan=`
 has to reach candidates that do not share a contract, and a `WindowPlan` is a

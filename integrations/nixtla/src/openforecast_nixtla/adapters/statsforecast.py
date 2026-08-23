@@ -1,10 +1,19 @@
-"""StatsForecast models: a ``SeriesView`` in, a point forecast out.
+"""StatsForecast models: a ``SeriesView`` in, point forecasts or quantiles out.
 
 ```text
 fit        SeriesView   -> StatsForecast(models=[AutoARIMA(...)]).fit(long frame)
 state      into/        -> statsforecast.pkl + state.json
-forecast   ForecastView -> predict(h) -> the canonical forecast columns
+forecast   ForecastView -> predict(h)            -> the canonical point rows
+                        -> predict(h, level=[…]) -> the canonical quantile rows
 ```
+
+A StatsForecast prediction interval *is* a pair of quantiles of the predictive
+distribution, under another name and in percent. So a quantile request is served
+by asking the library for the intervals that carry the levels asked for — the 0.1
+and the 0.9 are the bounds of its 80% interval, and the 0.5 of a symmetric
+distribution is the point forecast itself — and nothing is invented on the way.
+Samples are refused: what the fitted model can produce is interval bounds, and
+paths drawn through them would be paths it never produced.
 
 A StatsForecast model is *local*: every series is fitted on its own, and what is
 learned about one says nothing about another. That is why the training contract
@@ -33,6 +42,7 @@ compiler to answer that would make discovery slow for no reason.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -63,6 +73,17 @@ __all__ = ["AUTOARIMA", "StatsForecastAdapter"]
 #: The pickled ``StatsForecast`` object, written by its own ``save``.
 MODEL_FILENAME = "statsforecast.pkl"
 
+#: The quantile a symmetric predictive distribution has at its point forecast.
+MEDIAN = 0.5
+
+#: Decimal places an interval level is rounded to before it is matched against
+#: the columns the library returned. ``(1 - 2 * 0.1) * 100`` is 80.00000000000001
+#: in binary floating point, and that is not a different interval.
+_CONFIDENCE_PRECISION = 6
+
+#: ``AutoARIMA-lo-80``, ``AutoARIMA-hi-95.5`` — one bound of one interval.
+_INTERVAL_COLUMN = re.compile(r".*-(?P<side>lo|hi)-(?P<confidence>\d+(?:\.\d+)?)$")
+
 
 class StatsForecastAdapter:
     """One StatsForecast model, as OpenForecast advertises and executes it."""
@@ -75,12 +96,14 @@ class StatsForecastAdapter:
         build: Callable[..., Any],
         parameters: Sequence[Parameter],
         exogenous: bool,
+        quantiles: bool,
     ) -> None:
         self._name = name
         self._display_name = display_name
         self._build = build
         self._parameters = named(parameters)
         self._exogenous = exogenous
+        self._quantiles = quantiles
 
     @property
     def name(self) -> str:
@@ -96,6 +119,12 @@ class StatsForecastAdapter:
         stops at the forecast origin is not something an ARIMA can condition a
         future step on; and it cannot see a missing value, so data with gaps is
         refused before it gets here unless the caller asked for an imputation.
+
+        Quantiles are declared where the fitted model actually has a predictive
+        distribution to read them from — ``AutoARIMA`` does, through the
+        prediction intervals it can produce. Samples are declared by nothing
+        here: drawing paths through fitted interval bounds would be inventing
+        paths the model never produced.
         """
         return ModelDescriptor(
             ref=ModelRef.parse(f"{provider}/{self._name}"),
@@ -107,7 +136,7 @@ class StatsForecastAdapter:
                 instances=InstanceCapabilities(single=True, panel=True),
                 targets=TargetCapabilities(univariate=True, multivariate=False),
                 features=FeatureCapabilities(observed=False, known=self._exogenous, static=False),
-                outputs=OutputCapabilities(point=True),
+                outputs=OutputCapabilities(point=True, quantiles=self._quantiles),
                 missing_values=MissingValueSupport.UNSUPPORTED,
             ),
             parameters_schema=schema_of(self._parameters),
@@ -164,9 +193,8 @@ class StatsForecastAdapter:
         """The next ``horizon`` steps of every series the view asks about."""
         from statsforecast import StatsForecast
 
-        kind = output.get("kind", "point")
-        if kind != "point":
-            raise ProviderError(f"{self._name} produces point forecasts, not {kind}")
+        kind = str(output.get("kind", "point"))
+        levels = self._requested_levels(kind, output)
         persisted = read_state(state / STATE_FILENAME, self._name)
         unique_ids = {tuple(entry["key"]): str(entry["unique_id"]) for entry in persisted["series"]}
         exogenous = tuple(str(name) for name in persisted["exogenous"])
@@ -174,19 +202,42 @@ class StatsForecastAdapter:
 
         forecaster = StatsForecast.load(str(state / MODEL_FILENAME))
         future = conversion.future_frame(view, unique_ids, exogenous)
+        column = str(persisted["column"])
         try:
-            predictions = forecaster.predict(h=view.metadata.horizon, X_df=future)
+            predictions = forecaster.predict(
+                h=view.metadata.horizon,
+                X_df=future,
+                **({"level": _confidences(levels)} if levels else {}),
+            )
         except Exception as error:
             raise ProviderError(
                 f"{self._name} could not forecast this view: {type(error).__name__}: {error}"
             ) from error
-        return conversion.answer(
+        if not levels:
+            return conversion.answer(
+                view, unique_ids, predictions, column=column, target=str(persisted["target"])
+            )
+        return conversion.quantile_answer(
             view,
             unique_ids,
             predictions,
-            column=str(persisted["column"]),
+            columns=_quantile_columns(levels, column, list(predictions.columns)),
             target=str(persisted["target"]),
         )
+
+    def _requested_levels(self, kind: str, output: Mapping[str, Any]) -> tuple[float, ...]:
+        """The quantile levels this request asks for, or ``()`` for a point forecast.
+
+        A sample forecast is refused rather than approximated by drawing from the
+        fitted intervals: what this library returns is a set of interval bounds,
+        and paths through them would be paths this model never produced.
+        """
+        if kind == "point":
+            return ()
+        if kind == "quantiles" and self._quantiles:
+            return tuple(float(level) for level in output.get("levels", ()))
+        produces = "point forecasts and quantiles" if self._quantiles else "point forecasts"
+        raise ProviderError(f"{self._name} produces {produces}, not {kind}")
 
     def _require_matching_origin(
         self,
@@ -235,6 +286,60 @@ class StatsForecastAdapter:
         return f"StatsForecastAdapter({self._name})"
 
 
+def _confidences(levels: Sequence[float]) -> list[float]:
+    """The interval levels that carry these quantiles, as percentages.
+
+    A StatsForecast interval is symmetric around the point forecast, so one
+    confidence level carries two quantiles: the 80% interval of a distribution is
+    its 0.1 and its 0.9. So the requested levels are folded onto the confidences
+    that hold them, and a level of exactly 0.5 needs none — the median of a
+    symmetric predictive distribution is the point forecast itself.
+
+    ```text
+    0.1  ->  80        0.9  ->  80        0.5  ->  the point forecast
+    ```
+    """
+    wanted = {_confidence(level) for level in levels if level != MEDIAN}
+    return sorted(wanted)
+
+
+def _confidence(level: float) -> float:
+    """The interval level, in percent, whose bound is this quantile."""
+    return round(abs(2.0 * level - 1.0) * 100.0, _CONFIDENCE_PRECISION)
+
+
+def _quantile_columns(
+    levels: Sequence[float], point_column: str, answered: Sequence[str]
+) -> list[tuple[float, str]]:
+    """Which returned column holds each requested quantile level.
+
+    Read off the columns the library actually returned rather than rebuilt from
+    the values passed to it: StatsForecast names an interval column after the
+    number it was given, and ``80`` and ``80.0`` are the same request spelled two
+    ways. Matching numerically is what makes that not matter.
+    """
+    bounds: dict[tuple[str, float], str] = {}
+    for column in answered:
+        parsed = _INTERVAL_COLUMN.fullmatch(column)
+        if parsed is not None:
+            bounds[parsed.group("side"), float(parsed.group("confidence"))] = column
+
+    resolved: list[tuple[float, str]] = []
+    for level in levels:
+        if level == MEDIAN:
+            resolved.append((level, point_column))
+            continue
+        side = "lo" if level < MEDIAN else "hi"
+        column = bounds.get((side, _confidence(level)))
+        if column is None:
+            raise ProviderError(
+                f"the fitted model was asked for the {_confidence(level)}% interval that "
+                f"carries the quantile {level} and answered {list(answered)}"
+            )
+        resolved.append((level, column))
+    return resolved
+
+
 def _auto_arima(**params: Any) -> Any:
     from statsforecast.models import AutoARIMA
 
@@ -243,8 +348,9 @@ def _auto_arima(**params: Any) -> Any:
 
 #: The parameters of ``AutoARIMA`` a caller may set. Deliberately a subset:
 #: ``alias`` would rename the column the answer is read from, ``trace`` prints,
-#: and the interval and distribution parameters describe outputs this model does
-#: not advertise.
+#: and the interval parameters are not a caller's to set here — which levels an
+#: interval covers is what ``of.OutputSpec.quantiles([...])`` says, and a second
+#: place to say it would be a second answer to one question.
 AUTOARIMA_PARAMETERS = (
     Parameter("season_length", int, "Steps of the data's frequency in one season.", minimum=1),
     Parameter("d", int, "Order of first differencing. Selected when unset.", minimum=0),
@@ -278,4 +384,5 @@ AUTOARIMA = StatsForecastAdapter(
     build=_auto_arima,
     parameters=AUTOARIMA_PARAMETERS,
     exogenous=True,
+    quantiles=True,
 )

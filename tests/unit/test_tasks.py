@@ -15,7 +15,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 import openforecast as of
-from openforecast.errors import RecipeError, UnsupportedPlanError
+from openforecast.errors import ProviderError, RecipeError, UnsupportedPlanError
 from openforecast.models import OutputCapabilities
 from openforecast.tasks import (
     Accelerator,
@@ -252,13 +252,13 @@ def test_a_kind_cannot_carry_another_kind_fields() -> None:
     with pytest.raises(RecipeError, match=r"does not take quantile levels"):
         of.OutputSpec(kind=OutputKind.POINT, levels=(0.5,))
     with pytest.raises(RecipeError, match=r"does not take a draw count"):
-        of.OutputSpec(kind=OutputKind.QUANTILES, levels=(0.5,), draws=10)
+        of.OutputSpec(kind=OutputKind.POINT, draws=10)
     with pytest.raises(RecipeError, match=r"how many draws"):
         of.OutputSpec(kind=OutputKind.SAMPLES)
 
 
 def test_an_output_request_is_checked_against_what_a_model_declares() -> None:
-    """Quantiles are not downgraded to a point forecast, nor derived from samples."""
+    """Quantiles are not downgraded to a point forecast, nor derived unasked."""
     point_only = OutputCapabilities()
     probabilistic = OutputCapabilities(point=True, quantiles=True, samples=True)
 
@@ -267,6 +267,36 @@ def test_an_output_request_is_checked_against_what_a_model_declares() -> None:
     assert not of.OutputSpec.samples(10).is_supported_by(point_only)
     assert of.OutputSpec.quantiles([0.5]).is_supported_by(probabilistic)
     assert of.OutputSpec.samples(10).is_supported_by(probabilistic)
+
+
+# -- quantiles of samples ---------------------------------------------------
+
+
+def test_a_model_that_only_draws_samples_can_be_asked_for_quantiles_of_them() -> None:
+    """The one safe conversion of Step 20, and it has to be asked for."""
+    draws_only = OutputCapabilities(point=False, quantiles=False, samples=True)
+
+    assert not of.OutputSpec.quantiles([0.1, 0.9]).is_supported_by(draws_only)
+    assert of.OutputSpec.quantiles([0.1, 0.9], from_samples=200).is_supported_by(draws_only)
+
+
+def test_quantiles_of_samples_are_executed_as_a_sample_forecast() -> None:
+    """The provider draws; OpenForecast reduces, with one estimator for all of them."""
+    spec = of.OutputSpec.quantiles([0.1, 0.9], from_samples=200)
+
+    assert spec.derived_from_samples
+    assert spec.as_executed() == of.OutputSpec.samples(200)
+    assert of.OutputSpec.quantiles([0.1, 0.9]).as_executed() == of.OutputSpec.quantiles([0.1, 0.9])
+    assert not of.OutputSpec.quantiles([0.1, 0.9]).derived_from_samples
+
+
+def test_the_row_kind_of_a_request_is_singular_and_round_trips() -> None:
+    """One row of a forecast is one number, so a request for quantiles holds quantile rows."""
+    for kind in OutputKind:
+        assert OutputKind.of_row(kind.row_kind) is kind
+    assert OutputKind.QUANTILES.row_kind == "quantile"
+    with pytest.raises(ProviderError, match=r"not a kind a forecast row can hold"):
+        OutputKind.of_row("quantiles")
 
 
 def test_an_output_spec_round_trips_through_json() -> None:

@@ -30,6 +30,23 @@ result = of.backtest(
 )
 ```
 
+Scoring a distribution is the same call with the output the metrics need:
+
+```python
+result = of.backtest(
+    models=["nixtla/autoarima"],
+    data=data,
+    validation=of.RollingOrigin(horizon=24, windows=5),
+    output=of.OutputSpec.quantiles([0.1, 0.5, 0.9]),
+    metrics=[of.MAE(), of.PinballLoss(0.9), of.Coverage()],
+)
+```
+
+``output`` is asked of every candidate, and the metrics are checked against it
+before the first fit: what a metric needs is knowable from the request, and a
+coverage of a point forecast is refused in the first line of the run rather than
+after an hour of fitting.
+
 ``models`` stays plural for a backtest of one: a single model over a stride of
 origins passes a list of one, and a ``model=`` singular alias would be a second
 door onto the same room.
@@ -109,11 +126,11 @@ from openforecast.data._arrow import (
     build_table,
     column_type,
     column_values,
-    is_missing,
     key_rows,
 )
 from openforecast.errors import DataError, RecipeError
 from openforecast.evaluation.metrics import Metric
+from openforecast.evaluation.predictions import PredictedValue, predictions_of
 from openforecast.evaluation.result import BacktestColumn, BacktestResult, PredictionColumn
 from openforecast.evaluation.validation import Fold, Validation, truth_lookup
 from openforecast.models.descriptor import ModelDescriptor
@@ -122,6 +139,7 @@ from openforecast.protocol.vocabulary import ForecastColumn, ViewKind
 from openforecast.recipes.nodes import Model, Recipe, estimator_refs
 from openforecast.runtime.engine import ModelInput, normalize_recipe
 from openforecast.runtime.forecast import Forecast
+from openforecast.tasks.forecast import OutputSpec
 from openforecast.tasks.plan import FitPlan
 
 __all__ = ["Candidate", "backtest", "plan_for"]
@@ -187,6 +205,7 @@ def backtest(
     *,
     validation: Validation,
     metrics: Sequence[Metric],
+    output: OutputSpec | None = None,
     plan: FitPlan | None = None,
     client: OpenForecast | None = None,
 ) -> BacktestResult:
@@ -204,14 +223,23 @@ def backtest(
     ``of.forecast`` do, so a backtest writes its artifacts where everything else
     does. Passing one pointed at a service backtests there.
 
-    The result holds every point prediction as well as the metrics over them,
-    which is what makes ``result.metrics_by("horizon_step")`` a projection
-    rather than a second run. It is also the larger of the two tables by far:
-    origins × horizon × instances × targets rows per model.
+    ``output`` is what every candidate is asked for, and it defaults to a point
+    forecast. Asking for quantiles is what makes ``of.PinballLoss``,
+    ``of.Coverage`` and ``of.IntervalWidth`` computable, and the metrics are
+    checked against it before anything is fitted: a coverage of a point forecast
+    is refused in the first line of the run rather than after an hour of fits.
+
+    The result holds every prediction as well as the metrics over them, which is
+    what makes ``result.metrics_by("horizon_step")`` a projection rather than a
+    second run. It is also the larger of the two tables by far: origins ×
+    horizon × instances × targets rows per model, once per quantile level or
+    sample draw.
     """
     executor = default_client() if client is None else client
     if not metrics:
         raise RecipeError("a backtest needs at least one metric: of.backtest(metrics=[of.MAE()])")
+    requested = OutputSpec.point() if output is None else output
+    _check_metrics(metrics, requested)
     candidates = _candidates(models)
     folds = validation.folds(data)
 
@@ -223,12 +251,25 @@ def backtest(
         fit_plan = None if frozen is not None else plan_for(candidate, executor, plan)
         for fold in folds:
             measured = _measure(
-                executor, candidate, fit_plan, fold, validation.horizon, metrics, frozen
+                executor, candidate, fit_plan, fold, validation.horizon, metrics, frozen, requested
             )
             rows.extend(measured.rows)
             predictions.extend(measured.predictions)
             keys.update(measured.key_types)
     return BacktestResult(_table(rows), _predictions_table(predictions, keys), scored_by=metrics)
+
+
+def _check_metrics(metrics: Sequence[Metric], output: OutputSpec) -> None:
+    """Every metric can score the forecast this backtest is going to ask for.
+
+    Before the first fit, for the same reason the engine checks an output request
+    against a model's declared capabilities before starting a provider: what a
+    metric needs is knowable from the request, and discovering it afterwards
+    means discovering it after the expensive part.
+    """
+    unanswerable = [reason for metric in metrics if (reason := metric.requirement(output))]
+    if unanswerable:
+        raise RecipeError("; ".join(unanswerable))
 
 
 def plan_for(
@@ -264,7 +305,9 @@ class _Row:
     fold: int
     origin: datetime
     metric: str
-    value: float
+    #: Null where this metric could score nothing of this fold, beside a
+    #: ``pairs`` of zero. A metric over nothing is not a zero score.
+    value: float | None
     pairs: int
     #: Null for a frozen revision: there was no fit, which is not a fit of zero
     #: seconds.
@@ -277,7 +320,13 @@ class _Row:
 
 @dataclass(frozen=True)
 class _Prediction:
-    """One forecast point, and the outcome it is about to be scored against."""
+    """One forecast row, and the outcome it is about to be scored against.
+
+    One *row* rather than one number: a probabilistic forecast says several
+    things about one outcome — a value per quantile level, or per sample draw —
+    and ``kind``, ``quantile`` and ``sample`` are which of them this is, spelled
+    exactly as a forecast spells them.
+    """
 
     model: str
     fold: int
@@ -286,20 +335,49 @@ class _Prediction:
     event_time: datetime
     horizon_step: int
     target: str
+    kind: str
+    quantile: float | None
+    sample: int | None
     prediction: float | None
     actual: float | None
 
     @property
-    def pair(self) -> tuple[float, float] | None:
-        """``(outcome, forecast)`` when both are numbers, and ``None`` otherwise.
+    def outcome(self) -> tuple[Any, ...]:
+        """What identifies the thing forecast, without saying anything about it.
+
+        The model and the fold are part of it: two candidates forecasting the
+        same event time are two predictions of one outcome, and pooling their
+        quantiles into one distribution would score a model that never existed.
+        """
+        return (
+            self.model,
+            self.fold,
+            self.keys,
+            self.origin_time,
+            self.event_time,
+            self.target,
+        )
+
+    @property
+    def value(self) -> PredictedValue:
+        """This row as a metric's input rather than as a table row."""
+        return PredictedValue(
+            outcome=self.outcome,
+            kind=self.kind,
+            level=self.quantile,
+            draw=self.sample,
+            predicted=self.prediction,
+            actual=self.actual,
+        )
+
+    @property
+    def is_scorable(self) -> bool:
+        """Whether this row says something a metric can score.
 
         Null and NaN are the two spellings of "no value here", and either on
-        either side means this event time cannot be scored.
+        either side means this row cannot be scored.
         """
-        outcome, forecast = self.actual, self.prediction
-        if outcome is None or forecast is None or is_missing(outcome) or is_missing(forecast):
-            return None
-        return outcome, forecast
+        return self.value.is_scorable
 
 
 @dataclass(frozen=True)
@@ -320,6 +398,7 @@ def _measure(
     horizon: int,
     metrics: Sequence[Metric],
     frozen: ModelHandle | None,
+    output: OutputSpec,
 ) -> _Measurement:
     """Forecast this candidate at one origin and score the answer.
 
@@ -341,43 +420,45 @@ def _measure(
         handle, fit_seconds = frozen, None
 
     started = perf_counter()
-    forecast = client.forecast(handle.ref, fold.context, horizon=horizon)
+    forecast = client.forecast(handle.ref, fold.context, horizon=horizon, output=output)
     forecast_seconds = perf_counter() - started
 
     predictions = _predictions(candidate, fold, forecast)
-    scored = [pair for entry in predictions if (pair := entry.pair) is not None]
-    actual = [outcome for outcome, _ in scored]
-    predicted = [value for _, value in scored]
+    scored = predictions_of(entry.value for entry in predictions)
+    measured = [(metric, metric.measure(scored)) for metric in metrics]
     rows = tuple(
         _Row(
             model=candidate.label,
             fold=fold.index,
             origin=fold.origin,
             metric=metric.name,
-            value=metric.compute(actual, predicted),
-            pairs=len(scored),
+            value=measurement.value,
+            pairs=measurement.pairs,
             fit_seconds=fit_seconds,
             forecast_seconds=forecast_seconds,
             origin_fidelity=_fidelity(handle),
             provider=handle.manifest.provider,
             artifact=str(handle.ref),
         )
-        for metric in metrics
+        for metric, measurement in measured
     )
-    point = forecast.point()
     return _Measurement(
         rows=rows,
         predictions=predictions,
-        key_types={name: column_type(point, name) for name in forecast.instance_keys},
+        key_types={name: column_type(forecast.table, name) for name in forecast.instance_keys},
     )
 
 
 def _predictions(candidate: Candidate, fold: Fold, forecast: Forecast) -> tuple[_Prediction, ...]:
-    """Every forecast point of one fold, beside what actually happened.
+    """Every forecast row of one fold, beside what actually happened.
+
+    Every row, whatever kind of answer it holds: a quantile forecast contributes
+    one row per level and a sample forecast one per draw, which is what makes the
+    prediction table the same table for every provider and every output kind.
 
     A forecast event time whose outcome was never published is kept with a null
-    ``actual`` rather than dropped or scored as a zero error, and how many
-    survived into the metric is recorded per row as ``pairs`` — a fold scored on
+    ``actual`` rather than dropped or scored as a zero error, and how many rows
+    survived into each metric is recorded per row as ``pairs`` — a fold scored on
     a third of its horizon should be visible in the result rather than only in
     the metric.
 
@@ -387,11 +468,14 @@ def _predictions(candidate: Candidate, fold: Fold, forecast: Forecast) -> tuple[
     of a whole fold, with nothing in the result saying which one it was.
     """
     known = truth_lookup(fold.truth, forecast.instance_keys)
-    point = forecast.point()
-    keys = key_rows(point, forecast.instance_keys)
-    times: list[datetime] = column_values(point, ForecastColumn.EVENT_TIME.value)
-    targets: list[str] = column_values(point, ForecastColumn.TARGET.value)
-    values: list[float | None] = column_values(point, ForecastColumn.VALUE.value)
+    table = forecast.table
+    keys = key_rows(table, forecast.instance_keys)
+    times: list[datetime] = column_values(table, ForecastColumn.EVENT_TIME.value)
+    targets: list[str] = column_values(table, ForecastColumn.TARGET.value)
+    kinds: list[str] = column_values(table, ForecastColumn.KIND.value)
+    levels: list[float | None] = column_values(table, ForecastColumn.QUANTILE.value)
+    draws: list[int | None] = column_values(table, ForecastColumn.SAMPLE.value)
+    values: list[float | None] = column_values(table, ForecastColumn.VALUE.value)
     steps = {moment: index + 1 for index, moment in enumerate(forecast.event_times)}
 
     found = tuple(
@@ -403,12 +487,17 @@ def _predictions(candidate: Candidate, fold: Fold, forecast: Forecast) -> tuple[
             event_time=moment,
             horizon_step=steps[moment],
             target=target,
+            kind=kind,
+            quantile=level,
+            sample=draw,
             prediction=value,
             actual=known.get((key, moment, target)),
         )
-        for key, moment, target, value in zip(keys, times, targets, values, strict=True)
+        for key, moment, target, kind, level, draw, value in zip(
+            keys, times, targets, kinds, levels, draws, values, strict=True
+        )
     )
-    if all(entry.pair is None for entry in found):
+    if not any(entry.is_scorable for entry in found):
         raise DataError(
             f"nothing to score for {candidate.label} at origin {fold.origin.isoformat()}: the "
             f"forecast covers no event time the truth holds an outcome for. Select origins the "
@@ -578,6 +667,9 @@ def _predictions_table(rows: Sequence[_Prediction], key_types: dict[str, pa.Data
         pa.int64(),
     )
     columns[PredictionColumn.TARGET.value] = ([row.target for row in rows], pa.string())
+    columns[PredictionColumn.KIND.value] = ([row.kind for row in rows], pa.string())
+    columns[PredictionColumn.QUANTILE.value] = ([row.quantile for row in rows], pa.float64())
+    columns[PredictionColumn.SAMPLE.value] = ([row.sample for row in rows], pa.int64())
     columns[PredictionColumn.PREDICTION.value] = (
         [row.prediction for row in rows],
         pa.float64(),

@@ -33,6 +33,7 @@ from openforecast.models import (
     ModelCatalog,
     ModelRef,
     OriginScope,
+    OutputCapabilities,
     TargetCapabilities,
     TrainingContract,
 )
@@ -349,6 +350,131 @@ def test_an_output_the_model_cannot_produce_is_refused(engine: Engine) -> None:
 
     with pytest.raises(DataError, match="cannot produce a quantiles forecast"):
         engine.forecast(handle, frame(), horizon=2, output=of.OutputSpec.quantiles([0.5]))
+
+
+# -- probabilistic output ---------------------------------------------------
+
+
+def probabilistic_engine(
+    tmp_path: Path, *, quantiles: bool = False, samples: bool = False
+) -> Engine:
+    """An engine over one stub model declaring exactly these output capabilities."""
+    descriptor = providers.descriptor(
+        "series",
+        capabilities=ModelCapabilities(
+            instances=InstanceCapabilities(single=True, panel=True),
+            targets=TargetCapabilities(univariate=True, multivariate=True),
+            features=FeatureCapabilities(observed=True, known=True, static=True),
+            outputs=OutputCapabilities(point=True, quantiles=quantiles, samples=samples),
+            missing_values=MissingValueSupport.NATIVE,
+        ),
+    )
+    return Engine(
+        store=ArtifactStore(tmp_path),
+        catalog=ModelCatalog((descriptor,)),
+        providers=ProviderRegistry([providers.StubProvider(models=(descriptor,))]),
+    )
+
+
+def test_a_model_that_declares_quantiles_is_asked_for_them(tmp_path: Path) -> None:
+    engine = probabilistic_engine(tmp_path, quantiles=True)
+    handle = engine.fit(SERIES, frame())
+
+    forecast = engine.forecast(
+        handle, frame(), horizon=2, output=of.OutputSpec.quantiles([0.1, 0.5, 0.9])
+    )
+
+    assert forecast.kind is of.OutputKind.QUANTILES
+    assert forecast.quantile_levels == (0.1, 0.5, 0.9)
+    assert forecast.table.column(ForecastColumn.SAMPLE.value).null_count == forecast.num_rows
+
+
+def test_a_model_that_declares_samples_is_asked_for_the_draws(tmp_path: Path) -> None:
+    engine = probabilistic_engine(tmp_path, samples=True)
+    handle = engine.fit(SERIES, frame())
+
+    forecast = engine.forecast(handle, frame(), horizon=2, output=of.OutputSpec.samples(3))
+
+    assert forecast.kind is of.OutputKind.SAMPLES
+    assert forecast.sample_indices == (0, 1, 2)
+
+
+def test_quantiles_of_a_sample_model_are_reduced_by_openforecast(tmp_path: Path) -> None:
+    """The provider draws and OpenForecast reduces, with one estimator for all of them."""
+    engine = probabilistic_engine(tmp_path, samples=True)
+    handle = engine.fit(SERIES, frame())
+
+    forecast = engine.forecast(
+        handle,
+        frame(),
+        horizon=2,
+        output=of.OutputSpec.quantiles([0.1, 0.9], from_samples=4),
+    )
+
+    assert forecast.kind is of.OutputKind.QUANTILES
+    assert forecast.quantile_levels == (0.1, 0.9)
+    # The stub draws value, value+1, value+2, value+3, so the 0.9 of four draws
+    # is 2.7 above the first one — computed here rather than by the provider.
+    low: list[Any] = forecast.quantile(0.1).column("value").to_pylist()
+    high: list[Any] = forecast.quantile(0.9).column("value").to_pylist()
+    assert max(high) - min(low) == pytest.approx(2.4)
+
+
+def test_a_point_model_is_not_asked_for_samples_to_make_quantiles_from(
+    tmp_path: Path,
+) -> None:
+    """The conversion is samples to quantiles, never a distribution around a point."""
+    engine = probabilistic_engine(tmp_path)
+    handle = engine.fit(SERIES, frame())
+
+    with pytest.raises(DataError, match="cannot produce a quantiles forecast"):
+        engine.forecast(
+            handle, frame(), horizon=2, output=of.OutputSpec.quantiles([0.5], from_samples=10)
+        )
+
+
+def test_a_quantile_request_of_a_sample_model_says_how_to_ask_for_it(tmp_path: Path) -> None:
+    engine = probabilistic_engine(tmp_path, samples=True)
+    handle = engine.fit(SERIES, frame())
+
+    with pytest.raises(DataError, match=r"from_samples=n"):
+        engine.forecast(handle, frame(), horizon=2, output=of.OutputSpec.quantiles([0.5]))
+
+
+def test_a_provider_answering_levels_nobody_asked_for_is_caught(tmp_path: Path) -> None:
+    """A 0.9 where a 0.95 was asked for is scored as a 0.95 by everything downstream."""
+    descriptor = providers.descriptor(
+        "series",
+        capabilities=ModelCapabilities(
+            instances=InstanceCapabilities(single=True, panel=True),
+            features=FeatureCapabilities(observed=True, known=True, static=True),
+            outputs=OutputCapabilities(point=True, quantiles=True),
+            missing_values=MissingValueSupport.NATIVE,
+        ),
+    )
+    relabel = pa.array([0.5, 0.5], type=pa.float64())
+    provider = providers.StubProvider(
+        models=(descriptor,),
+        corrupt=lambda table: table.set_column(
+            table.column_names.index(ForecastColumn.QUANTILE.value),
+            ForecastColumn.QUANTILE.value,
+            relabel,
+        ),
+    )
+    engine = Engine(
+        store=ArtifactStore(tmp_path),
+        catalog=ModelCatalog((descriptor,)),
+        providers=ProviderRegistry([provider]),
+    )
+    handle = engine.fit(SERIES, frame(periods=6, instances=("DE",)))
+
+    with pytest.raises(ProviderError, match=r"asked for the quantiles \[0.1, 0.9\]"):
+        engine.forecast(
+            handle,
+            frame(periods=6, instances=("DE",)),
+            horizon=1,
+            output=of.OutputSpec.quantiles([0.1, 0.9]),
+        )
 
 
 def test_a_provider_that_is_not_installed_is_named(tmp_path: Path) -> None:

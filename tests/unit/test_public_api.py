@@ -25,6 +25,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "Bias",
     "Candidate",
     "ColumnSet",
+    "Coverage",
     "DataError",
     "DuplicateModelError",
     "Eligibility",
@@ -46,6 +47,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "ImputeMethod",
     "IncompatibleForecastTask",
     "InconsistentTruthError",
+    "IntervalWidth",
     "LatestOrigin",
     "LeadTimeFeature",
     "LocalTransport",
@@ -66,6 +68,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "OriginsBetween",
     "OutputKind",
     "OutputSpec",
+    "PinballLoss",
     "Pipeline",
     "PointInTimeFrame",
     "PointInTimeSchema",
@@ -242,6 +245,10 @@ EXPECTED_PROTOCOL_SURFACE = {
     "forecast_columns",
     "parse_request",
     "parse_response",
+    # The engine reduces sample draws to quantiles and a probabilistic metric
+    # reads a quantile out of draws; those two are one estimator, so it is
+    # defined in the layer both of them can name.
+    "quantile_of_samples",
 }
 
 
@@ -473,14 +480,19 @@ EXPECTED_EVALUATION_SURFACE = {
     "BacktestResult",
     "Bias",
     "Candidate",
+    "Coverage",
     "Eligibility",
     "Fold",
     "ForecastOriginValidation",
+    "IntervalWidth",
     "MAE",
     "MAPE",
+    "Measurement",
     "Metric",
     "MetricKind",
     "PREDICTION_COLUMNS",
+    "PinballLoss",
+    "Prediction",
     "PredictionColumn",
     "RMSE",
     "RollingOrigin",

@@ -36,9 +36,23 @@ capabilities:
   instances:  single, panel
   targets:    univariate
   features:   known (as exogenous regressors)
-  outputs:    point
+  outputs:    point, quantiles
   missing:    unsupported
 ```
+
+Quantiles are the library's prediction intervals, which is what they already are:
+the 0.1 and the 0.9 of the predictive distribution are the bounds of its 80%
+interval, and the 0.5 of a symmetric one is the point forecast.
+
+```python
+forecast = of.forecast(
+    model=model, data=context, horizon=48,
+    output=of.OutputSpec.quantiles([0.1, 0.5, 0.9]),
+)
+```
+
+Samples are not declared and are refused rather than approximated: paths drawn
+through fitted interval bounds are paths this model never produced.
 
 Which means point-in-time data is usable at one origin and not across origins:
 

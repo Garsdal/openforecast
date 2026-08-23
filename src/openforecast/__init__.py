@@ -70,6 +70,33 @@ and a candidate that is already a pinned revision is evaluated over history
 rather than refitted. That is what :mod:`openforecast.evaluation` is, along with
 ``of.eligible_models``, which answers which models this data could fit at all.
 
+Since Step 20 a forecast can be a distribution rather than a number, and it is
+the same object either way:
+
+```python
+forecast = of.forecast(
+    model=model, data=context, horizon=24,
+    output=of.OutputSpec.quantiles([0.1, 0.5, 0.9]),
+)
+
+result = of.backtest(
+    models=["nixtla/autoarima"],
+    data=dataset,
+    validation=of.RollingOrigin(horizon=24, windows=5),
+    output=of.OutputSpec.quantiles([0.1, 0.5, 0.9]),
+    metrics=[of.MAE(), of.PinballLoss(0.9), of.Coverage()],
+)
+```
+
+One ``Forecast`` holds a point forecast, a set of quantiles or a set of sample
+paths, in one long table whose columns do not change with the request — so code
+downstream of it does not learn which provider answered, or in which of the three
+forms that provider is native. What a model can be asked for is what it declares,
+checked before it runs; the only conversion OpenForecast will do is reading
+quantiles off sample draws, which is what
+``of.OutputSpec.quantiles([...], from_samples=200)`` asks for. Nothing here
+invents a distribution around a point forecast.
+
 The execution views of Step 4 are deliberately not re-exported here either: they
 are a provider-facing boundary, imported from :mod:`openforecast.views`, not
 something a user of the library needs to name.
@@ -115,9 +142,12 @@ from openforecast.evaluation import (
     BacktestResult,
     Bias,
     Candidate,
+    Coverage,
     Eligibility,
     ForecastOriginValidation,
+    IntervalWidth,
     Metric,
+    PinballLoss,
     RollingOrigin,
     Validation,
     backtest,
@@ -168,6 +198,7 @@ __all__ = [
     "Bias",
     "Candidate",
     "ColumnSet",
+    "Coverage",
     "DataError",
     "DuplicateModelError",
     "Eligibility",
@@ -189,6 +220,7 @@ __all__ = [
     "ImputeMethod",
     "IncompatibleForecastTask",
     "InconsistentTruthError",
+    "IntervalWidth",
     "LatestOrigin",
     "LeadTimeFeature",
     "LocalTransport",
@@ -209,6 +241,7 @@ __all__ = [
     "OriginsBetween",
     "OutputKind",
     "OutputSpec",
+    "PinballLoss",
     "Pipeline",
     "PointInTimeFrame",
     "PointInTimeSchema",

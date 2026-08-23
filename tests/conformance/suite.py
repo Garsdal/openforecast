@@ -42,6 +42,7 @@ import pyarrow as pa
 import pytest
 
 import openforecast as of
+from openforecast.artifacts.handle import ModelHandle
 from openforecast.errors import DataError, OpenForecastError, OriginScopeError
 from openforecast.models import ModelDescriptor, ModelRef
 from openforecast.models.capabilities import MissingValueSupport
@@ -330,7 +331,8 @@ def run_case(
         # forecast is asked for one it can produce by its own suite.
         return
 
-    forecast = client.forecast(handle, _inference_data(data, case), horizon=case.horizon)
+    inference = _inference_data(data, case)
+    forecast = client.forecast(handle, inference, horizon=case.horizon)
     answer = forecast.table
 
     assert [type(view) for view in recording.forecast_views] == [ForecastView]
@@ -342,6 +344,66 @@ def run_case(
     # A forecast comes back labeled with the instance it is about, which is the
     # only thing that makes a panel answer usable.
     assert forecast.instance_keys == (("zone",) if case.instances > 1 else ())
+
+    run_probabilistic(
+        client, handle, inference, descriptor=descriptor, case=case, rows=answer.num_rows
+    )
+
+
+#: The levels and the draw count the suite asks a probabilistic model for. The
+#: median is among the levels because a point metric reads a distribution there,
+#: so a provider that cannot answer it would be one whose quantile forecast is
+#: unscorable by ``of.MAE()``.
+CONFORMANCE_LEVELS = (0.1, 0.5, 0.9)
+CONFORMANCE_DRAWS = 8
+
+
+def run_probabilistic(
+    client: of.OpenForecast,
+    handle: ModelHandle,
+    inference: object,
+    *,
+    descriptor: ModelDescriptor,
+    case: Case,
+    rows: int,
+) -> None:
+    """A model produces every output kind it declares, in the canonical shape.
+
+    Step 20's claim, held at the boundary rather than in a provider's own tests:
+    a quantile forecast holds one row per level and a sample forecast one per
+    draw, of exactly the instances, event times and targets the point forecast
+    covered — so downstream code reads the same table whichever provider, and
+    whichever kind, produced it. A declared capability that answers something
+    else is a declaration a caller cannot rely on.
+    """
+    outputs = descriptor.capabilities.outputs
+    if outputs.quantiles:
+        quantiles = client.forecast(
+            handle,
+            inference,
+            horizon=case.horizon,
+            output=of.OutputSpec.quantiles(list(CONFORMANCE_LEVELS)),
+        )
+        assert quantiles.kind is of.OutputKind.QUANTILES
+        assert quantiles.quantile_levels == CONFORMANCE_LEVELS
+        assert quantiles.table.num_rows == rows * len(CONFORMANCE_LEVELS)
+        assert len(quantiles.event_times) == case.horizon
+
+    if outputs.samples:
+        samples = client.forecast(
+            handle,
+            inference,
+            horizon=case.horizon,
+            output=of.OutputSpec.samples(CONFORMANCE_DRAWS),
+        )
+        assert samples.kind is of.OutputKind.SAMPLES
+        assert samples.sample_indices == tuple(range(CONFORMANCE_DRAWS))
+        assert samples.table.num_rows == rows * CONFORMANCE_DRAWS
+        # And the one conversion OpenForecast performs: the draws of a provider
+        # that only draws still answer a quantile request.
+        reduced = samples.to_quantiles(list(CONFORMANCE_LEVELS))
+        assert reduced.quantile_levels == CONFORMANCE_LEVELS
+        assert reduced.table.num_rows == rows * len(CONFORMANCE_LEVELS)
 
 
 def run_refusal(
