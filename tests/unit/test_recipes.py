@@ -267,7 +267,8 @@ def test_origin_calendar_features_must_request_something() -> None:
 def test_an_ensemble_averages_its_members_by_default() -> None:
     ensemble = of.Ensemble(models=(nhits(), of.Model("nixtla/autoarima")))
 
-    assert ensemble.combine == of.Mean()
+    assert ensemble.weights is None
+    assert ensemble.normalized_weights == pytest.approx((0.5, 0.5))
 
 
 def test_an_ensemble_of_one_is_that_one() -> None:
@@ -276,19 +277,21 @@ def test_an_ensemble_of_one_is_that_one() -> None:
 
 
 def test_weights_are_relative_and_normalize() -> None:
-    assert of.WeightedMean(weights=(7, 3)).normalized == pytest.approx((0.7, 0.3))
+    ensemble = of.Ensemble(models=(nhits(), of.Model("nixtla/autoarima")), weights=(7, 3))
+
+    assert ensemble.normalized_weights == pytest.approx((0.7, 0.3))
 
 
 def test_a_zero_weighted_member_is_left_out_rather_than_ignored() -> None:
     with pytest.raises(RecipeError, match=r"must be positive"):
-        of.WeightedMean(weights=(1.0, 0.0))
+        of.Ensemble(models=(nhits(), of.Model("nixtla/autoarima")), weights=(1.0, 0.0))
 
 
 def test_one_weight_per_member() -> None:
     with pytest.raises(RecipeError, match=r"one weight per member"):
         of.Ensemble(
             models=(nhits(), of.Model("nixtla/autoarima")),
-            combine=of.WeightedMean(weights=(0.5, 0.3, 0.2)),
+            weights=(0.5, 0.3, 0.2),
         )
 
 
@@ -373,10 +376,7 @@ def recipes() -> list[Recipe]:
                 nhits(),
             )
         ),
-        of.Ensemble(
-            models=(nhits(), of.Model("nixtla/autoarima")),
-            combine=of.WeightedMean(weights=(0.7, 0.3)),
-        ),
+        of.Ensemble(models=(nhits(), of.Model("nixtla/autoarima")), weights=(0.7, 0.3)),
         of.Reduction(estimator=LIGHTGBM, strategy=ReductionStrategy.RECURSIVE, lags=(1, 24)),
     ]
 
@@ -394,7 +394,7 @@ def test_a_recipe_is_tagged_so_a_reader_never_has_to_guess() -> None:
     payload = json.loads(of.Ensemble(models=(nhits(), of.Model("darts/nhits"))).model_dump_json())
 
     assert payload["kind"] == "ensemble"
-    assert payload["combine"] == {"combine": "mean"}
+    assert payload["weights"] is None
     assert [member["kind"] for member in payload["models"]] == ["model", "model"]
 
 

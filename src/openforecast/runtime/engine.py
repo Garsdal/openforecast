@@ -30,7 +30,14 @@ lives, and not from here.
 A recipe that is not a single model — a pipeline, an ensemble — is executed by
 OpenForecast itself. Each leaf is materialized, transformed and fitted on its
 own, into its own directory inside the one artifact, and their forecasts are
-combined on the way back out.
+combined on the way back out. Every leaf is checked before any of them runs, at
+fit and at forecast alike: an ensemble whose second member cannot consume the
+data is refused whole, rather than half-trained and then abandoned.
+
+The combination is a weighted mean and nothing else. A quantile forecast is
+averaged level by level, which is quantile averaging rather than the quantile of
+a mixture; sample paths are not combined at all, because draw *i* of one member
+has nothing to do with draw *i* of another.
 """
 
 from __future__ import annotations
@@ -63,7 +70,7 @@ from openforecast.models.contract import TrainingContract
 from openforecast.models.descriptor import ModelDescriptor
 from openforecast.models.ref import ModelRef
 from openforecast.protocol.vocabulary import ForecastColumn, ViewKind
-from openforecast.recipes.nodes import Ensemble, Mean, Model, Pipeline, Recipe, Reduction
+from openforecast.recipes.nodes import Ensemble, Model, Pipeline, Recipe, Reduction
 from openforecast.recipes.transforms import Transform
 from openforecast.registry.models import ModelRegistry
 from openforecast.runtime.forecast import Forecast
@@ -154,7 +161,16 @@ class Engine:
         recipe = normalize_recipe(model, params)
         plan = FitPlan() if plan is None else plan
         task = None if horizon is None else ForecastTask(horizon)
-        fitted = [self._materialize(leaf, data, plan, task) for leaf in leaves(recipe)]
+        found = leaves(recipe)
+        # Every member is resolved before any of them is materialized, and every
+        # one materialized before any provider starts: an ensemble one member of
+        # which cannot be trained is refused whole rather than half-trained.
+        descriptors = [self._registry.for_fit(leaf.model.ref) for leaf in found]
+        _check_shared_plan(plan, descriptors)
+        fitted = [
+            self._materialize(leaf, descriptor, data, plan, task, shared=len(found) > 1)
+            for leaf, descriptor in zip(found, descriptors, strict=True)
+        ]
         artifact = self._describe(recipe, fitted, name=name, plan=plan)
 
         with self._store.stage(artifact) as staging:
@@ -174,11 +190,19 @@ class Engine:
         return staging.handle
 
     def _materialize(
-        self, leaf: Leaf, data: object, plan: FitPlan, task: ForecastTask | None
+        self,
+        leaf: Leaf,
+        descriptor: ModelDescriptor,
+        data: object,
+        plan: FitPlan,
+        task: ForecastTask | None,
+        *,
+        shared: bool,
     ) -> _Prepared:
         """Everything that has to be true before a provider is started."""
-        descriptor = self._registry.for_fit(leaf.model.ref)
-        request = ViewRequest.for_contract(descriptor.training, plan=plan, task=task)
+        request = ViewRequest.for_contract(
+            descriptor.training, plan=plan, task=task, shared_plan=shared
+        )
         view = self._planner.fit_view(data, request)
         view, transforms = fit_transforms(view, leaf.transforms)
         validate_view(view, descriptor, leaf.transforms)
@@ -250,9 +274,11 @@ class Engine:
         context = normalize_forecast_context(data, origin_time=origin_time)
         _check_data_schema(handle.data_schema, context, handle.ref)
 
+        members = self._leaf_state(handle, artifact.recipe)
+        _check_outputs(output, [self._catalog.get(leaf.model.ref) for leaf, _, _ in members])
         answers = [
             self._answer(leaf, record, context, task, output, paths)
-            for leaf, record, paths in self._leaf_state(handle, artifact.recipe)
+            for leaf, record, paths in members
         ]
         combined = _combine(artifact.recipe, iter(answers))
         answer = Forecast(
@@ -280,7 +306,6 @@ class Engine:
     ) -> pa.Table:
         """One leaf's forecast, on the scale the caller's data was on."""
         descriptor = self._catalog.get(leaf.model.ref)
-        _check_output(output, descriptor)
         executed = output.as_executed()
         request = ViewRequest(kind=ViewKind.FORECAST, horizon=task.horizon, context=record.context)
         view = self._planner.forecast_view(context, request)
@@ -429,12 +454,7 @@ def _combine(recipe: Recipe, answers: Iterator[pa.Table]) -> pa.Table:
         return _combine(recipe.estimator, answers)
     if isinstance(recipe, Ensemble):
         parts = [_combine(member, answers) for member in recipe.models]
-        weights = (
-            [1.0 / len(parts)] * len(parts)
-            if isinstance(recipe.combine, Mean)
-            else list(recipe.combine.normalized)
-        )
-        return _weighted_mean(parts, weights)
+        return _weighted_mean(parts, recipe.normalized_weights)
     raise UnsupportedPlanError("of.Reduction is not executable yet")  # pragma: no cover
 
 
@@ -444,6 +464,13 @@ def _weighted_mean(parts: Sequence[pa.Table], weights: Sequence[float]) -> pa.Ta
     A member that answered a different set of rows is a bug rather than a partial
     ensemble, and a missing value in one member makes the combination missing:
     the mean of "we do not know" and a number is not that number.
+
+    A row is matched on everything that is not the value, so a quantile forecast
+    is combined level by level: the ensemble's P10 is the weighted mean of its
+    members' P10. That is *quantile averaging*, and it is not the quantile of the
+    mixture of the members' distributions — the two agree only when the members
+    agree. It is the combination that needs nothing from the members beyond the
+    levels that were asked of all of them.
     """
     keys = [_answer_keys(part) for part in parts]
     if any(key != keys[0] for key in keys[1:]):
@@ -535,6 +562,42 @@ def _check_data_schema(expected: TrainedSchema, context: ForecastContext, ref: M
         raise DataError(
             f"{ref} was fitted with the features {absent}, which this context does not "
             f"declare; a model cannot be asked to condition on what it is not given"
+        )
+
+
+def _check_shared_plan(plan: FitPlan, descriptors: Sequence[ModelDescriptor]) -> None:
+    """A plan written for several models has to reach at least one of them.
+
+    One model refuses a ``WindowPlan`` it cannot use, because nobody writes one
+    expecting it to do nothing. Several models share one plan, so a member that
+    binds no context window is simply not who the window was addressed to — but
+    a window no member binds is still the mistake the single-model rule catches.
+    """
+    if len(descriptors) < 2 or plan.window is None:
+        return
+    if not any(descriptor.training.view is ViewKind.SEQUENCES for descriptor in descriptors):
+        raise RecipeError(
+            "no member of this recipe learns from context -> horizon sequences, so the "
+            "WindowPlan would have no effect on any of them. Drop it, or ensemble in a "
+            "model that sizes a context window"
+        )
+
+
+def _check_outputs(output: OutputSpec, descriptors: Sequence[ModelDescriptor]) -> None:
+    """Every member can answer the request, before the first of them is asked.
+
+    The same rule the fit follows: an ensemble is checked whole. A member that
+    cannot produce what was asked for would otherwise be discovered after its
+    siblings had already run, and the answer thrown away.
+    """
+    for descriptor in descriptors:
+        _check_output(output, descriptor)
+    if len(descriptors) > 1 and output.as_executed().kind is OutputKind.SAMPLES:
+        raise UnsupportedPlanError(
+            "an ensemble does not combine sample paths yet: averaging draw 3 of one member "
+            "with draw 3 of another combines two unrelated draws, and pooling them would "
+            "weight the members by how many each took rather than by their weights. Ask it "
+            "for quantiles, which are combined level by level"
         )
 
 

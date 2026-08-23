@@ -45,7 +45,7 @@ from openforecast.runtime import (
     normalize_forecast_context,
     normalize_recipe,
 )
-from openforecast.views import SequenceView, SeriesView
+from openforecast.views import SequenceView, SeriesView, TabularView
 from tests import artifacts, providers
 
 SERIES = "stub/series"
@@ -579,13 +579,219 @@ def test_an_ensemble_averages_its_members(tmp_path: Path) -> None:
     handle = engine.fit(
         of.Ensemble(
             models=(of.Model(SERIES), of.Model(SERIES, params={"other": 1})),
-            combine=of.WeightedMean(weights=(3, 1)),
+            weights=(3, 1),
         ),
         frame(),
     )
     forecast = engine.forecast(handle, frame(), horizon=2)
 
     assert set(forecast.table.column(ForecastColumn.VALUE.value).to_pylist()) == {10.0}
+
+
+# -- ensembles across execution views ---------------------------------------
+
+
+def crossing_engine(
+    tmp_path: Path,
+    *,
+    outputs: OutputCapabilities | None = None,
+    values: tuple[float, float] = (10.0, 20.0),
+) -> tuple[Engine, providers.StubProvider, providers.StubProvider]:
+    """Two providers, one consuming sequences and one consuming tabular rows.
+
+    Different libraries, different execution views, one recipe: the arrangement
+    an ensemble exists to make possible, and the one no provider can see.
+    """
+    capabilities = None
+    if outputs is not None:
+        capabilities = ModelCapabilities(
+            instances=InstanceCapabilities(single=True, panel=True),
+            targets=TargetCapabilities(univariate=True, multivariate=True),
+            features=FeatureCapabilities(observed=True, known=True, static=True),
+            outputs=outputs,
+            missing_values=MissingValueSupport.NATIVE,
+        )
+    deep = providers.descriptor(
+        "sequences",
+        training=TrainingContract.sequences(supports_unseen_instances=True),
+        capabilities=capabilities,
+    )
+    trees = providers.descriptor(
+        "trees",
+        provider="other",
+        training=TrainingContract.tabular(),
+        capabilities=capabilities,
+    )
+    first = providers.StubProvider(models=(deep,), value=values[0])
+    second = providers.StubProvider(name="other", models=(trees,), value=values[1])
+    engine = Engine(
+        store=ArtifactStore(tmp_path),
+        catalog=ModelCatalog((deep, trees)),
+        providers=ProviderRegistry([first, second]),
+    )
+    return engine, first, second
+
+
+CROSSING = of.Ensemble(models=(of.Model(SEQUENCES), of.Model("other/trees")))
+CROSSING_PLAN = of.FitPlan(window=of.WindowPlan(context=3))
+
+
+def test_a_sequence_member_and_a_tabular_member_are_one_persisted_model(
+    tmp_path: Path,
+) -> None:
+    """Step 21's milestone: members plan independently and meet at the forecast.
+
+    Each child's contract chooses its own execution view out of the same data,
+    and the only thing they converge on is what comes back. Neither provider is
+    handed anything that says an ensemble exists.
+    """
+    engine, deep, trees = crossing_engine(tmp_path)
+
+    handle = engine.fit(CROSSING, frame(), horizon=2, plan=CROSSING_PLAN, name="blend")
+    forecast = engine.forecast("local/blend", frame(), horizon=2)
+
+    assert isinstance(deep.fits[0].view, SequenceView)
+    assert isinstance(trees.fits[0].view, TabularView)
+    assert [record.view for record in handle.training_records] == ["sequences", "tabular"]
+    assert handle.manifest.provider == "openforecast"
+    assert set(forecast.table.column(ForecastColumn.VALUE.value).to_pylist()) == {15.0}
+
+
+def test_a_window_belongs_to_whichever_member_sizes_one(tmp_path: Path) -> None:
+    """One model refuses a plan it cannot use; several share one between them."""
+    engine, _, trees = crossing_engine(tmp_path)
+
+    engine.fit(CROSSING, frame(), horizon=2, plan=CROSSING_PLAN)
+
+    materialized = trees.fits[0].view
+    assert isinstance(materialized, TabularView)
+    assert materialized.schema.horizon == 2
+    with pytest.raises(RecipeError, match="binds no context length"):
+        engine.fit("other/trees", frame(), horizon=2, plan=CROSSING_PLAN)
+
+
+def test_a_window_no_member_sizes_is_the_same_mistake(tmp_path: Path) -> None:
+    engine = Engine(
+        store=ArtifactStore(tmp_path),
+        catalog=ModelCatalog((providers.descriptor("series"),)),
+        providers=ProviderRegistry(
+            [providers.StubProvider(models=(providers.descriptor("series"),))]
+        ),
+    )
+
+    with pytest.raises(RecipeError, match="no member of this recipe"):
+        engine.fit(
+            of.Ensemble(models=(of.Model(SERIES), of.Model(SERIES))),
+            frame(),
+            plan=of.FitPlan(window=of.WindowPlan(context=3)),
+        )
+
+
+def test_a_child_that_cannot_learn_across_origins_rejects_the_whole_ensemble(
+    tmp_path: Path,
+) -> None:
+    """21.4: a child's contract is not quietly relaxed to keep an ensemble alive.
+
+    ``stub/series`` learns from one forecast origin. Asked for every vintage of
+    point-in-time data alongside a member that does learn across them, the
+    ensemble is refused — training it on one origin instead would be an average
+    over a model nobody asked for.
+    """
+    deep = providers.descriptor(
+        "sequences", training=TrainingContract.sequences(supports_unseen_instances=True)
+    )
+    single = providers.descriptor("series", provider="other")
+    sequences = providers.StubProvider(models=(deep,))
+    engine = Engine(
+        store=ArtifactStore(tmp_path),
+        catalog=ModelCatalog((deep, single)),
+        providers=ProviderRegistry(
+            [sequences, providers.StubProvider(name="other", models=(single,))]
+        ),
+    )
+
+    with pytest.raises(of.OriginScopeError, match="one forecast origin"):
+        engine.fit(
+            of.Ensemble(models=(of.Model(SEQUENCES), of.Model("other/series"))),
+            artifacts.dataset(),
+            horizon=2,
+            plan=CROSSING_PLAN,
+        )
+
+    assert sequences.fits == []
+    assert engine.store.list() == ()
+
+
+# -- combining a distribution -----------------------------------------------
+
+
+def test_quantiles_are_averaged_level_by_level(tmp_path: Path) -> None:
+    """21.5: the ensemble's P10 is the weighted mean of its members' P10.
+
+    Quantile averaging, and deliberately not the quantile of the mixture of the
+    members' distributions: the two agree only where the members do.
+    """
+    engine, _, _ = crossing_engine(tmp_path, outputs=OutputCapabilities(point=True, quantiles=True))
+
+    handle = engine.fit(CROSSING, frame(), horizon=2, plan=CROSSING_PLAN)
+    forecast = engine.forecast(
+        handle, frame(), horizon=2, output=of.OutputSpec.quantiles([0.1, 0.9])
+    )
+
+    # The stub answers value + (level - 0.5) * 10, so the members' P10 are 6 and
+    # 16, and their P90 are 14 and 24.
+    assert set(forecast.quantile(0.1).column("value").to_pylist()) == {11.0}
+    assert set(forecast.quantile(0.9).column("value").to_pylist()) == {19.0}
+
+
+@pytest.mark.parametrize(
+    "output",
+    [of.OutputSpec.samples(4), of.OutputSpec.quantiles([0.1, 0.9], from_samples=4)],
+    ids=["samples", "quantiles-of-samples"],
+)
+def test_an_ensemble_does_not_combine_sample_paths(tmp_path: Path, output: of.OutputSpec) -> None:
+    """Draw 3 of one member has nothing to do with draw 3 of another."""
+    engine, _, _ = crossing_engine(tmp_path, outputs=OutputCapabilities(point=True, samples=True))
+    handle = engine.fit(CROSSING, frame(), horizon=2, plan=CROSSING_PLAN)
+
+    with pytest.raises(UnsupportedPlanError, match="does not combine sample paths"):
+        engine.forecast(handle, frame(), horizon=2, output=output)
+
+
+def test_a_member_that_cannot_answer_stops_the_forecast_before_any_member_runs(
+    tmp_path: Path,
+) -> None:
+    """The fit's rule, at inference: an ensemble is checked whole.
+
+    The first member can produce quantiles and the second cannot. Asking anyway
+    must fail before the first one is executed, or the ensemble would pay for a
+    forecast it then throws away.
+    """
+
+    class NeverAsked(providers.StubProvider):
+        def forecast(self, **kwargs: Any) -> pa.Table:
+            raise AssertionError("a member was executed before the ensemble was checked")
+
+    engine, _, _ = crossing_engine(tmp_path, outputs=OutputCapabilities(point=True, quantiles=True))
+    handle = engine.fit(CROSSING, frame(), horizon=2, plan=CROSSING_PLAN)
+
+    quantiles = engine.catalog.get(ModelRef.parse(SEQUENCES))
+    point_only = providers.descriptor(
+        "trees", provider="other", training=TrainingContract.tabular()
+    )
+    checked = Engine(
+        store=engine.store,
+        catalog=ModelCatalog((quantiles, point_only)),
+        providers=ProviderRegistry(
+            [
+                NeverAsked(models=(quantiles,)),
+                providers.StubProvider(name="other", models=(point_only,)),
+            ]
+        ),
+    )
+
+    with pytest.raises(DataError, match="cannot produce a quantiles forecast"):
+        checked.forecast(handle, frame(), horizon=2, output=of.OutputSpec.quantiles([0.5]))
 
 
 def test_the_forecast_is_labeled_with_what_produced_it(engine: Engine) -> None:

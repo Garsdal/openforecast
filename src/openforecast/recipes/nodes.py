@@ -10,7 +10,7 @@ of.Pipeline(steps=[
 
 of.Ensemble(
     models=[of.Model("nixtla/nhits"), of.Model("nixtla/autoarima")],
-    combine=of.Mean(),
+    weights=[0.7, 0.3],
 )
 
 of.Reduction(estimator="lightgbm/regressor", strategy="direct", lags=[1, 24, 168])
@@ -34,7 +34,7 @@ from collections.abc import Sequence
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import Field, TypeAdapter, model_validator
 
 from openforecast.errors import RecipeError
 from openforecast.models.ref import ModelRef
@@ -49,17 +49,13 @@ from openforecast.recipes.transforms import (
 )
 
 __all__ = [
-    "Combiner",
-    "CombinerKind",
     "Ensemble",
-    "Mean",
     "Model",
     "Pipeline",
     "PipelineStep",
     "Recipe",
     "Reduction",
     "ReductionStrategy",
-    "WeightedMean",
     "declared_transforms",
     "estimator_refs",
     "parse_recipe",
@@ -139,58 +135,6 @@ class Model(RecipeNode):
         return (self.ref,)
 
 
-class CombinerKind(StrEnum):
-    MEAN = "mean"
-    WEIGHTED_MEAN = "weighted_mean"
-
-
-class Mean(BaseModel):
-    """Average the members equally."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    combine: Literal[CombinerKind.MEAN] = CombinerKind.MEAN
-
-
-class WeightedMean(BaseModel):
-    """Average the members by given weights.
-
-    ```python
-    of.WeightedMean(weights=[0.7, 0.3])
-    ```
-
-    The weights are relative: they are normalized by their sum, so ``[7, 3]``
-    means the same thing as ``[0.7, 0.3]``. Every weight must be positive — a
-    zero weight is a member that is fitted and then ignored, which is better
-    said by leaving it out.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    combine: Literal[CombinerKind.WEIGHTED_MEAN] = CombinerKind.WEIGHTED_MEAN
-    weights: tuple[float, ...]
-
-    @model_validator(mode="after")
-    def _check_weights(self) -> Self:
-        if not self.weights:
-            raise RecipeError("a weighted mean needs one weight per ensemble member")
-        if any(weight <= 0 for weight in self.weights):
-            raise RecipeError(
-                f"ensemble weights must be positive: {list(self.weights)}; a zero-weighted "
-                f"member is fitted and then ignored, so leave it out instead"
-            )
-        return self
-
-    @property
-    def normalized(self) -> tuple[float, ...]:
-        """The weights as fractions summing to one."""
-        total = sum(self.weights)
-        return tuple(weight / total for weight in self.weights)
-
-
-#: How an ensemble combines its members.
-Combiner = Annotated[Mean | WeightedMean, Field(discriminator="combine")]
-
 #: The steps that are not estimators, for telling the two apart in a pipeline.
 _TRANSFORMS = (StandardScaler, MissingIndicator, Impute, LeadTimeFeature, OriginCalendarFeatures)
 
@@ -262,18 +206,34 @@ class Reduction(RecipeNode):
 
 
 class Ensemble(RecipeNode):
-    """Several recipes, combined into one forecast.
+    """Several recipes, averaged into one forecast.
+
+    ```python
+    of.Ensemble(models=[of.Model("nixtla/nhits"), of.Model("sklearn/hist-gradient-boosting")])
+
+    of.Ensemble(models=[...], weights=[0.7, 0.3])
+    ```
 
     Members are recipes rather than models, so an ensemble of pipelines — or of
     ensembles — needs no extra vocabulary. Whether a given combination can
     actually be fitted on the data at hand is a question about the members'
-    training contracts, and the engine answers it in Step 8; a member's contract
-    is not knowable here, where nothing has been resolved yet.
+    training contracts, and the engine answers it before the first of them is
+    trained; a member's contract is not knowable here, where nothing has been
+    resolved yet.
+
+    Combination is a weighted mean and nothing else. ``weights`` left out is an
+    equal average, which is what an ensemble means when nobody said otherwise;
+    given, the weights are relative and normalized by their sum, so ``[7, 3]``
+    means the same thing as ``[0.7, 0.3]``. Every weight must be positive — a
+    zero-weighted member is fitted and then ignored, which is better said by
+    leaving it out. Weights are fixed rather than learned: a weight fitted on
+    data is a second model, and stacking is not what this node is.
     """
 
     kind: Literal[RecipeKind.ENSEMBLE] = RecipeKind.ENSEMBLE
     models: tuple[Recipe, ...]
-    combine: Combiner = Mean()
+    #: One relative weight per member, or ``None`` to average them equally.
+    weights: tuple[float, ...] | None = None
 
     @model_validator(mode="after")
     def _check_members(self) -> Self:
@@ -282,12 +242,27 @@ class Ensemble(RecipeNode):
                 f"an ensemble combines at least two members, got {len(self.models)}; "
                 f"one member is that member"
             )
-        if isinstance(self.combine, WeightedMean) and len(self.combine.weights) != len(self.models):
+        if self.weights is None:
+            return self
+        if len(self.weights) != len(self.models):
             raise RecipeError(
-                f"a weighted mean needs one weight per member: {len(self.models)} members, "
-                f"{len(self.combine.weights)} weights"
+                f"an ensemble needs one weight per member: {len(self.models)} members, "
+                f"{len(self.weights)} weights"
+            )
+        if any(weight <= 0 for weight in self.weights):
+            raise RecipeError(
+                f"ensemble weights must be positive: {list(self.weights)}; a zero-weighted "
+                f"member is fitted and then ignored, so leave it out instead"
             )
         return self
+
+    @property
+    def normalized_weights(self) -> tuple[float, ...]:
+        """What each member contributes, as fractions summing to one."""
+        if self.weights is None:
+            return (1.0 / len(self.models),) * len(self.models)
+        total = sum(self.weights)
+        return tuple(weight / total for weight in self.weights)
 
     def estimator_refs(self) -> tuple[ModelRef, ...]:
         return tuple(ref for member in self.models for ref in estimator_refs(member))

@@ -159,7 +159,6 @@ from openforecast.recipes import (
     Impute,
     ImputeMethod,
     LeadTimeFeature,
-    Mean,
     MissingIndicator,
     Model,
     OriginCalendarFeatures,
@@ -168,7 +167,6 @@ from openforecast.recipes import (
     Reduction,
     ReductionStrategy,
     StandardScaler,
-    WeightedMean,
     parse_recipe,
 )
 from openforecast.runtime import Forecast
@@ -226,7 +224,6 @@ __all__ = [
     "LocalTransport",
     "MAE",
     "MAPE",
-    "Mean",
     "Metric",
     "MissingIndicator",
     "Model",
@@ -261,7 +258,6 @@ __all__ = [
     "UnknownModelError",
     "UnsupportedPlanError",
     "Validation",
-    "WeightedMean",
     "WindowPlan",
     "__version__",
     "backtest",

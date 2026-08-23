@@ -63,29 +63,8 @@
       },
       "Ensemble": {
         "additionalProperties": false,
-        "description": "Several recipes, combined into one forecast.\n\nMembers are recipes rather than models, so an ensemble of pipelines \u2014 or of\nensembles \u2014 needs no extra vocabulary. Whether a given combination can\nactually be fitted on the data at hand is a question about the members'\ntraining contracts, and the engine answers it in Step 8; a member's contract\nis not knowable here, where nothing has been resolved yet.",
+        "description": "Several recipes, averaged into one forecast.\n\n```python\nof.Ensemble(models=[of.Model(\"nixtla/nhits\"), of.Model(\"sklearn/hist-gradient-boosting\")])\n\nof.Ensemble(models=[...], weights=[0.7, 0.3])\n```\n\nMembers are recipes rather than models, so an ensemble of pipelines \u2014 or of\nensembles \u2014 needs no extra vocabulary. Whether a given combination can\nactually be fitted on the data at hand is a question about the members'\ntraining contracts, and the engine answers it before the first of them is\ntrained; a member's contract is not knowable here, where nothing has been\nresolved yet.\n\nCombination is a weighted mean and nothing else. ``weights`` left out is an\nequal average, which is what an ensemble means when nobody said otherwise;\ngiven, the weights are relative and normalized by their sum, so ``[7, 3]``\nmeans the same thing as ``[0.7, 0.3]``. Every weight must be positive \u2014 a\nzero-weighted member is fitted and then ignored, which is better said by\nleaving it out. Weights are fixed rather than learned: a weight fitted on\ndata is a second model, and stacking is not what this node is.",
         "properties": {
-          "combine": {
-            "default": {
-              "combine": "mean"
-            },
-            "discriminator": {
-              "mapping": {
-                "mean": "#/components/schemas/Mean",
-                "weighted_mean": "#/components/schemas/WeightedMean"
-              },
-              "propertyName": "combine"
-            },
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Mean"
-              },
-              {
-                "$ref": "#/components/schemas/WeightedMean"
-              }
-            ],
-            "title": "Combine"
-          },
           "kind": {
             "const": "ensemble",
             "default": "ensemble",
@@ -120,6 +99,20 @@
             },
             "title": "Models",
             "type": "array"
+          },
+          "weights": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weights"
           }
         },
         "required": [
@@ -718,20 +711,6 @@
           }
         },
         "title": "LeadTimeFeature",
-        "type": "object"
-      },
-      "Mean": {
-        "additionalProperties": false,
-        "description": "Average the members equally.",
-        "properties": {
-          "combine": {
-            "const": "mean",
-            "default": "mean",
-            "title": "Combine",
-            "type": "string"
-          }
-        },
-        "title": "Mean",
         "type": "object"
       },
       "MissingIndicator": {
@@ -1831,30 +1810,6 @@
         ],
         "title": "ViewKind",
         "type": "string"
-      },
-      "WeightedMean": {
-        "additionalProperties": false,
-        "description": "Average the members by given weights.\n\n```python\nof.WeightedMean(weights=[0.7, 0.3])\n```\n\nThe weights are relative: they are normalized by their sum, so ``[7, 3]``\nmeans the same thing as ``[0.7, 0.3]``. Every weight must be positive \u2014 a\nzero weight is a member that is fitted and then ignored, which is better\nsaid by leaving it out.",
-        "properties": {
-          "combine": {
-            "const": "weighted_mean",
-            "default": "weighted_mean",
-            "title": "Combine",
-            "type": "string"
-          },
-          "weights": {
-            "items": {
-              "type": "number"
-            },
-            "title": "Weights",
-            "type": "array"
-          }
-        },
-        "required": [
-          "weights"
-        ],
-        "title": "WeightedMean",
-        "type": "object"
       },
       "WindowPlan": {
         "additionalProperties": false,

@@ -501,7 +501,7 @@ model = of.fit(
             ]),
             of.Model("builtin/seasonal-naive", params={"season_length": 168}),
         ],
-        combine=of.WeightedMean(weights=[0.7, 0.3]),
+        weights=[0.7, 0.3],
     ),
     data=train,
     name="de-load",
@@ -515,6 +515,35 @@ such an artifact could honestly claim. The scaler's statistics are fitted once
 and persisted: inference is scaled by those, never by whatever the forecast
 context happens to contain, and the forecast comes back on the scale the
 caller's data was on.
+
+Members plan independently, which is what makes an ensemble cross-provider
+rather than cross-model:
+
+```python
+model = of.fit(
+    model=of.Ensemble(
+        models=[of.Model("nixtla/nhits"), of.Model("sklearn/hist-gradient-boosting")],
+        weights=[0.7, 0.3],
+    ),
+    data=pit_dataset,
+    horizon=72,
+)
+```
+
+`nixtla/nhits` declares a sequence contract and is handed a `SequenceView`;
+`sklearn/hist-gradient-boosting` declares a tabular one and is handed a
+`TabularView` of the same data. Neither provider learns that an ensemble
+exists — both answer a `Forecast`, and that is what is combined. Weights are
+relative and default to an equal average; they are fixed rather than learned,
+because a weight fitted on data is a second model.
+
+Every member is checked before any of them runs, at fit and at forecast alike: a
+member whose contract the data cannot satisfy — a single-origin model asked to
+learn from every point-in-time vintage — rejects the whole ensemble rather than
+being quietly trained on something else. Quantiles are averaged level by level,
+which is *quantile averaging* and not the quantile of the mixture of the members'
+distributions; sample paths are not combined at all, since draw *i* of one member
+has nothing to do with draw *i* of another.
 
 A forecast is one long Arrow table, whatever was asked for:
 
