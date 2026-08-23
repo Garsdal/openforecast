@@ -50,6 +50,7 @@ nav:
       - Installation: getting-started/installation.md
       - Quickstart: getting-started/quickstart.md
       - Concepts in five minutes: getting-started/concepts.md
+      - Executable examples: getting-started/examples.md
   - Guides:
       - Event-time data: guides/event-time.md
       - Point-in-time data: guides/point-in-time.md

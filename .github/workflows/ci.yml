@@ -38,6 +38,15 @@ jobs:
       - name: Test
         run: uv run pytest --cov
 
+      # Step 28.3: every example is executed by the test step above, one
+      # subprocess per script in an isolated home directory. This runs the
+      # command the README tells a reader to type, which the suite deliberately
+      # does not — it launches `sys.executable` rather than `uv`, so a broken
+      # entry point or a script that only works with the test environment's
+      # working directory would pass there and fail here.
+      - name: Run an example the documented way
+        run: uv run examples/01_quickstart.py
+
       # Rule 7: OpenAPI is a projection of OpenForecast semantics, never their
       # source. The document is generated from the Pydantic request/response
       # models and committed, so a change to what a fit request means shows up
