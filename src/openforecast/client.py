@@ -41,19 +41,31 @@ sending that reference. Locally the artifact is on this machine; remotely it is
 on the service's, and the reference means the same thing to whichever engine
 owns it.
 
+Step 24 froze the surface and made the same call for all four operations at
+once: **every operation is a method on a client, and the module-level function
+beside it is that method on the default client.** So ``of.backtest`` and
+``client.backtest`` are one operation reached two ways, exactly as ``of.fit``
+and ``client.fit`` already were, and there is no operation you can only reach
+one way. What that is *not* is a second name for one intent: there is one
+``fit``, one ``forecast``, one ``backtest``, and no ``train``, ``predict``,
+``infer``, ``evaluate`` or ``historical_forecasts`` anywhere on the surface.
+
 The outermost layer, by design: everything may be imported from here. The one
 thing that imports it is :mod:`openforecast.evaluation`, which sits in the same
 layer and is a *user* of this module rather than something beneath it — a
 backtest is a loop over ``fit`` and ``forecast``, which is exactly why nothing
-inside the engine knows it is being backtested.
+inside the engine knows it is being backtested. ``OpenForecast.backtest``
+delegates *up* into it rather than reimplementing anything, which is why it
+imports it in the method body: the two modules are peers, and only one of them
+can be imported first.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from openforecast.artifacts.handle import ModelHandle
 from openforecast.artifacts.store import ArtifactStore
@@ -75,6 +87,17 @@ from openforecast.server.wire import (
 )
 from openforecast.tasks.forecast import OutputSpec
 from openforecast.tasks.plan import FitPlan
+
+if TYPE_CHECKING:
+    # ``evaluation`` is a *user* of this module — a backtest is a loop over
+    # ``fit`` and ``forecast`` — so it sits in the same layer and imports this
+    # one. The methods that drive it therefore import it where they call it, and
+    # name its types here, where nothing is imported at runtime.
+    from openforecast.evaluation.backtest import Candidate
+    from openforecast.evaluation.eligibility import Eligibility
+    from openforecast.evaluation.metrics import Metric
+    from openforecast.evaluation.result import BacktestResult
+    from openforecast.evaluation.validation import Validation
 
 __all__ = ["Models", "OpenForecast", "fit", "forecast"]
 
@@ -225,6 +248,47 @@ class OpenForecast:
             )
         )
         return _forecast(answer)
+
+    def backtest(
+        self,
+        models: Sequence[ModelInput | Candidate],
+        data: object,
+        *,
+        validation: Validation,
+        metrics: Sequence[Metric],
+        output: OutputSpec | None = None,
+        plan: FitPlan | None = None,
+    ) -> BacktestResult:
+        """Evaluate every model at every origin ``validation`` selects.
+
+        A loop over this client's own ``fit`` and ``forecast``, so a backtest
+        happens wherever this client executes and the artifacts land in its
+        store.
+        """
+        from openforecast.evaluation.backtest import backtest as run
+
+        return run(
+            models,
+            data,
+            validation=validation,
+            metrics=metrics,
+            output=output,
+            plan=plan,
+            client=self,
+        )
+
+    def eligible_models(
+        self,
+        data: object,
+        *,
+        horizon: int | None = None,
+        plan: FitPlan | None = None,
+        models: Sequence[ModelRef | str] | None = None,
+    ) -> tuple[Eligibility, ...]:
+        """Which of this client's models this data could fit at all."""
+        from openforecast.evaluation.eligibility import eligible_models as ask
+
+        return ask(data, horizon=horizon, plan=plan, models=models, client=self)
 
     def artifact(self, ref: ModelRef | str) -> ModelHandle:
         """One fitted artifact, described without loading the model behind it."""

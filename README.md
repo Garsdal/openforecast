@@ -58,8 +58,80 @@ rather than *simulated* by cutting windows out of a single freshest series.
 > reference and nothing else, which is what
 > `tests/e2e/test_v1_experience.py` runs against all four at once — and
 > `amazon/chronos-2` joins the same backtest without being fitted at all.
+> Step 24 froze that surface: one canonical call per intent, mirrored on a
+> client and on the package, and a test that fails if a second one appears.
 > See [PLAN.md](PLAN.md) for the 17-step roadmap and
 > [PLAN_2.md](PLAN_2.md) for what comes after it.
+
+## The whole workflow
+
+Everything below this section is detail. This is the API:
+
+```python
+import openforecast as of
+
+client = of.OpenForecast()
+
+client.models.list()                       # what this build can run
+client.models.get("nixtla/autoarima")      # what one reference resolves to
+
+client.fit(...)                            # -> local/de-load@01K...
+client.forecast(...)                       # -> Forecast
+client.backtest(...)                       # -> BacktestResult
+```
+
+Data is built one way, from whatever you have:
+
+```python
+data = of.TimeSeriesFrame.from_pandas(...)      # ordinary event-time data
+data = of.ForecastDataset.from_pandas(...)      # real forecast vintages
+```
+
+And the four operations, end to end:
+
+```python
+data = of.TimeSeriesFrame.from_pandas(
+    history=df, time="timestamp", frequency="1h",
+    instance_keys=["zone"], targets=["load"],
+)
+
+model = client.fit("sklearn/hist-gradient-boosting", data=data, horizon=24)
+forecast = client.forecast(model, data=data, horizon=24)
+
+result = client.backtest(
+    ["sklearn/hist-gradient-boosting", "nixtla/autoarima", "amazon/chronos-2"],
+    data=data,
+    validation=of.RollingOrigin(horizon=24, windows=5),
+    metrics=[of.MAE(), of.Bias()],
+)
+result.leaderboard("mae")
+```
+
+There is one name per intent, and it is the same name everywhere: `fit`, never
+`train`; `forecast`, never `predict` or `infer`; `backtest`, never `evaluate` or
+`historical_forecasts`. Each of the four operations — the three above and
+`eligible_models`, which answers what this data could fit at all — is a method on
+a client, and the module-level `of.fit(...)`, `of.forecast(...)`,
+`of.backtest(...)` and `of.eligible_models(...)` are the same operations on a
+default client that owns the usual store:
+
+```python
+of.backtest(models, data, validation=..., metrics=..., client=client)
+client.backtest(models, data, validation=..., metrics=...)   # the same call
+```
+
+Which client is the only difference, so the signatures are identical apart from
+`client=` — asserted in `tests/unit/test_sdk_surface.py` rather than promised, along
+with the absence of aliases and the exact contents of `openforecast.__all__`.
+`tests/e2e/test_sdk_workflow.py` is this section, executed.
+
+The short forms above are not a convenience layer over a "real" API: a
+`Pipeline`, a `FitPlan`, an `OutputSpec` or a `Candidate` is what you write when
+you need to say more, and it goes to the same four calls. The machinery behind
+them — `ViewPlanner`, `SeriesView`, `SequenceView`, `TabularView`,
+`SubprocessProvider`, `ArtifactStore` — is documented throughout this README and
+is deliberately not part of the SDK surface: none of it is a name you have to
+write to forecast something.
 
 ## The event-time semantic model
 
