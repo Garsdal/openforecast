@@ -558,7 +558,8 @@ comparison rather than an assertion about plumbing: `builtin/seasonal-naive`
 fitted and forecast over the wire produces the same Arrow table as the same model
 fitted and forecast here.
 
-The CLI exists for the one part of this that is not a forecasting operation:
+Managing those environments is the part of this that is not a forecasting
+operation, and it is where the CLI started:
 
 ```bash
 openforecast providers install nixtla
@@ -567,12 +568,66 @@ openforecast providers inspect nixtla
 openforecast providers remove nixtla
 ```
 
-It is a projection over the same objects the Python API uses and computes nothing
-of its own, and it keeps the protocol's stream contract — stdout is the answer,
-`--json` for anything that parses it, stderr and a non-zero exit code for a
-failure. It is built on `argparse`: a CLI framework would be a fourth runtime
-dependency for a projection, and rule 1 makes that an architectural decision
-rather than a convenience.
+## The command line
+
+The CLI is a projection over the same objects the Python API uses and computes
+nothing of its own. What Step 26 changed is how much of the library it covers:
+the whole of it.
+
+```bash
+openforecast models list
+openforecast models get builtin/seasonal-naive
+
+openforecast fit --model builtin/seasonal-naive --data ./dataset --name de-load
+openforecast forecast --model local/de-load --data ./dataset --horizon 24 --json
+openforecast backtest --config backtest.json --json
+
+openforecast doctor
+```
+
+`fit`, `forecast` and `backtest` are `client.fit`, `client.forecast` and
+`client.backtest`, under the same names Step 24 froze — no `train`, no `predict`,
+no `evaluate`, because one name per intent is a property of OpenForecast rather
+than of Python. There is nothing a command computes that `import openforecast`
+could not, which is the same rule `openforecast providers` has always followed.
+
+Four decisions make it boring, which is the only thing a CLI should be.
+
+**The tree is a group and a verb at most.** `openforecast fit` is not under
+`openforecast run`, and there is no `openforecast artifacts models revisions
+list`. A deep tree buys a tidy help page and costs the ability to guess the
+command you want.
+
+**Flags for scalars, a config file for structure.** A model, a dataset and a
+horizon are flags. A recipe, a plan, a validation strategy or a metric is a JSON
+file whose fields deserialize into the *same Pydantic types the SDK uses* — so a
+config file is the arguments of `of.fit` written down, and `extra="forbid"` turns
+a typo into a message rather than a silently different fit. The two forms are
+refused together rather than merged: a precedence rule between a file and a flag
+is a rule somebody has to remember.
+
+**`--json` on everything that produces information**, and the same document the
+HTTP projection returns wherever there is one — a model prints as its
+`ModelDescriptor`, so an agent reading a model over the CLI and one reading it
+over the network read one schema.
+
+**stdout is the answer; stderr is everything else.** A failure is one sentence on
+stderr and a non-zero exit code, never prose on stdout that a script would have
+to read, which is what makes `openforecast models list --json | jq` reliable.
+`tests/e2e/test_cli_workflow.py` asserts the whole of that as a workflow: each
+step parses the previous step's stdout as JSON, so a log line written to the
+wrong stream fails the suite.
+
+It is built on `argparse`: a CLI framework would be a fourth runtime dependency
+for a projection, and rule 1 makes that an architectural decision rather than a
+convenience.
+
+Two things are the CLI's own rather than the library's, because a shell cannot
+express them. Data crosses as a *written* dataset — the directory
+`TimeSeriesFrame.write` produces, whose kind is read off what is in it rather
+than declared — and `openforecast doctor` answers "is this installation able to
+forecast" as an exit code, for a container health check and for an agent's first
+call.
 
 ## The remote surface
 

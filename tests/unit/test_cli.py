@@ -8,28 +8,14 @@ protocol keeps — stdout is the answer, stderr is everything else.
 
 from __future__ import annotations
 
-import io
-import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from openforecast.commands import build_parser, main
+from openforecast.commands import build_parser
+from tests.cli import Run, run
 from tests.unit.test_provider_environments import MODULE, PROVIDER, VERSION, FakeBuilder
-
-
-class Run:
-    """One CLI invocation, and everything it produced."""
-
-    def __init__(self, code: int, out: str, err: str) -> None:
-        self.code = code
-        self.out = out
-        self.err = err
-
-    @property
-    def json(self) -> Any:
-        return json.loads(self.out)
 
 
 @pytest.fixture
@@ -45,12 +31,6 @@ def uv_free(monkeypatch: pytest.MonkeyPatch) -> None:
         return FakeBuilder()
 
     monkeypatch.setattr("openforecast.runtime.environments.UvBuilder", builder)
-
-
-def run(*argv: str) -> Run:
-    out, err = io.StringIO(), io.StringIO()
-    code = main(argv, out=out, err=err)
-    return Run(code, out.getvalue(), err.getvalue())
 
 
 def install(cache: Path) -> Run:
